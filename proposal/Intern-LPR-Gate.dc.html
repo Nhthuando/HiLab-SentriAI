@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{ box-sizing:border-box; } html,body{ margin:0; padding:0; }
+  body{ font-family:'Inter',system-ui,sans-serif; background:#0f1013; }
+  a{ color:#2f9bff; } a:hover{ color:#5fb3ff; }
+  ::-webkit-scrollbar{ width:9px; } ::-webkit-scrollbar-thumb{ background:rgba(140,140,150,.32); border-radius:6px; }
+  @keyframes liveDot { 0%,100%{opacity:1} 50%{opacity:.3} }
+  @keyframes msgIn { from{opacity:0; transform:translateY(5px)} to{opacity:1; transform:none} }
+</style>
+</helmet>
+<div style="--bg:#0f1013; --panel:#16171b; --card:#1c1d22; --raise:#26272d; --line:rgba(255,255,255,.09); --line2:rgba(255,255,255,.16); --ink:#f3f3f6; --ink2:#a1a1ab; --ink3:#6a6a74; --acc:#2f9bff; --accq:rgba(47,155,255,.16); --p0:#ff453a; --p0q:rgba(255,69,58,.16); --p1:#ff9f0a; --p1q:rgba(255,159,10,.16); --ok:#30d158; --okq:rgba(48,209,88,.15); min-height:100vh; background:var(--bg); color:var(--ink); font-size:14px; -webkit-font-smoothing:antialiased;">
+
+  <header style="display:flex; align-items:center; gap:16px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--panel);">
+    <div style="width:32px; height:32px; flex:none; border-radius:9px; background:linear-gradient(145deg,#2f9bff,#1361c9); position:relative;">
+      <div style="position:absolute; inset:9px; border:2px solid #fff; border-radius:50%;"></div>
+    </div>
+    <div style="line-height:1.15;">
+      <div style="font-size:15px; font-weight:700;">Bài tập Intern · Nhận diện biển số & phân loại xe tại cổng</div>
+      <div style="font-size:11px; color:var(--ink3);">SentriAI mini · 1 camera cổng · zone vẽ sẵn</div>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="display:flex; background:var(--card); border:1px solid var(--line); border-radius:11px; padding:4px; gap:2px;">
+      <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="3">
+        <button onClick="{{ t.set }}" style="font-size:12.5px; font-weight:600; padding:7px 16px; border-radius:8px; border:none; cursor:pointer; font-family:inherit; background:{{ t.bg }}; color:{{ t.fg }};">{{ t.label }}</button>
+      </sc-for>
+    </div>
+  </header>
+
+  <!-- ============ 1. GIÁM SÁT ============ -->
+  <sc-if value="{{ monOn }}" hint-placeholder-val="{{ true }}">
+  <div style="padding:20px; max-width:1360px; margin:0 auto;">
+    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px;">
+      <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+        <div style="background:var(--card); border:1px solid var(--line); border-radius:13px; padding:14px;">
+          <div style="font-size:11.5px; color:var(--ink3); margin-bottom:8px;">{{ k.label }}</div>
+          <div style="font-size:24px; font-weight:700; font-family:'IBM Plex Mono',monospace; color:{{ k.color }};">{{ k.value }}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:16px;">
+      <div>
+        <div style="display:flex; align-items:center; gap:9px; margin-bottom:10px;">
+          <span style="width:8px; height:8px; border-radius:50%; background:var(--p0); animation:liveDot 1.4s infinite;"></span>
+          <span style="font-size:12.5px; font-weight:600; color:var(--p0);">TRỰC TIẾP</span>
+          <span style="font-size:12px; color:var(--ink3);">GATE-01 · Cổng vào · {{ clock }}</span>
+        </div>
+        <div style="position:relative; width:100%; aspect-ratio:16/9; background:#0c0f13; border:1px solid var(--line); border-radius:12px; overflow:hidden;">
+          <div style="position:absolute; inset:0; background-image:url('assets/cam-gate.png'); background-size:cover; background-position:center;"></div>
+          <div style="position:absolute; inset:0; background:rgba(6,10,14,.08);"></div>
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;">
+            <sc-for list="{{ liveZones }}" as="z" hint-placeholder-count="2">
+              <polygon points="{{ z.pts }}" fill="{{ z.fill }}" stroke="{{ z.color }}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"></polygon>
+            </sc-for>
+          </svg>
+          <sc-for list="{{ liveZones }}" as="z" hint-placeholder-count="2">
+            <span style="position:absolute; left:{{ z.lx }}; top:{{ z.ly }}; transform:translateY(-115%); font-size:9.5px; font-weight:700; color:{{ z.color }}; text-shadow:0 1px 3px rgba(0,0,0,.8);">{{ z.label }}</span>
+          </sc-for>
+          <div style="position:absolute; left:79%; top:79.5%; width:6%; height:7%; border:1.5px solid #39e0d0; background:rgba(57,224,208,.1);">
+            <span style="position:absolute; left:-1px; top:-18px; background:#39e0d0; color:#06080a; font-size:10px; font-weight:700; padding:1px 7px; border-radius:3px; white-space:nowrap;">{{ livePlate }} · 97%</span>
+          </div>
+          <div style="position:absolute; right:10px; top:9px; background:rgba(0,0,0,.5); color:#e3e7ea; font-size:10px; padding:3px 7px; border-radius:5px; font-family:'IBM Plex Mono',monospace;">{{ clock }}</div>
+        </div>
+        <div style="display:flex; gap:16px; margin-top:10px; font-size:11px; color:var(--ink2);">
+          <span style="display:flex; align-items:center; gap:5px;"><span style="width:10px; height:10px; border-radius:3px; border:1.5px solid #39e0d0;"></span>Khung biển số nhận diện được</span>
+          <span style="display:flex; align-items:center; gap:5px;"><span style="width:10px; height:10px; border-radius:3px; border:1.5px dashed var(--ok);"></span>Làn IN đang giám sát</span>
+        </div>
+      </div>
+
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:14px; display:flex; flex-direction:column; overflow:hidden; max-height:560px;">
+        <div style="padding:13px 15px; border-bottom:1px solid var(--line); font-size:13.5px; font-weight:600;">Biển số đã nhận diện</div>
+        <div style="flex:1; overflow:auto;">
+          <sc-for list="{{ events }}" as="e" hint-placeholder-count="7">
+            <div style="display:flex; align-items:center; gap:11px; padding:11px 15px; border-bottom:1px solid var(--line);">
+              <span style="font-size:11px; color:var(--ink3); font-family:'IBM Plex Mono',monospace; width:42px; flex:none;">{{ e.time }}</span>
+              <div style="flex:1; min-width:0;">
+                <div style="font-size:13px; font-weight:600; font-family:'IBM Plex Mono',monospace;">{{ e.plate }}</div>
+                <div style="font-size:11px; color:var(--ink3);">{{ e.zone }}</div>
+              </div>
+              <span style="font-size:11px; font-weight:600; font-family:'IBM Plex Mono',monospace; color:{{ e.confColor }}; flex:none;">{{ e.conf }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ 1b. GIÁM SÁT KHU VỰC ============ -->
+  <sc-if value="{{ areaOn }}" hint-placeholder-val="{{ false }}">
+  <div style="padding:20px; max-width:1360px; margin:0 auto;">
+    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px;">
+      <sc-for list="{{ areaKpis }}" as="k" hint-placeholder-count="4">
+        <div style="background:var(--card); border:1px solid var(--line); border-radius:13px; padding:14px;">
+          <div style="font-size:11.5px; color:var(--ink3); margin-bottom:8px;">{{ k.label }}</div>
+          <div style="font-size:24px; font-weight:700; font-family:'IBM Plex Mono',monospace; color:{{ k.color }};">{{ k.value }}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:16px;">
+      <div>
+        <div style="display:flex; align-items:center; gap:9px; margin-bottom:10px;">
+          <span style="width:8px; height:8px; border-radius:50%; background:var(--p0); animation:liveDot 1.4s infinite;"></span>
+          <span style="font-size:12.5px; font-weight:600; color:var(--p0);">TRỰC TIẾP</span>
+          <span style="font-size:12px; color:var(--ink3);">BAI-KIEM · Bãi Kiểm · {{ clock }}</span>
+        </div>
+        <div style="position:relative; width:100%; aspect-ratio:16/9; background:#0c0f13; border:1px solid var(--line); border-radius:12px; overflow:hidden;">
+          <img src="assets/cam-baikiem.png" alt="" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover;" />
+          <div style="position:absolute; inset:0; background:rgba(6,10,14,.1);"></div>
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;">
+            <sc-for list="{{ areaZones }}" as="z" hint-placeholder-count="2">
+              <polygon points="{{ z.pts }}" fill="{{ z.fill }}" stroke="{{ z.color }}" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"></polygon>
+            </sc-for>
+          </svg>
+          <sc-for list="{{ areaZones }}" as="z" hint-placeholder-count="2">
+            <span style="position:absolute; left:{{ z.lx }}; top:{{ z.ly }}; transform:translate(-50%,-50%); font-size:9.5px; font-weight:700; color:{{ z.color }}; text-shadow:0 1px 4px rgba(0,0,0,.95), 0 0 10px rgba(0,0,0,.8); white-space:nowrap;">{{ z.label }}</span>
+          </sc-for>
+          <sc-for list="{{ areaObjects }}" as="o" hint-placeholder-count="3">
+            <div style="position:absolute; left:{{ o.bx }}; top:{{ o.by }}; width:{{ o.bw }}; height:{{ o.bh }}; border:1.5px solid {{ o.color }}; background:{{ o.fill }};">
+              <span style="position:absolute; left:-1px; top:-18px; background:{{ o.color }}; color:#06080a; font-size:9.5px; font-weight:700; padding:1px 7px; border-radius:3px; white-space:nowrap;">{{ o.label }}</span>
+            </div>
+          </sc-for>
+          <div style="position:absolute; right:10px; top:9px; background:rgba(0,0,0,.5); color:#e3e7ea; font-size:10px; padding:3px 7px; border-radius:5px; font-family:'IBM Plex Mono',monospace;">{{ clock }}</div>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+          <sc-for list="{{ typeRules }}" as="t" hint-placeholder-count="5">
+            <span style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; padding:5px 12px; border-radius:20px; border:1px solid {{ t.border }}; background:{{ t.bg }}; color:{{ t.fg }};">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="{{ t.icon }}"/></svg>{{ t.label }}
+            </span>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:14px; display:flex; flex-direction:column; overflow:hidden; max-height:560px;">
+        <div style="padding:13px 15px; border-bottom:1px solid var(--line); font-size:13.5px; font-weight:600;">Sự kiện khu vực</div>
+        <div style="flex:1; overflow:auto;">
+          <sc-for list="{{ areaEvents }}" as="e" hint-placeholder-count="6">
+            <div style="display:flex; align-items:center; gap:11px; padding:11px 15px; border-bottom:1px solid var(--line);">
+              <span style="font-size:11px; color:var(--ink3); font-family:'IBM Plex Mono',monospace; width:42px; flex:none;">{{ e.time }}</span>
+              <div style="flex:1; min-width:0;">
+                <div style="font-size:13px; font-weight:600;">{{ e.obj }}</div>
+                <div style="font-size:11px; color:var(--ink3);">{{ e.zone }}</div>
+              </div>
+              <span style="font-size:10.5px; font-weight:700; padding:3px 9px; border-radius:20px; background:{{ e.stBg }}; color:{{ e.stFg }}; flex:none;">{{ e.st }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ 2. CÀI ĐẶT ============ -->
+  <sc-if value="{{ setOn }}" hint-placeholder-val="{{ false }}">
+  <div style="padding:20px; max-width:1360px; margin:0 auto;">
+    <div style="display:flex; gap:5px; background:var(--card); border:1px solid var(--line); border-radius:11px; padding:4px; margin-bottom:18px; width:fit-content;">
+      <button onClick="{{ setSubLabel }}" style="font-size:12.5px; font-weight:600; padding:7px 15px; border-radius:8px; border:none; cursor:pointer; font-family:inherit; white-space:nowrap; background:{{ subLabelBg }}; color:{{ subLabelFg }};">Gắn nhãn xe</button>
+      <button onClick="{{ setSubZone }}" style="font-size:12.5px; font-weight:600; padding:7px 15px; border-radius:8px; border:none; cursor:pointer; font-family:inherit; white-space:nowrap; background:{{ subZoneBg }}; color:{{ subZoneFg }};">Vẽ zone</button>
+      <button onClick="{{ setSubObj }}" style="font-size:12.5px; font-weight:600; padding:7px 15px; border-radius:8px; border:none; cursor:pointer; font-family:inherit; white-space:nowrap; background:{{ subObjBg }}; color:{{ subObjFg }};">Nhãn đối tượng</button>
+    </div>
+
+    <sc-if value="{{ subObjOn }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:16px; margin-bottom:16px;">
+        <div>
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+            <span style="font-size:12.5px; font-weight:600;">Gắn mẫu từ hình / video</span>
+            <span style="font-size:11.5px; color:var(--ink3);">{{ annHint }}</span>
+            <div style="flex:1;"></div>
+            <button onClick="{{ importImage }}" style="display:flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; padding:6px 12px; border-radius:8px; border:1px solid var(--line2); background:var(--card); color:var(--ink); cursor:pointer; font-family:inherit;" style-hover="border-color:var(--acc); color:var(--acc)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>Import hình
+            </button>
+            <button onClick="{{ importVideo }}" style="display:flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; padding:6px 12px; border-radius:8px; border:1px solid var(--line2); background:var(--card); color:var(--ink); cursor:pointer; font-family:inherit;" style-hover="border-color:var(--acc); color:var(--acc)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>Import video
+            </button>
+          </div>
+
+          <div style="display:flex; gap:8px; margin-bottom:10px; overflow-x:auto; padding-bottom:2px;">
+            <sc-for list="{{ annSources }}" as="s" hint-placeholder-count="3">
+              <button onClick="{{ s.pick }}" style="position:relative; flex:none; width:96px; height:58px; border-radius:9px; border:2px solid {{ s.border }}; background:#0c0f13; cursor:pointer; overflow:hidden; padding:0;">
+                <span style="position:absolute; inset:0; {{ s.thumbStyle }}"></span>
+                <sc-if value="{{ s.isVideo }}" hint-placeholder-val="{{ false }}">
+                  <span style="position:absolute; left:4px; top:4px; background:rgba(0,0,0,.6); border-radius:4px; padding:1px 5px; display:flex; align-items:center; gap:3px;">
+                    <svg width="8" height="8" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg><span style="font-size:8px; font-weight:700; color:#fff;">VIDEO</span>
+                  </span>
+                </sc-if>
+                <span style="position:absolute; left:0; right:0; bottom:0; background:rgba(0,0,0,.62); color:#e3e7ea; font-size:8.5px; font-weight:600; padding:2px 5px; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ s.name }}</span>
+              </button>
+            </sc-for>
+          </div>
+
+          <div data-annfeed="1" onMouseDown="{{ annDown }}" onMouseMove="{{ annMove }}" onMouseUp="{{ annUp }}" onMouseLeave="{{ annUp }}" style="position:relative; width:100%; aspect-ratio:16/9; background:#0c0f13; border:1px solid var(--line); border-radius:12px; overflow:hidden; cursor:{{ annCursor }}; user-select:none;">
+            <div style="position:absolute; inset:0; pointer-events:none; {{ annSrcBgStyle }}"></div>
+            <div style="position:absolute; inset:0; background:rgba(6,10,14,.12); pointer-events:none;"></div>
+            <div style="position:absolute; left:10px; top:9px; background:rgba(0,0,0,.55); color:#e3e7ea; font-size:10px; padding:3px 7px; border-radius:5px; font-family:'IBM Plex Mono',monospace; pointer-events:none;">{{ annSrcName }}</div>
+            <sc-for list="{{ annBoxes }}" as="b" hint-placeholder-count="3">
+              <div onMouseDown="{{ b.pick }}" style="position:absolute; left:{{ b.x }}; top:{{ b.y }}; width:{{ b.w }}; height:{{ b.h }}; border:{{ b.bw }} solid {{ b.color }}; background:{{ b.fill }}; box-sizing:border-box; cursor:pointer;">
+                <span style="position:absolute; left:-1px; top:-18px; background:{{ b.color }}; color:#06080a; font-size:9.5px; font-weight:700; padding:1px 7px; border-radius:3px; white-space:nowrap; pointer-events:none;">{{ b.label }}</span>
+              </div>
+            </sc-for>
+            <sc-if value="{{ annDraftOn }}" hint-placeholder-val="{{ false }}">
+              <div style="{{ annDraftStyle }} pointer-events:none;"></div>
+            </sc-if>
+          </div>
+
+          <sc-if value="{{ annIsVideo }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; align-items:center; gap:10px; margin-top:9px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 13px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="var(--ink2)"><path d="M8 5v14l11-7z"/></svg>
+              <span style="font-size:10.5px; color:var(--ink3); font-family:'IBM Plex Mono',monospace;">00:00</span>
+              <div style="flex:1; height:5px; border-radius:3px; background:var(--raise); position:relative;">
+                <sc-for list="{{ vidTicks }}" as="t" hint-placeholder-count="4">
+                  <button onClick="{{ t.pick }}" title="Chọn khung hình" style="position:absolute; left:{{ t.x }}; top:50%; width:12px; height:12px; margin:-6px 0 0 -6px; border-radius:50%; border:2px solid #fff; background:{{ t.bg }}; cursor:pointer; padding:0;"></button>
+                </sc-for>
+              </div>
+              <span style="font-size:10.5px; color:var(--ink3); font-family:'IBM Plex Mono',monospace;">02:30</span>
+              <span style="font-size:10.5px; color:var(--ink2);">khung hình {{ vidFrameLabel }}</span>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ annPickBox }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; align-items:center; gap:10px; margin-top:10px; background:var(--card); border:1px solid var(--acc); border-radius:10px; padding:9px 13px;">
+              <span style="font-size:12px; font-weight:600;">Mẫu đang chọn:</span>
+              <select value="{{ annPickBox.labelId }}" onChange="{{ annPickChange }}" style="border:1px solid var(--line2); border-radius:8px; padding:6px 9px; background:var(--bg); color:var(--ink); font-size:12px; font-weight:600; font-family:inherit; outline:none; cursor:pointer;">
+                <sc-for list="{{ annLabelOptions }}" as="o" hint-placeholder-count="5"><option value="{{ o.id }}">{{ o.name }}</option></sc-for>
+              </select>
+              <button onClick="{{ annPickDelete }}" style="font-size:11.5px; font-weight:600; padding:6px 12px; border-radius:8px; border:1px solid var(--p0); background:transparent; color:var(--p0); cursor:pointer; font-family:inherit;">Xóa mẫu</button>
+              <button onClick="{{ annPickClose }}" style="font-size:11.5px; font-weight:600; padding:6px 12px; border-radius:8px; border:1px solid var(--line2); background:transparent; color:var(--ink2); cursor:pointer; font-family:inherit;">Bỏ chọn</button>
+              <span style="font-size:11px; color:var(--ink3);">Đổi nhãn trong danh sách để sửa loại cho mẫu này</span>
+            </div>
+          </sc-if>
+
+          <div style="display:flex; align-items:center; gap:10px; margin-top:10px;">
+            <button onClick="{{ saveSamples }}" style="display:flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; padding:10px 18px; border-radius:10px; border:none; background:{{ saveBtnBg }}; color:#fff; cursor:pointer; font-family:inherit;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>Lưu {{ pendingCount }} mẫu đã gắn
+            </button>
+            <sc-if value="{{ savedMsg }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px; font-weight:600; color:var(--ok);">{{ savedMsg }}</span></sc-if>
+            <span style="font-size:11px; color:var(--ink3); flex:1;">Khoanh khung quanh đối tượng theo nhãn đang chọn, có thể gắn nhiều mẫu trên một khung hình rồi bấm lưu.</span>
+          </div>
+
+          <sc-if value="{{ justSaved }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; align-items:center; gap:10px; margin-top:10px; background:var(--okq); border:1px solid var(--ok); border-radius:10px; padding:10px 14px; flex-wrap:wrap;">
+              <span style="font-size:12px; font-weight:600; color:var(--ok);">Đã lưu xong — gắn nhãn tiếp:</span>
+              <button onClick="{{ importImage }}" style="font-size:11.5px; font-weight:600; padding:6px 13px; border-radius:8px; border:none; background:var(--acc); color:#fff; cursor:pointer; font-family:inherit;">+ Import hình mới</button>
+              <button onClick="{{ importVideo }}" style="font-size:11.5px; font-weight:600; padding:6px 13px; border-radius:8px; border:none; background:var(--acc); color:#fff; cursor:pointer; font-family:inherit;">+ Import video mới</button>
+              <sc-if value="{{ annIsVideo }}" hint-placeholder-val="{{ false }}">
+                <button onClick="{{ nextFrame }}" style="font-size:11.5px; font-weight:600; padding:6px 13px; border-radius:8px; border:1px solid var(--line2); background:var(--card); color:var(--ink); cursor:pointer; font-family:inherit;">Khung hình tiếp theo →</button>
+              </sc-if>
+              <button onClick="{{ dismissSaved }}" style="font-size:11.5px; font-weight:600; padding:6px 13px; border-radius:8px; border:none; background:transparent; color:var(--ink3); cursor:pointer; font-family:inherit;">Đóng</button>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div style="background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; flex:1; display:flex; flex-direction:column; min-height:0;">
+            <div style="padding:12px 15px; border-bottom:1px solid var(--line);">
+              <div style="font-size:13px; font-weight:600;">Chọn nhãn để gắn mẫu</div>
+              <div style="font-size:11px; color:var(--ink3); margin-top:2px;">{{ annSelNote }}</div>
+            </div>
+            <div style="flex:1; overflow:auto; max-height:330px;">
+              <sc-for list="{{ objLabels }}" as="o" hint-placeholder-count="6">
+                <div onClick="{{ o.pick }}" style="display:flex; align-items:center; gap:10px; padding:9px 15px; border-bottom:1px solid var(--line); cursor:pointer; background:{{ o.rowBg }};" style-hover="background:var(--raise)">
+                  <div style="width:38px; height:28px; flex:none; border-radius:6px; background:linear-gradient(150deg,{{ o.tint }},#11161c); border:1px solid {{ o.rowBorder }}; display:flex; align-items:center; justify-content:center;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#cfd6dd" stroke-width="1.8"><path d="{{ o.icon }}"/></svg>
+                  </div>
+                  <input value="{{ o.name }}" onInput="{{ o.rename }}" onClick="{{ o.stop }}" style="flex:1; min-width:0; border:none; background:transparent; color:var(--ink); font-size:12.5px; font-weight:600; font-family:inherit; outline:none;" />
+                  <span style="font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:20px; background:{{ o.kindBg }}; color:{{ o.kindFg }}; flex:none;">{{ o.kind }}</span>
+                  <span style="font-size:10.5px; color:var(--ink3); font-family:'IBM Plex Mono',monospace; flex:none; width:48px; text-align:right;">{{ o.samples }} mẫu</span>
+                  <button onClick="{{ o.del }}" style="font-size:10.5px; font-weight:600; padding:3px 8px; border-radius:6px; border:1px solid var(--p0); background:transparent; color:var(--p0); cursor:pointer; font-family:inherit; flex:none;">Xóa</button>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+        <div style="background:var(--card); border:1px solid var(--acc); border-radius:14px; padding:16px; align-self:start;">
+          <div style="font-size:13.5px; font-weight:600; margin-bottom:4px;">Thêm nhãn mới</div>
+          <div style="font-size:11.5px; color:var(--ink3); line-height:1.5; margin-bottom:14px;">Đặt tên nhãn (vd: Xe nâng reach stacker, Người mặc áo phản quang…) rồi lưu để dùng trong các zone.</div>
+          <label style="font-size:11.5px; font-weight:600; color:var(--ink2); display:block; margin-bottom:6px;">Tên nhãn</label>
+          <input value="{{ nlName }}" onInput="{{ onNlName }}" placeholder="vd: Người mặc áo phản quang" style="width:100%; border:1px solid var(--line2); border-radius:9px; padding:10px 12px; background:var(--bg); color:var(--ink); font-size:13px; font-family:inherit; outline:none; margin-bottom:13px;" />
+          <label style="font-size:11.5px; font-weight:600; color:var(--ink2); display:block; margin-bottom:8px;">Loại đối tượng</label>
+          <div style="display:flex; gap:8px; margin-bottom:16px;">
+            <button onClick="{{ nlKindNguoi }}" style="flex:1; font-size:12px; font-weight:600; padding:8px; border-radius:9px; border:1px solid {{ nlNguoiBorder }}; background:{{ nlNguoiBg }}; color:{{ nlNguoiFg }}; cursor:pointer; font-family:inherit;">Người</button>
+            <button onClick="{{ nlKindXe }}" style="flex:1; font-size:12px; font-weight:600; padding:8px; border-radius:9px; border:1px solid {{ nlXeBorder }}; background:{{ nlXeBg }}; color:{{ nlXeFg }}; cursor:pointer; font-family:inherit;">Hình dáng xe</button>
+          </div>
+          <button onClick="{{ saveLabel }}" style="width:100%; padding:11px; border-radius:10px; border:none; background:var(--acc); color:#fff; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">Lưu nhãn</button>
+          <div style="font-size:10.5px; color:var(--ink3); text-align:center; margin-top:10px;">Nhãn mới sẽ xuất hiện trong danh sách chọn loại của mọi zone</div>
+        </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ subLabelOn }}" hint-placeholder-val="{{ true }}">
+      <div style="background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden;">
+        <div style="padding:13px 16px; border-bottom:1px solid var(--line);">
+          <div style="font-size:13.5px; font-weight:600;">Gắn nhãn phương tiện đã thu thập</div>
+          <div style="font-size:11.5px; color:var(--ink3); margin-top:2px;">Đánh dấu xe quen (được phép) / xe lạ — hệ thống dùng nhãn này để cảnh báo khi xe vào zone</div>
+        </div>
+        <div style="display:grid; grid-template-columns:70px 1.1fr 1fr 0.8fr 0.9fr 130px; padding:9px 16px; border-bottom:1px solid var(--line); font-size:11px; color:var(--ink3); font-weight:600;">
+          <div>Ảnh</div><div>Biển số</div><div>Loại xe</div><div>Lượt vào</div><div>Lần cuối</div><div>Nhãn</div>
+        </div>
+        <sc-for list="{{ vehicles }}" as="v" hint-placeholder-count="6">
+          <div style="display:grid; grid-template-columns:70px 1.1fr 1fr 0.8fr 0.9fr 130px; padding:11px 16px; border-bottom:1px solid var(--line); align-items:center; font-size:12.5px;">
+            <div><div style="width:52px; height:34px; border-radius:6px; background:linear-gradient(150deg,{{ v.tint }},#11161c); border:1px solid var(--line2);"></div></div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-weight:600;">{{ v.plate }}</div>
+            <div style="color:var(--ink2);">{{ v.type }}</div>
+            <div style="font-family:'IBM Plex Mono',monospace; color:var(--ink2);">{{ v.visits }}</div>
+            <div style="color:var(--ink3); font-family:'IBM Plex Mono',monospace; font-size:11.5px;">{{ v.last }}</div>
+            <div>
+              <button onClick="{{ v.toggle }}" style="display:flex; align-items:center; gap:7px; font-size:11.5px; font-weight:700; padding:5px 12px; border-radius:20px; border:1px solid {{ v.tagBorder }}; background:{{ v.tagBg }}; color:{{ v.tagFg }}; cursor:pointer; font-family:inherit;">
+                <span style="width:7px; height:7px; border-radius:50%; background:{{ v.tagFg }};"></span>{{ v.tag }}
+              </button>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ subZoneOn }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:16px;">
+        <div>
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+            <div style="display:flex; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:4px; gap:2px;">
+              <sc-for list="{{ camPills }}" as="c" hint-placeholder-count="3">
+                <button onClick="{{ c.set }}" style="font-size:12px; font-weight:600; padding:6px 12px; border-radius:7px; border:none; cursor:pointer; font-family:inherit; white-space:nowrap; background:{{ c.bg }}; color:{{ c.fg }};">{{ c.label }}</button>
+              </sc-for>
+            </div>
+            <div style="display:flex; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:4px; gap:2px;">
+              <button onClick="{{ toolSelect }}" style="font-size:12px; font-weight:600; padding:6px 12px; border-radius:7px; border:none; cursor:pointer; font-family:inherit; white-space:nowrap; background:{{ tSelBg }}; color:{{ tSelFg }};">Chọn</button>
+              <button onClick="{{ toolDraw }}" style="font-size:12px; font-weight:600; padding:6px 12px; border-radius:7px; border:none; cursor:pointer; font-family:inherit; white-space:nowrap; background:{{ tDrawBg }}; color:{{ tDrawFg }};">Vẽ zone</button>
+            </div>
+            <sc-if value="{{ zDraftFinishable }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ finishDraw }}" style="font-size:12px; font-weight:600; padding:7px 14px; border-radius:8px; border:none; background:var(--ok); color:#fff; cursor:pointer; font-family:inherit;">✓ Hoàn tất zone</button>
+            </sc-if>
+            <sc-if value="{{ zDraftOn }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ cancelDraw }}" style="font-size:12px; font-weight:600; padding:7px 14px; border-radius:8px; border:1px solid var(--line2); background:transparent; color:var(--ink2); cursor:pointer; font-family:inherit;">Hủy</button>
+            </sc-if>
+            <span style="font-size:11.5px; color:var(--ink3);">{{ zoneHint }}</span>
+          </div>
+          <div data-zfeed="1" onMouseDown="{{ zDown }}" onMouseMove="{{ zMove }}" onMouseUp="{{ zUp }}" onMouseLeave="{{ zUp }}" style="position:relative; width:100%; aspect-ratio:16/9; background:#0c0f13; border:1px solid var(--line); border-radius:12px; overflow:hidden; cursor:{{ zCursor }}; user-select:none;">
+            <div style="position:absolute; inset:0; pointer-events:none; {{ camSelBgStyle }}"></div>
+            <div style="position:absolute; inset:0; background:rgba(6,10,14,.14); pointer-events:none;"></div>
+            <div style="position:absolute; left:10px; top:9px; background:rgba(0,0,0,.55); color:#e3e7ea; font-size:10px; padding:3px 7px; border-radius:5px; font-family:'IBM Plex Mono',monospace; pointer-events:none;">{{ camSelId }} · {{ camSelLabel }}</div>
+            <div style="position:absolute; right:10px; bottom:9px; background:rgba(0,0,0,.55); color:#e3e7ea; font-size:10px; padding:3px 7px; border-radius:5px; font-family:'IBM Plex Mono',monospace; pointer-events:none;">{{ clock }} · góc trên cao</div>
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute; inset:0; width:100%; height:100%;">
+              <sc-for list="{{ zonePolys }}" as="z" hint-placeholder-count="2">
+                <polygon onMouseDown="{{ z.down }}" points="{{ z.pts }}" fill="{{ z.fill }}" stroke="{{ z.stroke }}" stroke-width="{{ z.sw }}" stroke-dasharray="{{ z.dash }}" vector-effect="non-scaling-stroke" style="cursor:{{ z.cursor }}; pointer-events:auto;"></polygon>
+              </sc-for>
+              <sc-if value="{{ zDraftOn }}" hint-placeholder-val="{{ false }}">
+                <polygon points="{{ zDraftPts }}" fill="rgba(47,155,255,.16)" stroke="#2f9bff" stroke-width="1.5" stroke-dasharray="4 3" vector-effect="non-scaling-stroke" style="pointer-events:none;"></polygon>
+              </sc-if>
+            </svg>
+            <sc-for list="{{ zoneLabels }}" as="l" hint-placeholder-count="2">
+              <span style="position:absolute; left:{{ l.x }}; top:{{ l.y }}; transform:translateY(-115%); background:{{ l.color }}; color:#06080a; font-size:9.5px; font-weight:700; padding:1px 7px; border-radius:3px; white-space:nowrap; pointer-events:none;">{{ l.name }}</span>
+            </sc-for>
+            <sc-for list="{{ vertexHandles }}" as="h" hint-placeholder-count="4">
+              <span onMouseDown="{{ h.down }}" style="position:absolute; left:{{ h.x }}; top:{{ h.y }}; width:11px; height:11px; margin:-5.5px 0 0 -5.5px; background:#fff; border:1.5px solid {{ h.color }}; border-radius:2px; cursor:grab;"></span>
+            </sc-for>
+            <sc-for list="{{ edgeHandles }}" as="h" hint-placeholder-count="4">
+              <span onMouseDown="{{ h.down }}" title="Kéo để thêm góc" style="position:absolute; left:{{ h.x }}; top:{{ h.y }}; width:9px; height:9px; margin:-4.5px 0 0 -4.5px; background:rgba(255,255,255,.25); border:1.5px dashed {{ h.color }}; border-radius:50%; cursor:copy;"></span>
+            </sc-for>
+            <sc-for list="{{ draftDots }}" as="d" hint-placeholder-count="3">
+              <span style="position:absolute; left:{{ d.x }}; top:{{ d.y }}; width:9px; height:9px; margin:-4.5px 0 0 -4.5px; background:#2f9bff; border:1.5px solid #fff; border-radius:50%; pointer-events:none;"></span>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <sc-for list="{{ zoneCards }}" as="z" hint-placeholder-count="2">
+            <div onClick="{{ z.pick }}" style="background:var(--card); border:1px solid {{ z.cardBorder }}; border-radius:13px; padding:14px; cursor:pointer;">
+              <div style="display:flex; align-items:center; gap:9px; margin-bottom:10px;">
+                <span style="width:10px; height:10px; border-radius:3px; background:{{ z.color }};"></span>
+                <span style="font-size:13px; font-weight:600; flex:1;">{{ z.name }}</span>
+                <button onClick="{{ z.del }}" style="font-size:11px; font-weight:600; padding:4px 10px; border-radius:7px; border:1px solid var(--p0); background:transparent; color:var(--p0); cursor:pointer; font-family:inherit;">Xóa</button>
+              </div>
+              <div style="font-size:10.5px; color:var(--ink3); margin-bottom:8px;">Chọn loại xe được phép vào zone (bấm để đổi ✓ được phép / ✕ cấm)</div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <sc-for list="{{ z.types }}" as="t" hint-placeholder-count="4">
+                  <button onClick="{{ t.toggle }}" style="font-size:11px; font-weight:600; padding:4px 11px; border-radius:20px; border:1px solid {{ t.border }}; background:{{ t.bg }}; color:{{ t.fg }}; cursor:pointer; font-family:inherit;">{{ t.label }}</button>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+          <div style="font-size:11px; color:var(--ink3); line-height:1.55; padding:0 3px;">Xe mang nhãn <b style="color:var(--p0);">Xe lạ</b> hoặc sai loại xe cho phép sẽ sinh cảnh báo khi đi vào zone. Zone là đa giác: kéo đỉnh (ô vuông) để sửa hình dạng, kéo điểm tròn giữa cạnh để thêm góc mới, kéo thân để di chuyển.</div>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <!-- ============ 3. HỎI ĐÁP AI ============ -->
+  <sc-if value="{{ qaOn }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:860px; margin:0 auto; padding:20px; display:flex; flex-direction:column; height:calc(100vh - 63px);">
+    <div style="flex:1; overflow:auto; display:flex; flex-direction:column; gap:14px; padding:6px 2px;">
+      <sc-for list="{{ chat }}" as="m" hint-placeholder-count="2">
+        <sc-if value="{{ m.isUser }}" hint-placeholder-val="{{ false }}">
+          <div style="align-self:flex-end; max-width:70%; background:var(--acc); color:#fff; font-size:13.5px; line-height:1.5; padding:11px 15px; border-radius:15px 15px 4px 15px; animation:msgIn .25s ease;">{{ m.text }}</div>
+        </sc-if>
+        <sc-if value="{{ m.isAi }}" hint-placeholder-val="{{ true }}">
+          <div style="align-self:flex-start; max-width:86%; animation:msgIn .25s ease;">
+            <div style="display:flex; align-items:center; gap:7px; margin-bottom:6px;">
+              <span style="width:22px; height:22px; border-radius:7px; background:linear-gradient(145deg,#2f9bff,#1361c9); display:flex; align-items:center; justify-content:center;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
+              </span>
+              <span style="font-size:11px; font-weight:600; color:var(--ink3);">Trợ lý sự kiện</span>
+            </div>
+            <div style="background:var(--card); border:1px solid var(--line); font-size:13.5px; line-height:1.6; padding:13px 16px; border-radius:4px 15px 15px 15px; color:var(--ink);">{{ m.text }}</div>
+            <sc-if value="{{ m.clip }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:10px; background:var(--panel); border:1px solid var(--line2); border-radius:13px; overflow:hidden; max-width:430px;">
+                <div style="position:relative; aspect-ratio:16/9; background:radial-gradient(120% 90% at 50% 18%, #1a2129 0%, #0c0f13 60%, #07090b 100%);">
+                  <div style="position:absolute; left:0; right:0; bottom:0; height:56%; background:linear-gradient(#0c1014,#060809); background-image:repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 1px, transparent 1px 13%);"></div>
+                  <div style="position:absolute; left:28%; top:38%; width:44%; height:44%; background:linear-gradient(160deg,{{ m.clip.tint }},#11161c); border-radius:5px;"></div>
+                  <div style="position:absolute; left:27%; top:37%; width:46%; height:46%; border:1.5px solid {{ m.clip.boxColor }};">
+                    <span style="position:absolute; left:-1px; top:-18px; background:{{ m.clip.boxColor }}; color:#06080a; font-size:9.5px; font-weight:700; padding:1px 7px; border-radius:3px; white-space:nowrap;">{{ m.clip.boxLabel }}</span>
+                  </div>
+                  <div style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:44px; height:44px; border-radius:50%; background:rgba(0,0,0,.55); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; cursor:pointer; border:1.5px solid rgba(255,255,255,.5);">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+                  </div>
+                  <div style="position:absolute; left:9px; top:8px; background:rgba(0,0,0,.5); color:#e3e7ea; font-size:9.5px; padding:2px 7px; border-radius:5px; font-family:'IBM Plex Mono',monospace;">{{ m.clip.cam }}</div>
+                  <div style="position:absolute; right:9px; top:8px; background:var(--p0); color:#fff; font-size:9px; font-weight:700; padding:2px 7px; border-radius:5px;">CLIP 10s</div>
+                </div>
+                <div style="padding:10px 13px;">
+                  <div style="display:flex; align-items:center; gap:9px; margin-bottom:8px;">
+                    <span style="font-size:10.5px; font-family:'IBM Plex Mono',monospace; color:var(--ink3);">{{ m.clip.from }}</span>
+                    <div style="flex:1; height:4px; border-radius:3px; background:var(--raise); position:relative;">
+                      <div style="position:absolute; left:0; top:0; bottom:0; width:32%; background:var(--acc); border-radius:3px;"></div>
+                      <div style="position:absolute; left:32%; top:50%; width:11px; height:11px; border-radius:50%; background:#fff; transform:translate(-50%,-50%);"></div>
+                    </div>
+                    <span style="font-size:10.5px; font-family:'IBM Plex Mono',monospace; color:var(--ink3);">{{ m.clip.to }}</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:11px; color:var(--ink2); flex:1;">{{ m.clip.title }}</span>
+                    <button style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; padding:5px 11px; border-radius:8px; border:1px solid var(--line2); background:transparent; color:var(--ink); cursor:pointer; font-family:inherit;">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Tải 10s
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+      </sc-for>
+    </div>
+
+    <div style="flex:none; padding-top:14px;">
+      <div style="display:flex; gap:7px; flex-wrap:wrap; margin-bottom:10px;">
+        <sc-for list="{{ suggests }}" as="s" hint-placeholder-count="3">
+          <button onClick="{{ s.ask }}" style="font-size:11.5px; font-weight:500; padding:6px 13px; border-radius:20px; border:1px solid var(--line2); background:var(--card); color:var(--ink2); cursor:pointer; font-family:inherit;" style-hover="border-color:var(--acc); color:var(--acc)">{{ s.text }}</button>
+        </sc-for>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px; background:var(--card); border:1px solid var(--line2); border-radius:13px; padding:5px 6px 5px 16px;">
+        <input value="{{ draft }}" onInput="{{ onDraft }}" onKeyDown="{{ onKey }}" placeholder="Hỏi về sự kiện đã ghi nhận… vd: hôm nay có bao nhiêu xe lạ vào?" style="flex:1; border:none; outline:none; background:transparent; color:var(--ink); font-size:13.5px; font-family:inherit; padding:10px 0;" />
+        <button onClick="{{ send }}" style="width:38px; height:38px; flex:none; border-radius:10px; border:none; background:var(--acc); color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m22 2-7 20-4-9-9-4z"/></svg>
+        </button>
+      </div>
+      <div style="font-size:10.5px; color:var(--ink3); text-align:center; margin-top:8px;">Trả lời dựa trên chỉ mục sự kiện đã lưu · luôn kèm đoạn video 10s làm bằng chứng</div>
+    </div>
+  </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { tab:'mon', sub:'label', now:new Date(),
+    labels:{ '15R-158.45':'quen','16H-678.90':'quen','16L-998.21':'la','29H-887.12':'la','15H-012.34':'quen','16K-345.67':'quen' },
+    camSel:'BAI-KIEM',
+    zonesByCam:{
+      'GATE-01':[ { id:'zA', name:'Làn IN 1', color:'#30d158', points:[[36,54],[50,54],[42,95],[10,95]], types:{ 'Container':1,'Xe tải':1,'Xe con':0,'Xe máy':0 } },
+                  { id:'zB', name:'Làn IN 2', color:'#2f9bff', points:[[52,54],[66,54],[95,95],[47,95]], types:{ 'Container':1,'Xe tải':1,'Xe con':0,'Xe máy':0 } } ],
+      'BAI-KIEM':[ { id:'zK1', name:'Zone bãi kiểm', color:'#30d158', points:[[54,52],[88,58],[92,90],[48,92]], types:{ 'Container':1,'Xe nâng':1,'Xe con':0,'Xe máy':0 } },
+                   { id:'zK2', name:'Zone làn di chuyển', color:'#ff9f0a', points:[[38,42],[52,42],[46,94],[8,94]], types:{ 'Container':1,'Xe nâng':1,'Xe con':0,'Xe máy':0 } },
+                   { id:'zK3', name:'Zone cấm PT cá nhân', color:'#ff453a', points:[[6,30],[34,28],[36,60],[4,66]], types:{ 'Container':1,'Xe nâng':0,'Xe con':0,'Xe máy':0 } } ]
+    },
+    zoneSel:null, zTool:'select', zDraft:null,
+    objLabels:[ { id:'l1', name:'Container', kind:'xe', tint:'#2a4a6b', samples:128 },
+                { id:'l2', name:'Xe tải', kind:'xe', tint:'#3d5a40', samples:64 },
+                { id:'l3', name:'Xe nâng', kind:'xe', tint:'#5a5230', samples:41 },
+                { id:'l4', name:'Xe cẩu', kind:'xe', tint:'#4a3d5a', samples:12 },
+                { id:'l5', name:'Xe con', kind:'xe', tint:'#5a4a3d', samples:23 },
+                { id:'l6', name:'Xe máy', kind:'xe', tint:'#5a3d3d', samples:17 },
+                { id:'l7', name:'Xe đạp', kind:'xe', tint:'#3d4a5a', samples:6 },
+                { id:'l8', name:'Người', kind:'nguoi', tint:'#3d5a55', samples:87 } ],
+    nlName:'', nlKind:'xe',
+    annSel:'l8', annDraft:null, annSrc:'src1', vidFrame:1, savedMsg:'', annPick:null,
+    annSources:[ { id:'src1', name:'baikiem-cam-01.jpg', kind:'img', img:'assets/cam-baikiem.png' },
+                 { id:'src2', name:'gate-lan-in-06-15.jpg', kind:'img', img:'assets/cam-gate.png' },
+                 { id:'src3', name:'yard-ca-chieu.mp4', kind:'video', tint:'#3d4a3a' } ],
+    annSamples:[ { id:'s1', labelId:'l3', srcId:'src1', x:22, y:40, w:22, h:40 }, { id:'s2', labelId:'l8', srcId:'src1', x:46, y:44, w:4.5, h:9 } ],
+    chat:[{ role:'ai', text:'Xin chào! Tôi có thể trả lời các câu hỏi về sự kiện xe ra vào cổng đã ghi nhận. Mỗi câu trả lời kèm đoạn video 10 giây của sự kiện liên quan.' }], draft:'' };
+
+  VEHICLES = [
+    { plate:'15R-158.45', type:'Container', visits:42, last:'16/08 08:42', tint:'#2a4a6b' },
+    { plate:'16H-678.90', type:'Xe tải', visits:31, last:'16/08 07:15', tint:'#3d5a40' },
+    { plate:'16L-998.21', type:'Xe con', visits:2, last:'16/08 09:18', tint:'#5a4a3d' },
+    { plate:'29H-887.12', type:'Xe tải', visits:1, last:'15/08 22:04', tint:'#4a3d5a' },
+    { plate:'15H-012.34', type:'Container', visits:27, last:'16/08 06:51', tint:'#2a4a6b' },
+    { plate:'16K-345.67', type:'Container', visits:19, last:'16/08 05:33', tint:'#3d4a5a' }
+  ];
+
+  EVENTS = [
+    { time:'09:41', plate:'15R-158.45', zone:'Làn IN 2', conf:97 },
+    { time:'09:18', plate:'16L-998.21', zone:'Làn IN 1', conf:95 },
+    { time:'08:56', plate:'15H-012.34', zone:'Làn IN 1', conf:98 },
+    { time:'08:42', plate:'15R-158.45', zone:'Làn IN 2', conf:96 },
+    { time:'08:11', plate:'—', zone:'Làn IN 2', conf:null },
+    { time:'07:15', plate:'16H-678.90', zone:'Làn IN 1', conf:94 },
+    { time:'06:51', plate:'15H-012.34', zone:'Làn IN 2', conf:97 },
+    { time:'05:33', plate:'16K-345.67', zone:'Làn IN 1', conf:99 }
+  ];
+
+  QA = [
+    { keys:['bao nhiêu','xe lạ','lạ vào'], text:'Hôm nay có 2 sự kiện xe lạ / vi phạm zone: 16L-998.21 (xe con, chưa gắn nhãn quen) bị chặn tại Làn IN 1 lúc 09:18, và 29H-887.12 (xe tải) vào Làn IN 2 lúc 08:11 — zone này chỉ cho phép container. Đoạn video sự kiện gần nhất bên dưới.',
+      clip:{ cam:'GATE-01', from:'09:18:05', to:'09:18:15', title:'16L-998.21 · Xe lạ bị chặn tại Làn IN 1', boxColor:'#ff453a', boxLabel:'16L-998.21 · XE LẠ', tint:'#5a4a3d' } },
+    { keys:['container','loại xe'], text:'Trong ngày có 5 lượt container vào zone hợp lệ (15R-158.45 ×2, 15H-012.34 ×2, 16K-345.67 ×1). Không có container nào vi phạm. Video lượt gần nhất lúc 09:41 bên dưới.',
+      clip:{ cam:'GATE-01', from:'09:41:22', to:'09:41:32', title:'15R-158.45 · Container vào Làn IN 1', boxColor:'#30d158', boxLabel:'15R-158.45 · CHO PHÉP', tint:'#2a4a6b' } },
+    { keys:['sai loại','bãi chờ','vi phạm'], text:'Có 1 sự kiện sai loại xe: 29H-887.12 (xe tải) đi vào Làn IN 2 lúc 08:11 — làn này cấu hình chỉ cho phép container. Hệ thống đã sinh cảnh báo và lưu video.',
+      clip:{ cam:'GATE-01', from:'08:11:40', to:'08:11:50', title:'29H-887.12 · Sai loại xe tại Làn IN 2', boxColor:'#ff9f0a', boxLabel:'29H-887.12 · SAI LOẠI', tint:'#4a3d5a' } },
+    { keys:['xe máy','xe đạp','xe hơi','khu vực','cá nhân'], text:'Trong khu vực bãi hôm nay có 2 vi phạm loại xe: 1 xe máy vào Zone cấm phương tiện cá nhân lúc 09:52 và 1 xe hơi trắng vào Zone bãi container lúc 08:47. Xe nâng và xe container hoạt động bình thường (4 lượt hợp lệ). Video vi phạm gần nhất bên dưới.',
+      clip:{ cam:'YARD-01', from:'09:52:18', to:'09:52:28', title:'Xe máy · Vi phạm Zone cấm phương tiện cá nhân', boxColor:'#ff453a', boxLabel:'XE MÁY · VI PHẠM', tint:'#5a3d3d' } },
+    { keys:['xe nâng','forklift'], text:'Xe nâng thuộc nhóm được phép trong Zone bãi container. Hôm nay ghi nhận 2 lượt hoạt động: FL-01 lúc 08:20 và FL-02 lúc 09:38 — đều hợp lệ, không có cảnh báo. Video lượt gần nhất bên dưới.',
+      clip:{ cam:'YARD-01', from:'09:38:02', to:'09:38:12', title:'Xe nâng FL-02 · Zone bãi container', boxColor:'#30d158', boxLabel:'XE NÂNG · ĐƯỢC PHÉP', tint:'#5a5230' } },
+    { keys:['15r','158'], text:'Xe 15R-158.45 (container, nhãn: xe quen) vào cổng 2 lần hôm nay: 08:42 vào Làn IN 2 và 09:41 vào Làn IN 1 — cả hai lượt đều hợp lệ. Video lượt 09:41 bên dưới.',
+      clip:{ cam:'GATE-01', from:'09:41:22', to:'09:41:32', title:'15R-158.45 · Lượt vào 09:41', boxColor:'#30d158', boxLabel:'15R-158.45 · CHO PHÉP', tint:'#2a4a6b' } }
+  ];
+  FALLBACK = { text:'Tôi tìm thấy 8 sự kiện trong ngày: 6 lượt cho phép, 2 cảnh báo (1 xe lạ, 1 sai loại xe). Bạn có thể hỏi cụ thể hơn — ví dụ theo biển số, theo zone, hoặc theo loại vi phạm. Video sự kiện mới nhất bên dưới.',
+    clip:{ cam:'GATE-01', from:'09:41:22', to:'09:41:32', title:'Sự kiện mới nhất · 15R-158.45 vào Làn IN 1', boxColor:'#30d158', boxLabel:'15R-158.45 · CHO PHÉP', tint:'#2a4a6b' } };
+
+  componentDidMount(){ this._t=setInterval(()=>this.setState({now:new Date()}),1000); }
+  componentWillUnmount(){ clearInterval(this._t); }
+
+  feedRect(e,key){ key=key||'zfeed'; for(const s of [e.currentTarget,e.target]){ let el=s; while(el){ if(el.dataset&&el.dataset[key]) return el.getBoundingClientRect(); el=el.parentElement; } } return null; }
+  pct(e,key){ const r=this.feedRect(e,key); if(!r||!r.width) return null; const c=(v)=>Math.max(0,Math.min(100,v)); return { x:c((e.clientX-r.left)/r.width*100), y:c((e.clientY-r.top)/r.height*100) }; }
+  CAMLIST = [ { id:'BAI-KIEM', label:'Bãi Kiểm' }, { id:'GATE-01', label:'Cổng vào' } ];
+  ICONS = { nguoi:'M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM5 21c0-4 3-6 7-6s7 2 7 6', xe:'M3 16V9h11v7M14 11h4l3 3v2M6 19a1.5 1.5 0 1 0 0-3M17 19a1.5 1.5 0 1 0 0-3' };
+  curZones(){ return this.state.zonesByCam[this.state.camSel]||[]; }
+  updZone(id,patch){ this.setState(s=>{ const c=s.camSel; const arr=(s.zonesByCam[c]||[]).map(z=>z.id===id?{...z,...patch}:z); return { zonesByCam:{...s.zonesByCam,[c]:arr} }; }); }
+
+  ask(text){
+    const t=(text||'').toLowerCase(); if(!t.trim()) return;
+    const hit = this.QA.find(q=>q.keys.some(k=>t.indexOf(k)>=0)) || this.FALLBACK;
+    this.setState(s=>({ chat:[...s.chat, {role:'user', text}, {role:'ai', text:hit.text, clip:hit.clip}], draft:'' }));
+  }
+
+  renderVals(){
+    const st=this.state, out={};
+    const pad=n=>String(n).padStart(2,'0');
+    out.clock=`${pad(st.now.getHours())}:${pad(st.now.getMinutes())}:${pad(st.now.getSeconds())}`;
+
+    out.tabs=[{id:'mon',label:'Giám sát cổng'},{id:'area',label:'Giám sát khu vực'},{id:'set',label:'Cài đặt'},{id:'qa',label:'Hỏi đáp AI'}].map(t=>{ const on=st.tab===t.id; return { label:t.label, set:()=>this.setState({tab:t.id}), bg:on?'var(--acc)':'transparent', fg:on?'#fff':'var(--ink2)' }; });
+    out.monOn=st.tab==='mon'; out.setOn=st.tab==='set'; out.qaOn=st.tab==='qa'; out.areaOn=st.tab==='area';
+
+    // area monitor
+    out.areaKpis=[
+      { label:'Đối tượng trong khu', value:'3', color:'var(--ink)' },
+      { label:'Vi phạm loại xe hôm nay', value:'2', color:'var(--p0)' },
+      { label:'Xe nâng / container hoạt động', value:'2', color:'var(--ink)' },
+      { label:'Zone khu vực', value:String((st.zonesByCam['BAI-KIEM']||[]).length), color:'var(--ink)' }
+    ];
+    out.areaZones=(st.zonesByCam['BAI-KIEM']||[]).map(z=>{ const cx=z.points.reduce((a,p)=>a+p[0],0)/z.points.length, cy=z.points.reduce((a,p)=>a+p[1],0)/z.points.length; return { label:z.name.toUpperCase(), color:z.color, fill:z.color+'14', pts:z.points.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' '), lx:cx.toFixed(1)+'%', ly:cy.toFixed(1)+'%' }; });
+    out.areaObjects=[
+      { bx:'21%', by:'38%', bw:'23%', bh:'42%', color:'#30d158', fill:'rgba(48,209,88,.07)', label:'XE NÂNG RS01 · ĐƯỢC PHÉP' },
+      { bx:'55%', by:'56%', bw:'32%', bh:'32%', color:'#30d158', fill:'rgba(48,209,88,.05)', label:'BÃI CONTAINER LẠNH' },
+      { bx:'50.2%', by:'39.5%', bw:'2%', bh:'7%', color:'#ff453a', fill:'rgba(255,69,58,.12)', label:'NGƯỜI ĐI BỘ · CẢNH BÁO' }
+    ];
+    out.typeRules=[
+      { label:'Xe nâng', ok:1, icon:'M5 18h9M5 18V8h5l2 4h4v6M18 18v-8' },
+      { label:'Xe container', ok:1, icon:'M3 16V8h11v8M14 10h4l3 3v3M6 19a1.5 1.5 0 1 0 0-3M17 19a1.5 1.5 0 1 0 0-3' },
+      { label:'Xe hơi', ok:0, icon:'M5 16l1-5 2-3h8l2 3 1 5M5 16h14M7 19a1.5 1.5 0 1 0 0-3M17 19a1.5 1.5 0 1 0 0-3' },
+      { label:'Xe máy', ok:0, icon:'M5 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM8 14l3-5h4l3 5' },
+      { label:'Xe đạp', ok:0, icon:'M5 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM8 14l3-6h5l2 6M12 8h3' }
+    ].map(t=>({ label:(t.ok?'':'✕ ')+t.label, icon:t.icon, fg:t.ok?'var(--ok)':'var(--p0)', bg:t.ok?'var(--okq)':'var(--p0q)', border:t.ok?'var(--ok)':'var(--p0)' }));
+    out.areaEvents=[
+      { time:'09:52', obj:'Xe máy', zone:'Zone cấm phương tiện cá nhân', st:'Vi phạm', ok:0 },
+      { time:'09:38', obj:'Xe nâng FL-02', zone:'Zone bãi kiểm', st:'Được phép', ok:1 },
+      { time:'09:12', obj:'Xe container 15R-158.45', zone:'Zone bãi kiểm', st:'Được phép', ok:1 },
+      { time:'08:47', obj:'Xe hơi trắng', zone:'Zone bãi kiểm', st:'Vi phạm', ok:0 },
+      { time:'08:20', obj:'Xe nâng FL-01', zone:'Zone bãi kiểm', st:'Được phép', ok:1 },
+      { time:'07:55', obj:'Xe container 15H-012.34', zone:'Zone bãi kiểm', st:'Được phép', ok:1 }
+    ].map(e=>({ ...e, stBg:e.ok?'var(--okq)':'var(--p0q)', stFg:e.ok?'var(--ok)':'var(--p0)' }));
+
+    // monitor
+    const unread=this.EVENTS.filter(e=>e.conf==null).length;
+    out.kpis=[
+      { label:'Lượt xe qua cổng', value:String(this.EVENTS.length), color:'var(--ink)' },
+      { label:'Biển số đọc được', value:String(this.EVENTS.length-unread), color:'var(--ok)' },
+      { label:'Không đọc được', value:String(unread), color:'var(--p1)' },
+      { label:'Độ tin cậy trung bình', value:'96%', color:'var(--ink)' }
+    ];
+    const zPoly=z=>{ let m=z.points[0]; for(const p of z.points){ if(p[1]<m[1]) m=p; } return { label:z.name.toUpperCase(), color:z.color, fill:z.color+'14', pts:z.points.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' '), lx:m[0]+'%', ly:m[1]+'%' }; };
+    out.liveZones=(st.zonesByCam['GATE-01']||[]).map(zPoly);
+    out.livePlate='15R-158.45';
+    out.events=this.EVENTS.map(e=>({ ...e, conf: e.conf==null?'không đọc được':e.conf+'%', confColor: e.conf==null?'var(--p1)':(e.conf>=95?'var(--ok)':'var(--p1)') }));
+
+    // settings
+    out.setSubLabel=()=>this.setState({sub:'label'}); out.setSubZone=()=>this.setState({sub:'zone'}); out.setSubObj=()=>this.setState({sub:'obj'});
+    out.subLabelOn=st.sub==='label'; out.subZoneOn=st.sub==='zone'; out.subObjOn=st.sub==='obj';
+    out.subLabelBg=st.sub==='label'?'var(--acc)':'transparent'; out.subLabelFg=st.sub==='label'?'#fff':'var(--ink2)';
+    out.subZoneBg=st.sub==='zone'?'var(--acc)':'transparent'; out.subZoneFg=st.sub==='zone'?'#fff':'var(--ink2)';
+    out.subObjBg=st.sub==='obj'?'var(--acc)':'transparent'; out.subObjFg=st.sub==='obj'?'#fff':'var(--ink2)';
+
+    // object labels
+    const annSelLabel = st.objLabels.find(o=>o.id===st.annSel) || null;
+    out.objLabels=st.objLabels.map(o=>{ const on=st.annSel===o.id; return { ...o, samples:String(o.samples + st.annSamples.filter(s=>s.labelId===o.id&&s.session).length), icon:this.ICONS[o.kind],
+      kind: o.kind==='nguoi'?'Người':'Xe', kindBg: o.kind==='nguoi'?'var(--accq)':'var(--okq)', kindFg: o.kind==='nguoi'?'var(--acc)':'var(--ok)',
+      rowBg: on?'var(--accq)':'transparent', rowBorder: on?'var(--acc)':'var(--line2)',
+      pick:()=>this.setState({annSel:o.id}),
+      stop:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); },
+      rename:(e)=>{ const v=e&&e.target?e.target.value:''; this.setState(s=>({ objLabels:s.objLabels.map(x=>x.id===o.id?{...x,name:v}:x) })); },
+      del:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this.setState(s=>({ objLabels:s.objLabels.filter(x=>x.id!==o.id), annSamples:s.annSamples.filter(x=>x.labelId!==o.id), annSel: s.annSel===o.id?null:s.annSel })); } }; });
+
+    // annotation feed
+    const labelColors={ l1:'#39e0d0', l2:'#30d158', l3:'#ff9f0a', l4:'#bf5af2', l5:'#5fb3ff', l6:'#ff453a', l7:'#a1a1ab', l8:'#2f9bff' };
+    const colorOf=id=> labelColors[id] || '#2f9bff';
+    const curSrc = st.annSources.find(s=>s.id===st.annSrc) || st.annSources[0];
+    out.annSources = st.annSources.map(s=>({ ...s, isVideo:s.kind==='video', border: s.id===st.annSrc?'var(--acc)':'var(--line)',
+      thumbStyle: s.img ? `background-image:url('${s.img}'); background-size:cover; background-position:center;` : `background:linear-gradient(150deg,${s.tint||'#1a2129'},#0c0f13);`,
+      pick:()=>this.setState({annSrc:s.id, annDraft:null}) }));
+    out.annSrcBgStyle = curSrc.img ? `background-image:url('${curSrc.img}'); background-size:cover; background-position:center;` : `background:linear-gradient(150deg,${curSrc.tint||'#1a2129'},#0c0f13);`;
+    out.annIsVideo = curSrc.kind==='video';
+    out.annSrcName = curSrc.name + (curSrc.kind==='video' ? ' · khung '+['00:12','00:47','01:23','02:05'][st.vidFrame] : '');
+    out.vidFrameLabel = ['00:12','00:47','01:23','02:05'][st.vidFrame];
+    out.vidTicks = ['8%','31%','55%','82%'].map((x,i)=>({ x, bg: st.vidFrame===i?'var(--acc)':'var(--ink3)', pick:()=>this.setState({vidFrame:i, annDraft:null}) }));
+    out.importImage = ()=>{ const n=this.state.annSources.filter(s=>s.kind==='img').length+1; const tints=['#2a3f55','#3d4a3a','#4a3d5a','#5a4a3d']; const id='src'+Date.now(); this.setState(s=>({ annSources:[...s.annSources, { id, name:'import-hinh-'+String(n).padStart(2,'0')+'.jpg', kind:'img', tint:tints[n%tints.length] }], annSrc:id, annDraft:null, savedMsg:'', annPick:null })); };
+    out.importVideo = ()=>{ const n=this.state.annSources.filter(s=>s.kind==='video').length+1; const id='src'+Date.now(); this.setState(s=>({ annSources:[...s.annSources, { id, name:'import-video-'+String(n).padStart(2,'0')+'.mp4', kind:'video', tint:'#3a4450' }], annSrc:id, vidFrame:0, annDraft:null, savedMsg:'', annPick:null })); };
+    out.nextFrame = ()=>this.setState(s=>({ vidFrame:(s.vidFrame+1)%4, annDraft:null, savedMsg:'', annPick:null }));
+    out.dismissSaved = ()=>this.setState({savedMsg:''});
+    out.justSaved = !!st.savedMsg;
+    out.annSelNote = annSelLabel ? ('Đang gắn mẫu cho: '+annSelLabel.name) : 'Bấm một nhãn để bắt đầu gắn mẫu';
+    out.annHint = annSelLabel ? ('Kéo khoanh khung quanh "'+annSelLabel.name+'" trên khung hình.') : 'Chọn một nhãn ở bảng bên phải trước.';
+    out.annCursor = annSelLabel ? 'crosshair' : 'default';
+    const frameKey = curSrc.id + (curSrc.kind==='video' ? ':'+st.vidFrame : '');
+    out.annBoxes = st.annSamples.filter(s=> (s.srcId||'src1') + (s.frame!=null?':'+s.frame:'') === frameKey || ((s.srcId||'src1')===curSrc.id && curSrc.kind!=='video' && s.frame==null)).map(s=>{ const lb=st.objLabels.find(o=>o.id===s.labelId); if(!lb) return null; const c=colorOf(s.labelId); const on=st.annPick===s.id; return { x:s.x+'%', y:s.y+'%', w:s.w+'%', h:s.h+'%', color:c, fill:c+(on?'2e':'14'), bw:on?'2.5px':'1.5px', label:lb.name.toUpperCase(),
+      pick:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this.setState({annPick:s.id}); } }; }).filter(Boolean);
+    const pickSample = st.annSamples.find(s=>s.id===st.annPick) || null;
+    out.annPickBox = pickSample;
+    out.annLabelOptions = st.objLabels.map(o=>({ id:o.id, name:o.name }));
+    out.annPickChange = (e)=>{ const v=e&&e.target?e.target.value:null; if(!v||!pickSample)return; this.setState(s=>({ annSamples:s.annSamples.map(x=>x.id===pickSample.id?{...x, labelId:v}:x) })); };
+    out.annPickDelete = ()=>{ if(!pickSample)return; this.setState(s=>({ annSamples:s.annSamples.filter(x=>x.id!==pickSample.id), annPick:null })); };
+    out.annPickClose = ()=>this.setState({annPick:null});
+    const ad=st.annDraft;
+    out.annDraftOn=!!ad;
+    out.annDraftStyle=ad?`position:absolute; left:${ad.x}%; top:${ad.y}%; width:${ad.w}%; height:${ad.h}%; border:1.5px dashed #fff; background:rgba(255,255,255,.12);`:'';
+    out.annDown=(e)=>{ if(!this.state.annSel) return; const p=this.pct(e,'annfeed'); if(!p)return; this._annDrag={x0:p.x,y0:p.y}; this.setState({annDraft:{x:p.x,y:p.y,w:0,h:0}}); };
+    out.annMove=(e)=>{ const d=this._annDrag; if(!d)return; const p=this.pct(e,'annfeed'); if(!p)return; this.setState({annDraft:{x:Math.min(d.x0,p.x), y:Math.min(d.y0,p.y), w:Math.abs(p.x-d.x0), h:Math.abs(p.y-d.y0)}}); };
+    out.annUp=()=>{ const d=this._annDrag; this._annDrag=null; if(!d)return; const dft=this.state.annDraft; this.setState({annDraft:null}); if(!dft||dft.w<2||dft.h<2)return;
+      this.setState(s=>{ const src=s.annSources.find(x=>x.id===s.annSrc)||s.annSources[0]; const nid='s'+Date.now(); return { annSamples:[...s.annSamples, { id:nid, labelId:s.annSel, srcId:src.id, frame:src.kind==='video'?s.vidFrame:null, x:+dft.x.toFixed(1), y:+dft.y.toFixed(1), w:+dft.w.toFixed(1), h:+dft.h.toFixed(1), session:1 }], savedMsg:'', annPick:nid }; }); };
+    const pending = st.annSamples.filter(s=>s.session).length;
+    out.pendingCount = String(pending);
+    out.saveBtnBg = pending>0 ? 'var(--ok)' : 'var(--line2)';
+    out.savedMsg = st.savedMsg;
+    out.saveSamples = ()=>{ const s=this.state; const cnt=s.annSamples.filter(x=>x.session).length; if(!cnt) return;
+      const inc={}; s.annSamples.forEach(x=>{ if(x.session) inc[x.labelId]=(inc[x.labelId]||0)+1; });
+      this.setState(st2=>({ objLabels:st2.objLabels.map(o=> inc[o.id]?{...o, samples:o.samples+inc[o.id]}:o), annSamples:st2.annSamples.map(x=>({...x, session:0})), savedMsg:'✓ Đã lưu '+cnt+' mẫu' })); };
+    out.nlName=st.nlName;
+    out.onNlName=(e)=>this.setState({nlName:e&&e.target?e.target.value:''});
+    out.nlKindNguoi=()=>this.setState({nlKind:'nguoi'}); out.nlKindXe=()=>this.setState({nlKind:'xe'});
+    out.nlNguoiBg=st.nlKind==='nguoi'?'var(--acc)':'transparent'; out.nlNguoiFg=st.nlKind==='nguoi'?'#fff':'var(--ink2)'; out.nlNguoiBorder=st.nlKind==='nguoi'?'var(--acc)':'var(--line2)';
+    out.nlXeBg=st.nlKind==='xe'?'var(--acc)':'transparent'; out.nlXeFg=st.nlKind==='xe'?'#fff':'var(--ink2)'; out.nlXeBorder=st.nlKind==='xe'?'var(--acc)':'var(--line2)';
+    out.saveLabel=()=>{ const n=this.state.nlName.trim(); if(!n)return; const tints=['#2a4a6b','#3d5a40','#5a5230','#4a3d5a','#3d5a55'];
+      this.setState(s=>({ objLabels:[...s.objLabels, { id:'l'+Date.now(), name:n, kind:s.nlKind, tint:tints[s.objLabels.length%tints.length], samples:0 }], nlName:'' })); };
+
+    out.vehicles=this.VEHICLES.map(v=>{ const la=st.labels[v.plate]==='la'; return { ...v, visits:String(v.visits),
+      tag: la?'Xe lạ':'Xe quen', tagFg: la?'var(--p0)':'var(--ok)', tagBg: la?'var(--p0q)':'var(--okq)', tagBorder: la?'var(--p0)':'var(--ok)',
+      toggle:()=>this.setState(s=>({ labels:{...s.labels, [v.plate]: s.labels[v.plate]==='la'?'quen':'la'} })) }; });
+
+    // zone editor
+    const tool=st.zTool;
+    const curCam=this.CAMLIST.find(c=>c.id===st.camSel)||this.CAMLIST[0];
+    out.camSelId=curCam.id; out.camSelLabel=curCam.label;
+    out.camSelBgStyle = `background-image:url('${curCam.id==='GATE-01'?'assets/cam-gate.png':'assets/cam-baikiem.png'}'); background-size:cover; background-position:center;`;
+    out.camPills=this.CAMLIST.map(c=>{ const on=st.camSel===c.id; return { label:c.label, set:()=>this.setState({camSel:c.id, zoneSel:null}), bg:on?'var(--acc)':'transparent', fg:on?'#fff':'var(--ink2)' }; });
+    const curZ=this.curZones();
+    out.toolSelect=()=>this.setState({zTool:'select'}); out.toolDraw=()=>this.setState({zTool:'draw'});
+    out.tSelBg=tool==='select'?'var(--acc)':'transparent'; out.tSelFg=tool==='select'?'#fff':'var(--ink2)';
+    out.tDrawBg=tool==='draw'?'var(--acc)':'transparent'; out.tDrawFg=tool==='draw'?'#fff':'var(--ink2)';
+    out.zoneHint = tool==='draw' ? 'Bấm lần lượt trên khung hình để thêm góc; bấm gần điểm đầu hoặc “Hoàn tất” để đóng zone.' : 'Bấm chọn zone: kéo đỉnh để sửa hình dạng, kéo điểm giữa cạnh để thêm góc, kéo thân để di chuyển.';
+    out.zCursor = tool==='draw'?'crosshair':'default';
+    const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+    const ptsStr=(pts)=>pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+    const labelPos=(pts)=>{ let m=pts[0]; for(const p of pts){ if(p[1]<m[1]) m=p; } return { x:m[0]+'%', y:m[1]+'%' }; };
+
+    out.zonePolys=curZ.map(z=>{ const sel=st.zoneSel===z.id; return {
+      pts:ptsStr(z.points), fill:z.color+(sel?'33':'1a'), stroke:z.color, sw:sel?'2':'1.5', dash:sel?'0':'5 4',
+      cursor: tool==='select'?(sel?'move':'pointer'):'crosshair',
+      down:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); if(tool!=='select')return; const p=this.pct(e); this._drag={mode:'move',id:z.id,p0:p,orig:z.points.map(q=>[...q])}; this.setState({zoneSel:z.id}); } }; });
+    out.zoneLabels=curZ.map(z=>{ const lp=labelPos(z.points); return { name:z.name, color:z.color, x:lp.x, y:lp.y }; });
+
+    const selZone=curZ.find(z=>z.id===st.zoneSel);
+    out.vertexHandles = (tool==='select'&&selZone)? selZone.points.map((p,i)=>({ x:p[0]+'%', y:p[1]+'%', color:selZone.color,
+      down:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this._drag={mode:'vertex',id:selZone.id,idx:i}; } })) : [];
+    out.edgeHandles = (tool==='select'&&selZone)? selZone.points.map((p,i)=>{ const q=selZone.points[(i+1)%selZone.points.length]; const mx=(p[0]+q[0])/2, my=(p[1]+q[1])/2; return { x:mx+'%', y:my+'%', color:selZone.color,
+      down:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); const pts=selZone.points.map(v=>[...v]); pts.splice(i+1,0,[mx,my]); this.updZone(selZone.id,{points:pts}); this._drag={mode:'vertex',id:selZone.id,idx:i+1}; } }; }) : [];
+
+    const dr=st.zDraft;
+    const dpts = dr? (dr.hover&&dr.points.length? [...dr.points,dr.hover] : dr.points) : [];
+    out.zDraftOn=!!(dr&&dr.points.length);
+    out.zDraftPts=ptsStr(dpts);
+    out.draftDots= dr? dr.points.map(p=>({ x:p[0]+'%', y:p[1]+'%' })) : [];
+    out.zDraftFinishable=!!(dr&&dr.points.length>=3);
+    const finishDraw=()=>{ const d=this.state.zDraft; if(!d||d.points.length<3)return; const id='z'+Date.now(); const colors=['#2f9bff','#ff9f0a','#bf5af2'];
+      const nz={ id, name:'Zone mới '+(curZ.length+1), color:colors[curZ.length%colors.length], points:d.points.map(p=>[+p[0].toFixed(1),+p[1].toFixed(1)]), types:{'Container':1,'Xe nâng':1,'Xe con':0,'Xe máy':0} };
+      this.setState(s=>({ zonesByCam:{...s.zonesByCam,[s.camSel]:[...(s.zonesByCam[s.camSel]||[]),nz]}, zoneSel:id, zTool:'select', zDraft:null })); };
+    out.finishDraw=finishDraw;
+    out.cancelDraw=()=>this.setState({zDraft:null});
+
+    out.zDown=(e)=>{ if(tool!=='draw'){ this._drag=null; this.setState({zoneSel:null}); return; } const p=this.pct(e); if(!p)return; const d=this.state.zDraft||{points:[],hover:null};
+      if(d.points.length>=3){ const f=d.points[0]; if(Math.abs(p.x-f[0])<3 && Math.abs(p.y-f[1])<3){ finishDraw(); return; } }
+      this.setState({ zDraft:{ points:[...d.points,[p.x,p.y]], hover:null } }); };
+    out.zMove=(e)=>{ const p=this.pct(e); if(!p)return;
+      if(tool==='draw'){ if(this.state.zDraft&&this.state.zDraft.points.length) this.setState({zDraft:{...this.state.zDraft, hover:[p.x,p.y]}}); return; }
+      const d=this._drag; if(!d)return;
+      if(d.mode==='vertex'){ const z=this.curZones().find(x=>x.id===d.id); if(!z)return; const pts=z.points.map(v=>[...v]); pts[d.idx]=[clamp(p.x,1.5,98.5),clamp(p.y,2.5,97)]; this.updZone(d.id,{points:pts}); }
+      else if(d.mode==='move'){ let dx=p.x-d.p0.x, dy=p.y-d.p0.y; const xs=d.orig.map(v=>v[0]), ys=d.orig.map(v=>v[1]);
+        dx=Math.max(1.5-Math.min(...xs), Math.min(98.5-Math.max(...xs), dx)); dy=Math.max(2.5-Math.min(...ys), Math.min(97-Math.max(...ys), dy));
+        this.updZone(d.id,{ points:d.orig.map(v=>[v[0]+dx,v[1]+dy]) }); } };
+    out.zUp=()=>{ this._drag=null; };
+
+    out.zoneCards=curZ.map(z=>{ const sel=st.zoneSel===z.id; return {
+      name:z.name, color:z.color, cardBorder: sel?z.color:'var(--line)',
+      pick:()=>this.setState({zoneSel:z.id}),
+      del:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this.setState(s=>({ zonesByCam:{...s.zonesByCam,[s.camSel]:(s.zonesByCam[s.camSel]||[]).filter(x=>x.id!==z.id)}, zoneSel:null })); },
+      types:st.objLabels.map(o=>o.name).map(t=>{ const on=!!z.types[t]; return { label:(on?'✓ ':'✕ ')+t, bg:on?'var(--okq)':'var(--p0q)', fg:on?'var(--ok)':'var(--p0)', border:on?'var(--ok)':'rgba(255,69,58,.4)',
+        toggle:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this.updZone(z.id,{ types:{...z.types,[t]: on?0:1} }); } }; }) }; });
+
+    // QA
+    out.chat=st.chat.map(m=>({ ...m, isUser:m.role==='user', isAi:m.role==='ai' }));
+    out.draft=st.draft;
+    out.onDraft=(e)=>this.setState({draft:e&&e.target?e.target.value:''});
+    out.onKey=(e)=>{ if(e&&e.key==='Enter'){ if(e.preventDefault)e.preventDefault(); this.ask(this.state.draft); } };
+    out.send=()=>this.ask(this.state.draft);
+    out.suggests=[ 'Hôm nay có bao nhiêu xe lạ vào?', 'Có xe máy hay xe hơi nào vào khu vực cấm không?', 'Xe nâng hoạt động thế nào hôm nay?' ].map(t=>({ text:t, ask:()=>this.ask(t) }));
+
+    return out;
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="./doc-page.js"></script>
+<style>
+  doc-page:not(:defined){ visibility:hidden; }
+  a{ color:#1361c9; } a:hover{ color:#2f9bff; }
+  .kv td{ vertical-align:top; }
+  .keep{ break-inside:avoid; }
+  .note, .card{ break-inside:avoid; orphans:3; widows:3; }
+</style>
+</helmet>
+<doc-page margin="0.8in" lang="vi">
+  <div style="font-family:'Be Vietnam Pro',system-ui,sans-serif; color:#1d232b; font-size:14.5px; line-height:1.65;">
+
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px;">
+      <div style="width:34px; height:34px; flex:none; border-radius:9px; background:linear-gradient(145deg,#2f9bff,#1361c9); position:relative;">
+        <div style="position:absolute; inset:9px; border:2px solid #fff; border-radius:50%;"></div>
+        <div style="position:absolute; left:50%; top:50%; width:5px; height:5px; background:#fff; border-radius:50%; transform:translate(-50%,-50%);"></div>
+      </div>
+      <div style="font-size:12px; font-weight:700; letter-spacing:.08em; color:#5a6572;">SENTRIAI · CHƯƠNG TRÌNH THỰC TẬP HILAB</div>
+    </div>
+
+    <h1 style="font-size:26px; font-weight:800; letter-spacing:-.02em; line-height:1.25; margin:0 0 4px;">RFP — Bài tập Intern: Giám sát cổng &amp; khu vực bằng camera AI</h1>
+    <div style="font-size:13px; color:#5a6572; margin-bottom:18px;">Phiên bản 1.0 · 17/08/2026 · Tài liệu nội bộ dành cho intern kỹ thuật</div>
+
+    <table class="kv" style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:22px;">
+      <tbody>
+        <tr>
+          <td style="border:1px solid #dde3ea; padding:9px 12px; width:25%; background:#f4f7fa; font-weight:600;">Sản phẩm mẫu</td>
+          <td style="border:1px solid #dde3ea; padding:9px 12px;">File giao diện <span style="font-family:'IBM Plex Mono',monospace; font-size:12px;">Intern-LPR-Gate.dc.html</span> — dùng làm đặc tả UI/UX chuẩn. Nhiệm vụ của intern là hiện thực hóa backend + AI thật cho giao diện này.</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #dde3ea; padding:9px 12px; background:#f4f7fa; font-weight:600;">Công nghệ gợi ý</td>
+          <td style="border:1px solid #dde3ea; padding:9px 12px;">Tự chọn: YOLO / Supervision / OpenCV hoặc tương đương cho phát hiện; OCR biển số bất kỳ; LLM cho hỏi đáp. Không ràng buộc framework.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 style="font-size:18px; font-weight:700; margin:0 0 8px;">1. Mục tiêu</h2>
+    <p style="margin:0 0 10px;">Xây dựng một ứng dụng giám sát camera thu nhỏ gồm 4 phần: <b>Giám sát cổng</b>, <b>Giám sát khu vực</b>, <b>Cài đặt</b> và <b>Hỏi đáp AI</b>. Ứng dụng nhận luồng video (hoặc video file giả lập camera), phát hiện sự kiện theo cấu hình zone, lưu sự kiện kèm video, và trả lời câu hỏi về các sự kiện đã lưu.</p>
+
+    <h2 style="font-size:18px; font-weight:700; margin:22px 0 8px;">2. Phạm vi chức năng</h2>
+
+    <h3 style="font-size:15px; font-weight:700; margin:14px 0 6px;">2.1. Giám sát cổng (camera GATE-01 — 2 làn IN)</h3>
+    <ul style="margin:0 0 10px; padding-left:22px;">
+      <li><b>Chỉ nhận diện biển số</b> (LPR) khi xe đi vào zone làn IN 1 / IN 2 — không cần phân loại xe được phép hay không tại cổng.</li>
+      <li>Hiển thị khung nhận diện + biển số + độ tin cậy trên khung hình trực tiếp.</li>
+      <li>Ghi sự kiện: thời gian, biển số, làn, ảnh cắt biển số.</li>
+    </ul>
+
+    <h3 style="font-size:15px; font-weight:700; margin:14px 0 6px;">2.2. Giám sát khu vực (camera BAI-KIEM — góc trên cao)</h3>
+    <ul style="margin:0 0 10px; padding-left:22px;">
+      <li>Phát hiện đối tượng trong các zone đa giác: loại xe (container, xe tải, xe nâng, xe cẩu, xe con, xe máy, xe đạp…) và <b>người</b>.</li>
+      <li>Mỗi zone có danh sách loại được phép / bị cấm (cấu hình trong Cài đặt). Đối tượng bị cấm đi vào zone → sinh <b>cảnh báo vi phạm</b>.</li>
+      <li>Ví dụ: xe nâng, xe container được vào bãi; xe hơi, xe máy, xe đạp, người không phận sự thì không.</li>
+    </ul>
+
+    <h3 style="font-size:15px; font-weight:700; margin:14px 0 6px;">2.3. Cài đặt</h3>
+    <ul style="margin:0 0 10px; padding-left:22px;">
+      <li><b>Gắn nhãn xe:</b> danh sách biển số đã thu thập, đánh dấu từng xe là <i>xe quen</i> / <i>xe lạ</i>.</li>
+      <li><b>Vẽ zone:</b> chọn camera (Bãi Kiểm, Cổng vào), vẽ zone <b>đa giác</b> trên khung hình thật: bấm thêm từng góc để vẽ, kéo đỉnh để sửa hình dạng, kéo điểm giữa cạnh để thêm góc, kéo thân để di chuyển. Zone lưu lại phải cập nhật ngay ở các màn giám sát.</li>
+      <li><b>Nhãn đối tượng:</b> import hình hoặc video (chọn khung hình), vẽ ô bao quanh đối tượng trên hình, chọn loại (người / hình dáng xe), đặt tên nhãn và <b>lưu mẫu</b>. Sau khi lưu có thể import hình mới để gắn nhãn tiếp. Nhãn đã lưu xuất hiện trong danh sách chọn loại của mọi zone.</li>
+    </ul>
+
+    <h3 style="font-size:15px; font-weight:700; margin:14px 0 6px;">2.4. Hỏi đáp AI về sự kiện</h3>
+    <ul style="margin:0 0 10px; padding-left:22px;">
+      <li>Khung chat hỏi bằng ngôn ngữ tự nhiên về sự kiện đã lưu, ví dụ: <i>"Hôm nay có bao nhiêu xe lạ vào?"</i>, <i>"Có xe máy nào vào khu vực cấm không?"</i>.</li>
+      <li>Câu trả lời nêu số liệu + chi tiết sự kiện, và <b>luôn kèm đoạn video 10 giây</b> của sự kiện liên quan (camera nào, từ giây nào đến giây nào), có nút tải clip.</li>
+    </ul>
+
+    <h2 style="font-size:18px; font-weight:700; margin:22px 0 8px;">3. Yêu cầu kỹ thuật tối thiểu</h2>
+    <table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:14px;">
+      <thead>
+        <tr style="background:#f4f7fa;">
+          <th style="border:1px solid #dde3ea; padding:8px 12px; text-align:left; width:28%;">Hạng mục</th>
+          <th style="border:1px solid #dde3ea; padding:8px 12px; text-align:left;">Yêu cầu</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td style="border:1px solid #dde3ea; padding:8px 12px;">Nguồn video</td><td style="border:1px solid #dde3ea; padding:8px 12px;">RTSP hoặc video file giả lập; xử lý gần realtime (&ge; 5 FPS).</td></tr>
+        <tr><td style="border:1px solid #dde3ea; padding:8px 12px;">Phát hiện &amp; phân loại</td><td style="border:1px solid #dde3ea; padding:8px 12px;">Model phát hiện đối tượng + OCR biển số; kiểm tra tâm đối tượng nằm trong zone đa giác (point-in-polygon).</td></tr>
+        <tr><td style="border:1px solid #dde3ea; padding:8px 12px;">Lưu sự kiện</td><td style="border:1px solid #dde3ea; padding:8px 12px;">CSDL sự kiện (thời gian, camera, zone, loại đối tượng, biển số, trạng thái) + trích và lưu clip 10s quanh thời điểm sự kiện.</td></tr>
+        <tr><td style="border:1px solid #dde3ea; padding:8px 12px;">Hỏi đáp</td><td style="border:1px solid #dde3ea; padding:8px 12px;">LLM truy vấn trên CSDL sự kiện (text-to-SQL hoặc function calling); trả lời kèm tham chiếu clip.</td></tr>
+        <tr><td style="border:1px solid #dde3ea; padding:8px 12px;">Giao diện</td><td style="border:1px solid #dde3ea; padding:8px 12px;">Bám theo file mẫu <span style="font-family:'IBM Plex Mono',monospace; font-size:12px;">Intern-LPR-Gate.dc.html</span> (bố cục, luồng thao tác); công nghệ web tự chọn.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 style="font-size:18px; font-weight:700; margin:22px 0 8px;">4. Sản phẩm bàn giao</h2>
+    <ol style="margin:0 0 10px; padding-left:22px;">
+      <li>Mã nguồn (repo Git) + hướng dẫn chạy (README, docker-compose nếu có).</li>
+      <li>Demo chạy được với 2 video mẫu (cổng + bãi kiểm).</li>
+      <li>Bộ nhãn đối tượng đã gắn (tối thiểu 5 nhãn, mỗi nhãn &ge; 20 mẫu).</li>
+      <li>Video demo 3–5 phút trình bày đủ 4 phần chức năng.</li>
+    </ol>
+
+    <h2 style="font-size:18px; font-weight:700; margin:22px 0 8px;">5. Thời gian &amp; liên hệ</h2>
+    <ul style="margin:0 0 10px; padding-left:22px;">
+      <li><b>Thời gian thực hiện:</b> 2–4 tuần kể từ ngày nhận đề.</li>
+      <li><b>Review:</b> mỗi tuần 1 lần với mentor — demo tiến độ đến thời điểm đó.</li>
+      <li><b>Hỏi đáp về đề bài:</b> qua kênh chat trực tiếp với mentor.</li>
+    </ul>
+
+    <div class="note" style="margin-top:18px; border:1px solid #cfe0f2; background:#f0f6fc; border-radius:10px; padding:14px 16px; font-size:13px;">
+      <b>Lưu ý:</b> Giao diện mẫu chỉ dùng dữ liệu giả lập — mọi số liệu, biển số, sự kiện trong đó là minh họa. Intern không cần sao chép giao diện từng pixel; quan trọng là đúng luồng nghiệp vụ: <i>cấu hình → phát hiện → lưu sự kiện kèm clip → hỏi đáp có trích dẫn</i>.
+    </div>
+
+  </div>
+</doc-page>
+</x-dc>
+</body>
+</html>
