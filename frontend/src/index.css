@@ -1,0 +1,229 @@
+:root {
+  /* Ultra-modern dark palette with subtle slate/obsidian undertones */
+  --bg: #0b0d11;
+  --bg-subtle: #0f1217;
+  --panel: #14171f;
+  --panel-glass: rgba(20, 23, 31, 0.78);
+  --card: #1a1e27;
+  --card-hover: #212632;
+  --raise: #262c39;
+  --raise2: #303746;
+
+  /* Borders */
+  --line: rgba(255, 255, 255, 0.08);
+  --line2: rgba(255, 255, 255, 0.14);
+  --line3: rgba(255, 255, 255, 0.22);
+
+  /* Typography */
+  --ink: #f4f6fb;
+  --ink2: #9da6b8;
+  --ink3: #636d80;
+  --ink4: #434b59;
+
+  /* Accent & Status Colors */
+  --acc: #3b82f6;
+  --acc-glow: rgba(59, 130, 246, 0.35);
+  --acc-hover: #60a5fa;
+  --accq: rgba(59, 130, 246, 0.14);
+
+  --p0: #f43f5e;
+  --p0-glow: rgba(244, 63, 94, 0.35);
+  --p0q: rgba(244, 63, 94, 0.14);
+
+  --p1: #f59e0b;
+  --p1-glow: rgba(245, 158, 11, 0.35);
+  --p1q: rgba(245, 158, 11, 0.14);
+
+  --ok: #10b981;
+  --ok-glow: rgba(16, 185, 129, 0.35);
+  --okq: rgba(16, 185, 129, 0.14);
+
+  --cyan: #06b6d4;
+  --cyan-glow: rgba(6, 182, 212, 0.35);
+  --cyanq: rgba(6, 182, 212, 0.14);
+
+  --purple: #a855f7;
+  --purpleq: rgba(168, 85, 247, 0.14);
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 16px -2px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 32px -4px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 24px -4px var(--acc-glow);
+
+  /* Fonts */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+
+/* Glassmorphism helpers */
+.glass-panel {
+  background: var(--panel-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line);
+}
+
+.glass-card {
+  background: rgba(26, 30, 39, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+button {
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--acc);
+  text-decoration: none;
+  transition: color 0.18s ease;
+}
+
+a:hover {
+  color: var(--acc-hover);
+}
+
+/* Custom modern scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* Animations */
+@keyframes livePulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 10px var(--p0);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85);
+    box-shadow: 0 0 2px var(--p0);
+  }
+}
+
+@keyframes livePulseGreen {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 10px var(--ok);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85);
+    box-shadow: 0 0 2px var(--ok);
+  }
+}
+
+@keyframes msgSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes alertSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-live {
+  animation: livePulse 1.6s infinite ease-in-out;
+}
+
+.animate-live-green {
+  animation: livePulseGreen 1.6s infinite ease-in-out;
+}
+
+.animate-msg {
+  animation: msgSlideIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-alert {
+  animation: alertSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* License Plate styling */
+.plate-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+  color: #111827;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1.5px solid #d1d5db;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  letter-spacing: 0.04em;
+}
+
+.plate-badge.dark {
+  background: #11141a;
+  color: #f3f4f6;
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-live, .animate-live-green, .animate-msg, .animate-alert {
+    animation: none !important;
+  }
+  * {
+    transition: none !important;
+  }
+}

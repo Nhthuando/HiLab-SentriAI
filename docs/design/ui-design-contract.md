@@ -1,0 +1,123 @@
+# UI Design Contract — SentriAI
+
+> **Tài liệu hợp đồng thiết kế giao diện (UI Design Contract)**
+> **Sản phẩm:** SentriAI — Hệ thống Giám sát Camera AI & Nhận diện Biển số
+> **Trạng thái:** `Approved` (Đã được người dùng phê duyệt)
+> **Mã nguồn tham chiếu:** `frontend/` (React 19 + TypeScript + Vite)
+> **Golden Page:** `http://localhost:5173/`
+
+---
+
+## 1. Design System & Token Foundation
+
+### 1.1 Bảng màu (Color Palette & Dark Tokens)
+Giao diện áp dụng phong cách **Modern Industrial Dark UI** với nền tối có chiều sâu (Obsidian Slate), tạo sự tập trung cao độ vào khung hình camera và dữ liệu sự kiện:
+
+| Token Name | Hex / Value | Mục đích sử dụng |
+|---|---|---|
+| `--bg` | `#0b0d11` | Nền chính của ứng dụng (Canvas Background) |
+| `--bg-subtle` | `#0f1217` | Nền thứ cấp cho các container phụ |
+| `--panel` | `#14171f` | Nền Header và các panel chính |
+| `--panel-glass` | `rgba(20, 23, 31, 0.78)` | Nền kính mờ Glassmorphism (`backdrop-filter: blur(16px)`) |
+| `--card` | `#1a1e27` | Nền thẻ KPI, Card cấu hình, bảng dữ liệu |
+| `--card-hover` | `#212632` | Trạng thái hover của hàng và thẻ |
+| `--raise` | `#262c39` | Nền các nút bấm phụ, tab bar, scrubber timeline |
+| `--line` | `rgba(255, 255, 255, 0.08)` | Viền phân cách nhẹ |
+| `--line2` | `rgba(255, 255, 255, 0.14)` | Viền thẻ và ô nhập dữ liệu |
+| `--line3` | `rgba(255, 255, 255, 0.22)` | Viền active và focus |
+
+### 1.2 Màu trạng thái & Nhận diện AI (Semantic Status Tokens)
+| Token Name | Hex / Value | Ứng dụng nghiệp vụ |
+|---|---|---|
+| `--acc` | `#3b82f6` | Màu chủ đạo (Primary Accent), Nút chính, Tab active, Zone Blue |
+| `--ok` | `#10b981` | Xe quen, Hợp lệ, Camera online, Điểm tin cậy cao >= 95% |
+| `--p0` | `#f43f5e` | Cảnh báo vi phạm Zone, Xe lạ, Nút Xóa, Trực tiếp nhấp nháy |
+| `--p1` | `#f59e0b` | Cảnh báo vừa, Biển số không đọc được |
+| `--cyan` | `#06b6d4` | Bounding box nhận diện biển số LPR, Điểm tin cậy |
+| `--purple` | `#a855f7` | Nhãn đối tượng đặc biệt (Xe cẩu, Reach Stacker) |
+
+### 1.3 Kiểu chữ (Typography)
+- **UI & Controls Font:** `'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
+  - Body Text: `13px` - `14px`, line-height: `1.5` - `1.65`
+  - Section Title: `14px` - `15.5px`, font-weight: `700`, letter-spacing: `-0.02em`
+  - KPI Stat: `26px`, font-weight: `700`, letter-spacing: `-0.02em`
+- **Data & Numeric Font:** `'IBM Plex Mono', ui-monospace, Menlo, Monaco, Consolas, monospace`
+  - Biển số xe: `13.5px`, font-weight: `700`, letter-spacing: `0.02em`
+  - Timestamp & Clock: `11px` - `12px`, font-weight: `600`
+  - Chỉ số KPI: `24px` - `26px`, font-weight: `700`
+
+### 1.4 Bo góc & Đổ bóng (Border Radius & Elevations)
+- **Bo góc:**
+  - Nút bấm & Input: `8px` - `10px`
+  - Thẻ nhỏ & Tag: `6px` - `20px` (pill)
+  - Card & Container lớn: `14px` - `16px` (Squircle)
+- **Đổ bóng & Ánh sáng viền:**
+  - Card Shadow: `0 4px 16px -2px rgba(0, 0, 0, 0.45)`
+  - Panel Shadow: `0 12px 32px -4px rgba(0, 0, 0, 0.6)`
+  - Glow Accent: `0 0 24px -4px rgba(59, 130, 246, 0.35)`
+
+---
+
+## 2. Đặc tả các Component Giao diện Chuẩn
+
+### 2.1 Header (`Header.tsx`)
+- **Vị trí:** Sticky top (`z-index: 50`), kính mờ `backdrop-filter: blur(16px)`.
+- **Cấu trúc:**
+  - Trái: Logo Emblem khiên bảo vệ AI gradient + Tiêu đề thương hiệu `SentriAI` + Phụ đề nghiệp vụ.
+  - Giữa: Thanh chuyển đổi 4 phân hệ (`Giám sát cổng`, `Giám sát khu vực`, `Cài đặt hệ thống`, `Hỏi đáp AI`) có icon và pill active.
+  - Phải: Badge trực tuyến `● 2 Cam Online` + Đồng hồ số `HH:mm:ss`.
+
+### 2.2 Giám sát Cổng (`GateMonitor.tsx` — Tab `mon`)
+- **4 Thẻ KPI:** Lượt xe qua cổng, Biển số đọc thành công, Không đọc được, Độ tin cậy trung bình.
+- **Camera Feed GATE-01 (Tỉ lệ 16:9):**
+  - Thanh HUD nổi trên video: Tên camera `GATE-01 · Làn xe vào chính`, `1080p · 25 FPS`, `● TRỰC TIẾP`.
+  - SVG đa giác Làn vào (Làn IN 1, Làn IN 2).
+  - LPR Bounding Box HUD: Khung cyan phát sáng viền kính với tag `15R-158.45 · 97%`.
+- **Panel Biển số đã nhận diện:**
+  - Header có bộ đếm và tab lọc nhanh `Tất cả` | `⚠ Xe lạ` | `✓ Xe quen` + Ô tìm kiếm tức thời.
+  - Danh sách cuộn thời gian thực: Giờ vào, Biển số (font Mono), Tag phân loại `XE QUEN` / `XE LẠ`, Độ tin cậy kèm chấm trạng thái.
+  - **Tương tác Hover:** Rê chuột vào 1 dòng sự kiện sẽ highlight duy nhất dòng đó và làm sáng khung biển số tương ứng trên video feed.
+
+### 2.3 Giám sát Khu vực (`AreaMonitor.tsx` — Tab `area`)
+- **4 Thẻ KPI:** Đối tượng trong khu, Vi phạm loại xe hôm nay, Xe nâng/container hoạt động, Zone giám sát.
+- **Camera Feed BAI-KIEM (Tỉ lệ 16:9):**
+  - Thanh HUD nổi: `BAI-KIEM · Bãi kiểm bốc dỡ`, `1080p · 25 FPS`, `● TRỰC TIẾP`.
+  - SVG Polygon Zones với nhãn zone trung tâm.
+  - Object Bounding Boxes: `XE NÂNG RS01 · ĐƯỢC PHÉP` (xanh), `BÃI CONTAINER LẠNH` (xanh), `NGƯỜI ĐI BỘ · CẢNH BÁO` (đỏ).
+  - Chip quy tắc loại phương tiện: `✓ Xe nâng`, `✓ Xe container`, `✕ Xe hơi`, `✕ Xe máy`, `✕ Xe đạp`.
+- **Panel Sự kiện khu vực:** Tab lọc `Tất cả` | `⚠ Vi phạm` | `✓ Được phép` + Lọc tìm kiếm.
+- **Tương tác Hover:** Rê chuột vào 1 sự kiện sẽ highlight chính xác dòng đó và làm sáng đối tượng / zone tương ứng trên video.
+
+### 2.4 Phân hệ Cài đặt (`set` — 3 Sub-tabs)
+1. **Gắn nhãn xe (`VehicleLabelTab.tsx`):**
+   - Thanh công cụ: Ô tìm kiếm đa trường + Sắp xếp theo Lượt vào (`Mặc định`, `Giảm dần ↓`, `Tăng dần ↑`) + Lọc trạng thái (`Tất cả`, `Xe quen`, `Xe lạ`) + Bộ đếm kết quả.
+   - Bảng dữ liệu: Ảnh crop, Biển số Mono, Loại xe, Lượt vào, Lần cuối ghi nhận, Nút bấm toggle tức thời `Xe quen (Hợp lệ)` ⇄ `Xe lạ (Cảnh báo)`.
+2. **Vẽ Zone tương tác (`ZoneEditorTab.tsx`):**
+   - Toolbar: Chọn camera (`Bãi Kiểm` / `Cổng vào`), Chế độ `Chọn / Sửa` vs `+ Vẽ zone mới`, Nút `Undo` (`Ctrl+Z`) / `Redo` (`Ctrl+Y`), Hoàn tất zone.
+   - Canvas tương tác: Kéo đỉnh sửa hình, kéo điểm giữa cạnh để chèn góc mới, kéo thân zone để di chuyển. Phím tắt `Ctrl+Z` hỗ trợ hoàn tác cả khi đang vẽ và khi đang nắn hình.
+   - Zone Cards: Đổi tên zone trực tiếp, Bảng chọn màu (Color Swatch) 9 màu + màu tùy chỉnh, Ma trận phân quyền đối tượng bấm toggle `✓ Được phép` / `✕ Cấm`.
+3. **Nhãn đối tượng (`ObjectLabelTab.tsx`):**
+   - Strip thumbnails media nguồn (ảnh/video).
+   - Scrubber timeline video với các mốc keyframe.
+   - Canvas gắn mẫu: Đường dóng chữ thập (crosshair) đi theo con trỏ chuột, kéo thả vẽ bounding box, lưu N mẫu đã gắn.
+   - Phím tắt chuyển nhanh nhãn: Nhấn phím số `1` đến `8` trên bàn phím để đổi ngay loại nhãn đang chọn.
+
+### 2.5 Hỏi đáp AI (`AIQAChat.tsx` — Tab `qa`)
+- Giao diện chat trực quan, không câu từ quảng cáo dư thừa.
+- Nút *"Xóa lịch sử chat"* và nút *"Sao chép"* câu trả lời.
+- Các thẻ gợi ý câu hỏi nhanh dạng chip bấm tức thời.
+- **Thẻ Video Clip 10s đối chứng:** Khung xem video với timeline có đánh dấu phân đoạn vi phạm (giây 03 - 07), playhead thumb, nút Play/Pause và nút "Tải clip 10s".
+
+### 2.6 Floating Alert (`FloatingAlert.tsx`)
+- Toast thông báo khẩn cấp dạng kính mờ đỏ viền nhung nổi góc dưới phải màn hình khi người dùng ở tab khác và có vi phạm zone phát sinh.
+- Nút *"Xem camera ngay →"* điều hướng 1-click về đúng camera đang xảy ra sự kiện.
+
+---
+
+## 3. Responsive Breakpoints
+
+| Breakpoint | Layout Behavior |
+|---|---|
+| **>= 1200px (Desktop)** | Layout chuẩn 2 cột (Feed 1.58fr : Event Panel 1fr). |
+| **768px - 1199px (Tablet)** | Layout 1 cột xếp chồng (Feed trên, Event Panel dưới). |
+| **< 768px (Mobile)** | Header thu gọn icon, table hỗ trợ cuộn ngang, modal floating alert full width đáy màn hình. |
