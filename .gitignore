@@ -1,0 +1,45 @@
+# ─── Secrets ───────────────────────────────────────────────────────────────────
+.env
+backend/.env
+*.env.local
+*.env.*.local
+
+# ─── Node.js ────────────────────────────────────────────────────────────────
+node_modules/
+backend/node-api/dist/
+backend/node-api/.prisma/
+frontend/node_modules/
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ─── Data / Large files ──────────────────────────────────────────────────────────
+backend/data/clips/*.mp4
+backend/data/crops/*.jpg
+backend/data/crops/*.png
+backend/data/samples/
+
+# ─── AI Models ─────────────────────────────────────────────────────────────────
+*.pt
+*.pth
+*.onnx
+*.engine
+*.bin
+backend/python-worker/models/*.pt
+backend/python-worker/models/*.pth
+backend/python-worker/models/*.onnx
+!backend/python-worker/models/.gitkeep
+
+# ─── OS / IDE ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+*.swp

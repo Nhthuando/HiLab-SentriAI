@@ -23,6 +23,7 @@
 
 | Slice | Frontend task | Owner | Status | Backend gate | Next action |
 |---|---|---|---|---|---|
+| FDN-FRONTEND-API | `docs/frontend/tasks/FDN-FRONTEND-API.md` | Hữu Thuận | frontend_verified | `docs/backend/tasks/FDN-API-CONTRACT.md` (verified) | complete — API client & custom WebSocket hooks verified |
 | VS-GATE-LIVE | `docs/frontend/tasks/VS-GATE-LIVE.md` | Phạm Hưng | waiting_backend | `docs/backend/tasks/VS-GATE-LIVE.md` | wait for backend gate |
 | VS-AREA-VIOLATION | `docs/frontend/tasks/VS-AREA-VIOLATION.md` | Hữu Thuận | waiting_backend | `docs/backend/tasks/VS-AREA-VIOLATION.md` | wait for backend gate |
 | VS-SETTINGS-VEHICLE | `docs/frontend/tasks/VS-SETTINGS-VEHICLE.md` | Phạm Hưng | waiting_backend | `docs/backend/tasks/VS-SETTINGS-VEHICLE.md` | wait for backend gate |

@@ -22,8 +22,12 @@
 
 | Slice | Backend task | Owner | Status | Dependencies | Next action |
 |---|---|---|---|---|---|
-| VS-GATE-LIVE | `docs/backend/tasks/VS-GATE-LIVE.md` | Phạm Hưng | pending | FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION, FDN-PYTHON-DB, FDN-WS-PROXY, FDN-PYTHON-STREAM, FDN-API-CONTRACT | wait for all foundations |
-| VS-AREA-VIOLATION | `docs/backend/tasks/VS-AREA-VIOLATION.md` | Hữu Thuận | pending | FDN-*, VS-GATE-LIVE | wait for VS-GATE-LIVE backend |
+| FDN-REPO-SCAFFOLD | `docs/backend/tasks/FDN-REPO-SCAFFOLD.md` | Hữu Thuận | backend_verified | none | complete — unblocked FDN-DB-MIGRATION and others |
+| FDN-DB-MIGRATION | `docs/backend/tasks/FDN-DB-MIGRATION.md` | Hữu Thuận | backend_verified | FDN-REPO-SCAFFOLD | complete — unblocks FDN-PYTHON-DB, FDN-API-CONTRACT, FDN-FRONTEND-API (parallel); VS-SETTINGS-* after FDN-API-CONTRACT |
+| FDN-PYTHON-DB | `docs/backend/tasks/FDN-PYTHON-DB.md` | Hữu Thuận | backend_verified | FDN-DB-MIGRATION | complete — asyncpg connection pool + CRUD helpers verified against Neon |
+| FDN-WS-PROXY | `docs/backend/tasks/FDN-WS-PROXY.md` | Hữu Thuận | backend_verified | FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION | complete — Node.js WebSocket proxy (Python -> Node -> Browser) verified |
+| FDN-PYTHON-STREAM | `docs/backend/tasks/FDN-PYTHON-STREAM.md` | Hữu Thuận | backend_verified | FDN-REPO-SCAFFOLD, FDN-WS-PROXY | complete — OpenCV stream reader + YOLO detection pipeline verified |
+| FDN-API-CONTRACT | `docs/backend/tasks/FDN-API-CONTRACT.md` | Hữu Thuận | backend_verified | FDN-DB-MIGRATION, FDN-WS-PROXY | complete — Express REST scaffold, error contract, and health checks verified |
 | VS-SETTINGS-VEHICLE | `docs/backend/tasks/VS-SETTINGS-VEHICLE.md` | Phạm Hưng | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT | wait for FDN-DB-MIGRATION |
 | VS-SETTINGS-ZONE | `docs/backend/tasks/VS-SETTINGS-ZONE.md` | Phạm Hưng | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT | wait for FDN-DB-MIGRATION |
 | VS-SETTINGS-LABEL | `docs/backend/tasks/VS-SETTINGS-LABEL.md` | Phạm Hưng | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT | wait for FDN-DB-MIGRATION |

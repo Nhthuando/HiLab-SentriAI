@@ -1,0 +1,33 @@
+# SentriAI Python Worker — Dependencies
+# Architecture §6.3: Python 3.11+, FastAPI, uvicorn, OpenCV, ultralytics (YOLOv8), asyncpg, Shapely
+# NOTE: Tested on Python 3.14.4 (Windows). numpy>=2.5 required for Python 3.14 cp314 wheel.
+
+# --- Web framework (AI process server) ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+websockets>=13.0,<17.0
+
+# --- Computer vision / AI ---
+# opencv-python: use >=4.10 for Python 3.14 compatibility (no strict pin to allow wheel resolution)
+opencv-python>=4.10.0.84
+# ultralytics: YOLOv8; requires numpy>=1.23; use latest stable for Python 3.14 compat
+ultralytics>=8.2.100
+
+# --- OCR (choose one, both listed for flexibility) ---
+# PaddleOCR requires paddlepaddle; install separately on target machine:
+#   pip install paddlepaddle paddleocr
+# EasyOCR (simpler install, works without paddlepaddle):
+easyocr>=1.7.1
+
+# --- Geometry ---
+Shapely>=2.0.6
+
+# --- Database ---
+# asyncpg 0.31.0 has pre-built wheel for Python 3.14 (cp314-cp314-win_amd64)
+asyncpg>=0.31.0
+
+# --- Utilities ---
+python-dotenv==1.0.1
+aiofiles==23.2.1
+# numpy: 2.5.2 has pre-built wheel for Python 3.14 (cp314-cp314-win_amd64)
+numpy==2.5.2
