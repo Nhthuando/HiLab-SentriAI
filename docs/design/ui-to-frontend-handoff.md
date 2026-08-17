@@ -32,7 +32,8 @@ frontend/
         └── Settings/
             ├── VehicleLabelTab.tsx # Gắn nhãn xe, Tìm kiếm, Sắp xếp tiêu đề cột, Lọc loại xe/trạng thái
             ├── ZoneEditorTab.tsx   # Trình vẽ đa giác, Enter lưu, Undo/Redo Ctrl+Z/Y, Panel cuộn độc lập
-            └── ObjectLabelTab.tsx  # Gán nhãn mẫu từ ảnh/video frame, Phím tắt 1-8, Crosshair
+            ├── ObjectLabelTab.tsx  # Gán nhãn mẫu từ ảnh/video frame, Phím tắt 1-8, Crosshair
+            └── ThemeSettingsTab.tsx # Cài đặt giao diện Sáng/Tối, Bộ chọn Accent Color, Preview Cards
 ```
 
 ---
@@ -49,6 +50,7 @@ frontend/
 | **Gắn nhãn xe (`VehicleLabelTab`)** | `labels: Record<string, 'quen'\|'la'>` | `GET /api/v1/vehicles?type=:type&status=:status`<br>`PATCH /api/v1/vehicles/:plate/label` | `registered_vehicles` | Lấy danh sách xe đã lưu (`visit_count`, `last_seen_at`, `crop_image_url`, `status: KNOWN\|STRANGER`), lọc theo loại xe/trạng thái và cập nhật trạng thái `KNOWN` / `STRANGER`. |
 | **Cấu hình Zone (`ZoneEditorTab`)** | `zonesByCam: Record<string, PolygonZone[]>` | `GET /api/v1/zones?camera_id=:camId`<br>`POST /api/v1/zones`<br>`PUT /api/v1/zones/:id`<br>`DELETE /api/v1/zones/:id` | `zones` | Lưu tọa độ đa giác percentage `polygon_points: JSON`, `name`, `color`, `allowed_types: JSON`, và `is_active: boolean`. |
 | **Nhãn & Mẫu (`ObjectLabelTab`)** | `objLabels: ObjectLabel[]`<br>`annSamples: AnnotationSample[]` | `GET /api/v1/labels`<br>`POST /api/v1/labels`<br>`POST /api/v1/samples/batch` | `object_labels`<br>`annotation_samples` | Quản lý danh mục nhãn (`vietnamese_name`, `category: VEHICLE\|PERSON`, `tint_color`) và lưu batch danh sách bounding box đã khoanh trên frame ảnh/video. |
+| **Giao diện & Chủ đề (`ThemeSettingsTab`)** | `themeMode: ThemeMode`<br>`accentColor: AccentColor` | `localStorage` (Client-side UI Preference) | N/A (Client Setting) | Lưu tùy biến theme (`dark \| light \| system`), accent color (`blue \| emerald \| cyan \| purple \| amber`), glassmorphism và compact mode. |
 | **Hỏi đáp AI (`AIQAChat`)** | `QA_KNOWLEDGE_BASE` | `POST /api/v1/qa/query` | Gemini 3.5 Flash Lite + Function Calling | Body: `{ query: string }`. Response: `{ text: string, clip?: { cam, from, to, title, boxLabel, boxColor, tint, downloadUrl } }`. |
 | **Video Clip 10s** | Mock thumbnail & timeline | `GET /api/v1/clips/:id/download`<br>`GET /api/v1/clips/:id/stream` | Local Video Storage | Stream và tải đoạn video 10 giây được trích xuất tự động quanh thời điểm phát hiện. |
 | **Cảnh báo nổi (`FloatingAlert`)** | `floatingAlert: FloatingNotification` | `WS /ws/alerts` | `zone_violations` | Nhận bản tin vi phạm zone khẩn cấp khi người dùng đang thao tác tại tab Cài đặt / Hỏi đáp. |

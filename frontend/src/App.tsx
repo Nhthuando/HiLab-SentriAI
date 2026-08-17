@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import type {
   TabId,
   SettingsSubTab,
+  ThemeMode,
+  AccentColor,
   PolygonZone,
   ObjectLabel,
   AnnotationSource,
@@ -29,6 +31,7 @@ import { AreaMonitor } from './components/AreaMonitor';
 import { VehicleLabelTab } from './components/Settings/VehicleLabelTab';
 import { ZoneEditorTab } from './components/Settings/ZoneEditorTab';
 import { ObjectLabelTab } from './components/Settings/ObjectLabelTab';
+import { ThemeSettingsTab } from './components/Settings/ThemeSettingsTab';
 import { AIQAChat } from './components/AIQAChat';
 import { FloatingAlert } from './components/FloatingAlert';
 
@@ -36,6 +39,20 @@ export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('mon');
   const [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>('label');
   const [now, setNow] = useState<Date>(new Date());
+
+  // Theme & Appearance Preferences
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    return (localStorage.getItem('sentriai_theme') as ThemeMode) || 'dark';
+  });
+  const [accentColor, setAccentColor] = useState<AccentColor>(() => {
+    return (localStorage.getItem('sentriai_accent') as AccentColor) || 'blue';
+  });
+  const [glassEffect, setGlassEffect] = useState<boolean>(() => {
+    return localStorage.getItem('sentriai_glass') !== 'false';
+  });
+  const [compactMode, setCompactMode] = useState<boolean>(() => {
+    return localStorage.getItem('sentriai_compact') === 'true';
+  });
 
   // Domain states
   const [vehicles] = useState(INITIAL_VEHICLES);
@@ -50,6 +67,65 @@ export const App: React.FC = () => {
 
   // Floating cross-tab notification
   const [floatingAlert, setFloatingAlert] = useState<FloatingNotification | null>(null);
+
+  // Synchronize Theme & Preferences to DOM and LocalStorage
+  useEffect(() => {
+    const root = document.documentElement;
+
+    const applyTheme = (mode: ThemeMode) => {
+      let resolvedTheme: 'dark' | 'light' = 'dark';
+      if (mode === 'system') {
+        resolvedTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      } else {
+        resolvedTheme = mode;
+      }
+      root.setAttribute('data-theme', resolvedTheme);
+      localStorage.setItem('sentriai_theme', mode);
+    };
+
+    applyTheme(themeMode);
+
+    // If system mode, listen to OS color scheme changes
+    if (themeMode === 'system') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const listener = () => applyTheme('system');
+      mediaQuery.addEventListener('change', listener);
+      return () => mediaQuery.removeEventListener('change', listener);
+    }
+  }, [themeMode]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute('data-accent', accentColor);
+    localStorage.setItem('sentriai_accent', accentColor);
+  }, [accentColor]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute('data-glass', String(glassEffect));
+    localStorage.setItem('sentriai_glass', String(glassEffect));
+  }, [glassEffect]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute('data-compact', String(compactMode));
+    localStorage.setItem('sentriai_compact', String(compactMode));
+  }, [compactMode]);
+
+  // Quick theme toggle handler
+  const handleToggleQuickTheme = () => {
+    const currentResolved = document.documentElement.getAttribute('data-theme');
+    const nextMode: ThemeMode = currentResolved === 'dark' ? 'light' : 'dark';
+    setThemeMode(nextMode);
+  };
+
+  // Reset appearance defaults
+  const handleResetDefaults = () => {
+    setThemeMode('dark');
+    setAccentColor('blue');
+    setGlassEffect(true);
+    setCompactMode(false);
+  };
 
   // Live clock
   useEffect(() => {
@@ -93,20 +169,31 @@ export const App: React.FC = () => {
   };
 
   // Object label handlers
-  const handleAddLabel = (name: string, kind: 'xe' | 'nguoi') => {
-    const tints = ['#2a4a6b', '#3d5a40', '#5a5230', '#4a3d5a', '#3d5a55'];
+  const handleAddLabel = (name: string, kind: 'xe' | 'nguoi', tint?: string) => {
+    const tints = ['#3b82f6', '#10b981', '#06b6d4', '#a855f7', '#f59e0b', '#f43f5e', '#8b5cf6', '#64748b'];
     const newLabel: ObjectLabel = {
       id: 'l' + Date.now(),
       name,
       kind,
-      tint: tints[objLabels.length % tints.length],
+      tint: tint || tints[objLabels.length % tints.length],
       samples: 0
     };
     setObjLabels((prev) => [...prev, newLabel]);
   };
 
-  const handleRenameLabel = (id: string, newName: string) => {
-    setObjLabels((prev) => prev.map((l) => (l.id === id ? { ...l, name: newName } : l)));
+  const handleRenameLabel = (id: string, newName: string, kind?: 'xe' | 'nguoi', tint?: string) => {
+    setObjLabels((prev) =>
+      prev.map((l) =>
+        l.id === id
+          ? {
+              ...l,
+              name: newName,
+              ...(kind ? { kind } : {}),
+              ...(tint ? { tint } : {})
+            }
+          : l
+      )
+    );
   };
 
   const handleDeleteLabel = (id: string) => {
@@ -201,7 +288,13 @@ export const App: React.FC = () => {
       }}
     >
       {/* Top Application Header */}
-      <Header activeTab={activeTab} onSelectTab={setActiveTab} clock={clockStr} />
+      <Header
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        clock={clockStr}
+        themeMode={themeMode}
+        onToggleQuickTheme={handleToggleQuickTheme}
+      />
 
       {/* Main Content Area */}
       <main style={{ flex: 1 }}>
@@ -236,7 +329,8 @@ export const App: React.FC = () => {
                 borderRadius: '12px',
                 padding: '4px',
                 marginBottom: '20px',
-                width: 'fit-content'
+                width: 'fit-content',
+                flexWrap: 'wrap'
               }}
             >
               <button
@@ -252,7 +346,7 @@ export const App: React.FC = () => {
                   whiteSpace: 'nowrap',
                   backgroundColor: settingsSubTab === 'label' ? 'var(--acc)' : 'transparent',
                   color: settingsSubTab === 'label' ? '#ffffff' : 'var(--ink2)',
-                  boxShadow: settingsSubTab === 'label' ? '0 2px 8px rgba(59, 130, 246, 0.35)' : 'none'
+                  boxShadow: settingsSubTab === 'label' ? '0 2px 8px var(--acc-glow)' : 'none'
                 }}
               >
                 Gắn nhãn xe
@@ -270,7 +364,7 @@ export const App: React.FC = () => {
                   whiteSpace: 'nowrap',
                   backgroundColor: settingsSubTab === 'zone' ? 'var(--acc)' : 'transparent',
                   color: settingsSubTab === 'zone' ? '#ffffff' : 'var(--ink2)',
-                  boxShadow: settingsSubTab === 'zone' ? '0 2px 8px rgba(59, 130, 246, 0.35)' : 'none'
+                  boxShadow: settingsSubTab === 'zone' ? '0 2px 8px var(--acc-glow)' : 'none'
                 }}
               >
                 Vẽ zone
@@ -288,10 +382,32 @@ export const App: React.FC = () => {
                   whiteSpace: 'nowrap',
                   backgroundColor: settingsSubTab === 'obj' ? 'var(--acc)' : 'transparent',
                   color: settingsSubTab === 'obj' ? '#ffffff' : 'var(--ink2)',
-                  boxShadow: settingsSubTab === 'obj' ? '0 2px 8px rgba(59, 130, 246, 0.35)' : 'none'
+                  boxShadow: settingsSubTab === 'obj' ? '0 2px 8px var(--acc-glow)' : 'none'
                 }}
               >
                 Nhãn đối tượng
+              </button>
+              <button
+                onClick={() => setSettingsSubTab('theme')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '12.5px',
+                  fontWeight: 600,
+                  padding: '8px 18px',
+                  borderRadius: '9px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  whiteSpace: 'nowrap',
+                  backgroundColor: settingsSubTab === 'theme' ? 'var(--acc)' : 'transparent',
+                  color: settingsSubTab === 'theme' ? '#ffffff' : 'var(--ink2)',
+                  boxShadow: settingsSubTab === 'theme' ? '0 2px 8px var(--acc-glow)' : 'none'
+                }}
+              >
+                <span>☀️/🌙</span>
+                <span>Giao diện & Chủ đề</span>
               </button>
             </div>
 
@@ -329,6 +445,21 @@ export const App: React.FC = () => {
                 onUpdateSample={handleUpdateSample}
                 onDeleteSample={handleDeleteSample}
                 onSaveSamples={handleSaveSamples}
+              />
+            )}
+
+            {/* Sub-tab 4: Giao diện & Chủ đề */}
+            {settingsSubTab === 'theme' && (
+              <ThemeSettingsTab
+                themeMode={themeMode}
+                onSelectThemeMode={setThemeMode}
+                accentColor={accentColor}
+                onSelectAccentColor={setAccentColor}
+                glassEffect={glassEffect}
+                onToggleGlassEffect={setGlassEffect}
+                compactMode={compactMode}
+                onToggleCompactMode={setCompactMode}
+                onResetDefaults={handleResetDefaults}
               />
             )}
           </div>

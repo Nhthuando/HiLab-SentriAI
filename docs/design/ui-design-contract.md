@@ -56,6 +56,24 @@ Giao diện áp dụng phong cách **Modern Industrial Dark UI** với nền t�
   - Panel Shadow: `0 12px 32px -4px rgba(0, 0, 0, 0.6)`
   - Glow Accent: `0 0 24px -4px rgba(59, 130, 246, 0.35)`
 
+### 1.5 Bảng màu Giao diện Sáng (Modern Industrial Light UI Tokens)
+Khi kích hoạt chế độ Sáng (`[data-theme='light']`), giao diện chuyển sang tông màu thanh lịch, độ tương phản cao, tối ưu cho môi trường làm việc văn phòng ban ngày:
+
+| Token Name | Hex / Value | Mục đích sử dụng trong Light Mode |
+|---|---|---|
+| `--bg` | `#f4f6fa` | Nền canvas chính (Crisp Slate Canvas) |
+| `--bg-subtle` | `#eaedf3` | Nền thứ cấp cho toolbar và sub-nav |
+| `--panel` | `#ffffff` | Nền Header và các panel chính dạng phẳng |
+| `--panel-glass` | `rgba(255, 255, 255, 0.88)` | Nền kính mờ sáng (`backdrop-filter: blur(16px)`) |
+| `--card` | `#ffffff` | Nền thẻ KPI, Card cài đặt, bảng dữ liệu |
+| `--card-hover` | `#f1f4f9` | Trạng thái hover hàng và thẻ trong Light Mode |
+| `--raise` | `#e2e8f0` | Nền nút bấm phụ, tab bar, table header |
+| `--line` | `rgba(0, 0, 0, 0.08)` | Viền phân cách xám nhẹ |
+| `--line2` | `rgba(0, 0, 0, 0.13)` | Viền ô nhập liệu và thẻ |
+| `--ink` | `#0f172a` | Màu chữ chính (Charcoal Slate Đậm) |
+| `--ink2` | `#334155` | Màu chữ thứ cấp |
+| `--ink3` | `#64748b` | Màu chữ phụ, caption và placeholder |
+
 ---
 
 ## 2. Đặc tả các Component Giao diện Chuẩn
@@ -65,7 +83,7 @@ Giao diện áp dụng phong cách **Modern Industrial Dark UI** với nền t�
 - **Cấu trúc:**
   - Trái: Logo Emblem khiên bảo vệ AI gradient + Tiêu đề thương hiệu `SentriAI` + Phụ đề nghiệp vụ.
   - Giữa: Thanh chuyển đổi 4 phân hệ (`Giám sát cổng`, `Giám sát khu vực`, `Cài đặt hệ thống`, `Hỏi đáp AI`) có icon và pill active.
-  - Phải: Badge trực tuyến `● 2 Cam Online` + Đồng hồ số `HH:mm:ss`.
+  - Phải: **Nút Quick Theme Toggle (Icon Sun ☀️ / Moon 🌙)** chuyển đổi nhanh 1-click giữa Sáng và Tối + Badge trực tuyến `● 2 Cam Online` + Đồng hồ số `HH:mm:ss`.
 
 ### 2.2 Giám sát Cổng (`GateMonitor.tsx` — Tab `mon`)
 - **4 Thẻ KPI:** Lượt xe qua cổng, Biển số đọc thành công, Không đọc được, Độ tin cậy trung bình.
@@ -88,7 +106,7 @@ Giao diện áp dụng phong cách **Modern Industrial Dark UI** với nền t�
 - **Panel Sự kiện khu vực:** Tab lọc `Tất cả` | `⚠ Vi phạm` | `✓ Được phép` + Lọc tìm kiếm.
 - **Tương tác Hover:** Rê chuột vào 1 sự kiện sẽ highlight chính xác dòng đó và làm sáng đối tượng / zone tương ứng trên video.
 
-### 2.4 Phân hệ Cài đặt (`set` — 3 Sub-tabs)
+### 2.4 Phân hệ Cài đặt (`set` — 4 Sub-tabs)
 1. **Gắn nhãn xe (`VehicleLabelTab.tsx`):**
    - Thanh công cụ: Ô tìm kiếm đa trường + Lọc trạng thái (`Tất cả`, `✓ Xe quen`, `⚠ Xe lạ`) + Lọc theo loại xe (`Tất cả loại xe`, `Container`, `Xe tải`, `Xe con`...) + Bộ đếm kết quả.
    - Sắp xếp trực tiếp trên tiêu đề cột (Column Header Sorting): Bấm vào tiêu đề cột `Lượt vào` hoặc `Lần cuối ghi nhận` hoặc `Biển số xe` có mũi tên chỉ báo hướng tăng/giảm `↑` / `↓` ngay bên phải title.
@@ -107,6 +125,12 @@ Giao diện áp dụng phong cách **Modern Industrial Dark UI** với nền t�
    - Scrubber timeline video với các mốc keyframe.
    - Canvas gắn mẫu: Đường dóng chữ thập (crosshair) đi theo con trỏ chuột, kéo thả vẽ bounding box, lưu N mẫu đã gắn.
    - Phím tắt chuyển nhanh nhãn: Nhấn phím số `1` đến `8` trên bàn phím để đổi ngay loại nhãn đang chọn.
+4. **Tùy biến Giao diện & Chủ đề (`ThemeSettingsTab.tsx`):**
+   - **Bộ chọn 3 Chế độ:** 🌙 `Giao diện Tối (Dark Industrial)`, ☀️ `Giao diện Sáng (Modern Light)`, 💻 `Tự động theo hệ điều hành (System Sync)`.
+   - **Thẻ xem trước trực quan (Live Preview Cards):** Hiển thị mô phỏng thu nhỏ sinh động của Header, Video Feed, Bounding Box và Event List theo từng theme.
+   - **Bộ chọn Accent Color (5 màu):** Classic Blue `#3b82f6`, Emerald Green `#10b981`, Cyan Teal `#06b6d4`, Royal Purple `#a855f7`, Amber Orange `#f59e0b`.
+   - **Tùy chọn hiển thị nâng cao:** Bật/Tắt hiệu ứng kính mờ (Glassmorphism), Chế độ mật độ gọn gàng (Compact Mode) và Nút Khôi phục mặc định.
+   - **Lưu trữ cấu hình:** Tự động đồng bộ với `localStorage` (`sentriai_theme`, `sentriai_accent`, `sentriai_glass`, `sentriai_compact`).
 
 ### 2.5 Hỏi đáp AI (`AIQAChat.tsx` — Tab `qa`)
 - Giao diện chat trực quan, không câu từ quảng cáo dư thừa.

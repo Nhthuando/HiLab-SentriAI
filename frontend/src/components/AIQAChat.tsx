@@ -421,7 +421,7 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
                           borderRadius: '7px',
                           border: '1px solid var(--line2)',
                           backgroundColor: 'var(--raise)',
-                          color: '#ffffff',
+                          color: 'var(--ink)',
                           cursor: 'pointer',
                           fontFamily: 'inherit'
                         }}
@@ -463,7 +463,7 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.borderColor = 'var(--acc)';
-                e.currentTarget.style.color = '#ffffff';
+                e.currentTarget.style.color = 'var(--acc)';
                 e.currentTarget.style.backgroundColor = 'var(--raise)';
               }}
               onMouseLeave={(e) => {
@@ -500,7 +500,7 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
               border: 'none',
               outline: 'none',
               backgroundColor: 'transparent',
-              color: '#ffffff',
+              color: 'var(--ink)',
               fontSize: '13.5px',
               fontFamily: 'inherit',
               padding: '10px 0'

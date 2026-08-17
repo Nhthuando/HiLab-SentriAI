@@ -207,7 +207,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
             className="glass-card"
             style={{
               borderRadius: '16px',
-              padding: '16px 20px',
+              padding: 'var(--kpi-py, 16px) var(--kpi-px, 20px)',
               boxShadow: 'var(--shadow-md)',
               display: 'flex',
               alignItems: 'center',
@@ -511,19 +511,19 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
             style={{
               padding: '14px 18px',
               borderBottom: '1px solid var(--line)',
-              backgroundColor: 'rgba(26, 30, 39, 0.6)'
+              backgroundColor: 'var(--panel)'
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>Sự kiện khu vực</span>
+                <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--ink)' }}>Sự kiện khu vực</span>
                 <span
                   style={{
                     fontSize: '11px',
                     fontWeight: 600,
                     padding: '2px 7px',
                     borderRadius: '12px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                    backgroundColor: 'var(--raise)',
                     color: 'var(--ink2)'
                   }}
                 >
@@ -633,7 +633,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
                       display: 'flex',
                       alignItems: 'center',
                       gap: '14px',
-                      padding: '12px 18px',
+                      padding: 'var(--event-py, 12px) var(--event-px, 18px)',
                       borderBottom: '1px solid var(--line)',
                       backgroundColor: isHovered ? 'var(--card-hover)' : 'transparent',
                       borderLeft: isHovered ? `3px solid ${isOk ? 'var(--ok)' : 'var(--p0)'}` : '3px solid transparent',
@@ -658,7 +658,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
                         style={{
                           fontSize: '13px',
                           fontWeight: 600,
-                          color: isHovered ? (isOk ? 'var(--ok)' : 'var(--p0)') : '#ffffff'
+                          color: isHovered ? (isOk ? 'var(--ok)' : 'var(--p0)') : 'var(--ink)'
                         }}
                       >
                         {event.obj}

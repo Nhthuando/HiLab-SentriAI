@@ -1,13 +1,21 @@
 import React from 'react';
-import type { TabId } from '../types';
+import type { TabId, ThemeMode } from '../types';
 
 interface HeaderProps {
   activeTab: TabId;
   onSelectTab: (tab: TabId) => void;
   clock: string;
+  themeMode?: ThemeMode;
+  onToggleQuickTheme?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab, clock }) => {
+export const Header: React.FC<HeaderProps> = ({
+  activeTab,
+  onSelectTab,
+  clock,
+  themeMode = 'dark',
+  onToggleQuickTheme
+}) => {
   const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
     {
       id: 'mon',
@@ -51,6 +59,8 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab, clock })
     }
   ];
 
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light' || themeMode === 'light';
+
   return (
     <header
       className="glass-panel"
@@ -63,7 +73,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab, clock })
         position: 'sticky',
         top: 0,
         zIndex: 50,
-        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)'
+        boxShadow: 'var(--shadow-md)'
       }}
     >
       {/* Brand Logo & Title */}
@@ -74,11 +84,11 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab, clock })
             height: '36px',
             flex: 'none',
             borderRadius: '10px',
-            background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+            background: 'linear-gradient(135deg, var(--acc) 0%, #1d4ed8 100%)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            boxShadow: '0 2px 10px rgba(59, 130, 246, 0.35)'
+            boxShadow: '0 2px 10px var(--acc-glow)'
           }}
         >
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2.2">
@@ -89,7 +99,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab, clock })
 
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '15px', fontWeight: 700, letterSpacing: '-0.02em', color: '#ffffff' }}>
+            <span style={{ fontSize: '15px', fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
               SentriAI
             </span>
           </div>
@@ -106,12 +116,12 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab, clock })
         aria-label="Chuyển đổi phân hệ"
         style={{
           display: 'flex',
-          backgroundColor: 'rgba(15, 18, 23, 0.85)',
+          backgroundColor: 'var(--bg-subtle)',
           border: '1px solid var(--line)',
           borderRadius: '12px',
           padding: '4px',
           gap: '4px',
-          boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.4)'
+          boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.15)'
         }}
       >
         {tabs.map((tab) => {
@@ -128,12 +138,12 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab, clock })
                 fontWeight: 600,
                 padding: '7px 16px',
                 borderRadius: '9px',
-                border: isActive ? '1px solid rgba(59, 130, 246, 0.35)' : '1px solid transparent',
+                border: isActive ? '1px solid var(--acc-glow)' : '1px solid transparent',
                 cursor: 'pointer',
                 fontFamily: 'inherit',
                 backgroundColor: isActive ? 'var(--acc)' : 'transparent',
                 color: isActive ? '#ffffff' : 'var(--ink2)',
-                boxShadow: isActive ? '0 2px 10px rgba(59, 130, 246, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2)' : 'none',
+                boxShadow: isActive ? '0 2px 10px var(--acc-glow), inset 0 1px 0 rgba(255, 255, 255, 0.2)' : 'none',
                 transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)'
               }}
               onMouseEnter={(e) => {
@@ -156,7 +166,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab, clock })
         })}
       </nav>
 
-      {/* Right Live Status & Clock */}
+      {/* Right Controls: Quick Theme Toggle, Live Status & Clock */}
       <div
         style={{
           display: 'flex',
@@ -165,6 +175,49 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onSelectTab, clock })
           paddingLeft: '6px'
         }}
       >
+        {/* Quick Theme Toggle Button */}
+        {onToggleQuickTheme && (
+          <button
+            onClick={onToggleQuickTheme}
+            title={isLight ? 'Chuyển sang Giao diện Tối (Dark Mode)' : 'Chuyển sang Giao diện Sáng (Light Mode)'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '34px',
+              height: '34px',
+              borderRadius: '9px',
+              backgroundColor: 'var(--card)',
+              border: '1px solid var(--line2)',
+              color: isLight ? '#f59e0b' : '#60a5fa',
+              cursor: 'pointer',
+              boxShadow: 'var(--shadow-sm)',
+              position: 'relative'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--acc)';
+              e.currentTarget.style.transform = 'scale(1.05)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'var(--line2)';
+              e.currentTarget.style.transform = 'scale(1)';
+            }}
+          >
+            {isLight ? (
+              // Sun Icon in Light mode
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+              </svg>
+            ) : (
+              // Moon Icon in Dark mode
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            )}
+          </button>
+        )}
+
         {/* System Online Status */}
         <div
           style={{

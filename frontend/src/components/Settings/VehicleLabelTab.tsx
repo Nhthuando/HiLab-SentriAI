@@ -126,8 +126,8 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
       }}
     >
       {/* Header with Title & Description */}
-      <div style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)', backgroundColor: 'rgba(26, 30, 39, 0.6)' }}>
-        <div style={{ fontSize: '15px', fontWeight: 700, color: '#ffffff' }}>
+      <div style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)', backgroundColor: 'var(--panel)' }}>
+        <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--ink)' }}>
           Gắn nhãn phương tiện thu thập
         </div>
         <div style={{ fontSize: '12px', color: 'var(--ink2)', marginTop: '3px' }}>
@@ -142,7 +142,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
           alignItems: 'center',
           gap: '14px',
           padding: '14px 22px',
-          backgroundColor: 'rgba(15, 18, 23, 0.6)',
+          backgroundColor: 'var(--bg-subtle)',
           borderBottom: '1px solid var(--line)',
           flexWrap: 'wrap'
         }}
@@ -310,12 +310,12 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
         style={{
           display: 'grid',
           gridTemplateColumns: '70px 1.3fr 1fr 1fr 1fr 140px',
-          padding: '12px 22px',
+          padding: 'var(--table-py, 12px) var(--table-px, 22px)',
           borderBottom: '1px solid var(--line)',
           fontSize: '11.5px',
           color: 'var(--ink3)',
           fontWeight: 700,
-          backgroundColor: 'rgba(20, 23, 31, 0.4)',
+          backgroundColor: 'var(--raise)',
           letterSpacing: '0.04em'
         }}
       >
@@ -403,7 +403,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '70px 1.3fr 1fr 1fr 1fr 140px',
-                  padding: '12px 22px',
+                  padding: 'var(--table-py, 12px) var(--table-px, 22px)',
                   borderBottom: '1px solid var(--line)',
                   alignItems: 'center',
                   fontSize: '13px',
@@ -438,7 +438,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
                       fontFamily: 'var(--font-mono)',
                       fontWeight: 700,
                       fontSize: '13.5px',
-                      color: '#ffffff',
+                      color: 'var(--ink)',
                       letterSpacing: '0.02em'
                     }}
                   >

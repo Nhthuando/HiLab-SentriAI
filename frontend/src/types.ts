@@ -1,5 +1,7 @@
 export type TabId = 'mon' | 'area' | 'set' | 'qa';
-export type SettingsSubTab = 'label' | 'zone' | 'obj';
+export type SettingsSubTab = 'label' | 'zone' | 'obj' | 'theme';
+export type ThemeMode = 'dark' | 'light' | 'system';
+export type AccentColor = 'blue' | 'emerald' | 'cyan' | 'purple' | 'amber';
 export type VehicleStatus = 'quen' | 'la';
 export type ObjectKind = 'xe' | 'nguoi';
 

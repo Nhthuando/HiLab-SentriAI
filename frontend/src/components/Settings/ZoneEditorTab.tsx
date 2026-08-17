@@ -969,19 +969,19 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
           style={{
             padding: '14px 18px',
             borderBottom: '1px solid var(--line)',
-            backgroundColor: 'rgba(26, 30, 39, 0.6)'
+            backgroundColor: 'var(--panel)'
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>Danh sách Zone</span>
+              <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--ink)' }}>Danh sách Zone</span>
               <span
                 style={{
                   fontSize: '11px',
                   fontWeight: 600,
                   padding: '2px 8px',
                   borderRadius: '12px',
-                  backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                  backgroundColor: 'var(--raise)',
                   color: 'var(--ink2)'
                 }}
               >
@@ -1082,7 +1082,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                     padding: '12px 14px',
                     cursor: 'pointer',
                     border: isSelected ? `2px solid ${z.color}` : '1px solid var(--line)',
-                    backgroundColor: isSelected ? 'rgba(30, 36, 48, 0.7)' : 'rgba(26, 30, 39, 0.5)',
+                    backgroundColor: isSelected ? 'var(--card-hover)' : 'var(--card)',
                     boxShadow: isSelected ? `0 0 16px ${z.color}33` : 'var(--shadow-sm)',
                     transition: 'all 0.16s ease'
                   }}
@@ -1192,7 +1192,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                         border: '1px solid transparent',
                         borderRadius: '6px',
                         padding: '3px 6px',
-                        color: '#ffffff',
+                        color: 'var(--ink)',
                         fontSize: '13px',
                         fontWeight: 700,
                         outline: 'none'
@@ -1213,7 +1213,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                         fontSize: '10px',
                         color: 'var(--ink3)',
                         fontFamily: 'var(--font-mono)',
-                        backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                        backgroundColor: 'var(--raise)',
                         padding: '2px 6px',
                         borderRadius: '4px',
                         flex: 'none'
@@ -1291,7 +1291,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
           style={{
             padding: '10px 16px',
             borderTop: '1px solid var(--line)',
-            backgroundColor: 'rgba(15, 18, 23, 0.4)',
+            backgroundColor: 'var(--bg-subtle)',
             fontSize: '11px',
             color: 'var(--ink3)'
           }}
