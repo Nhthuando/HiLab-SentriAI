@@ -18,12 +18,12 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
   const kpis = [
     {
       label: 'Đối tượng trong khu',
-      value: '3',
+      value: '4',
       sub: 'Đang hoạt động',
       color: 'var(--ink)',
       icon: (
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--acc)" strokeWidth="2">
-          <circle cx="12" cy="12" r="10" />
+          <circle cx="12" cy="10" r="10" />
           <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
           <path d="M2 12h20" />
         </svg>
@@ -69,10 +69,33 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
     }
   ];
 
+  // Detected objects displayed on the camera feed
   const detectedObjects = [
     {
+      id: 'obj-moto',
+      typeKey: 'xe máy',
+      bx: '8.5%',
+      by: '47.5%',
+      bw: '7.5%',
+      bh: '13%',
+      color: '#f43f5e',
+      fill: 'rgba(244,63,94,0.22)',
+      label: 'XE MÁY · VI PHẠM ZONE'
+    },
+    {
+      id: 'obj-car',
+      typeKey: 'xe hơi',
+      bx: '33.5%',
+      by: '48%',
+      bw: '9%',
+      bh: '14%',
+      color: '#f43f5e',
+      fill: 'rgba(244,63,94,0.22)',
+      label: 'XE HƠI TRẮNG · VI PHẠM'
+    },
+    {
       id: 'obj-fl',
-      typeKey: 'Xe nâng',
+      typeKey: 'xe nâng',
       bx: '21%',
       by: '38%',
       bw: '23%',
@@ -133,6 +156,39 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
       return true;
     });
   }, [events, filterMode, searchFilter]);
+
+  // Robust zone match check
+  const isZoneMatchingHover = (zone: PolygonZone) => {
+    if (!currentHoveredEvent) return false;
+    const evZone = currentHoveredEvent.zone.toLowerCase().trim();
+    const zName = zone.name.toLowerCase().trim();
+
+    if (evZone === zName) return true;
+    if (evZone.includes(zName) || zName.includes(evZone)) return true;
+    if (evZone.includes('cá nhân') && zName.includes('cá nhân')) return true;
+    if (evZone.includes('bãi kiểm') && zName.includes('bãi kiểm')) return true;
+    if (evZone.includes('di chuyển') && zName.includes('di chuyển')) return true;
+
+    return false;
+  };
+
+  // Robust object match check
+  const isObjectMatchingHover = (obj: typeof detectedObjects[0]) => {
+    if (hoveredFeedObjectKey === obj.id) return true;
+    if (!currentHoveredEvent) return false;
+
+    const evObj = currentHoveredEvent.obj.toLowerCase().trim();
+    const tk = obj.typeKey.toLowerCase().trim();
+
+    if (evObj.includes(tk) || tk.includes(evObj)) return true;
+    if (tk === 'xe nâng' && (evObj.includes('nâng') || evObj.includes('fl-'))) return true;
+    if (tk === 'container' && (evObj.includes('container') || evObj.includes('15r') || evObj.includes('15h'))) return true;
+    if (tk === 'xe máy' && evObj.includes('máy')) return true;
+    if (tk === 'xe hơi' && (evObj.includes('hơi') || evObj.includes('trắng'))) return true;
+    if (tk === 'người' && evObj.includes('người')) return true;
+
+    return false;
+  };
 
   return (
     <div style={{ padding: '24px', maxWidth: '1420px', margin: '0 auto' }}>
@@ -299,18 +355,21 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
             >
               {zones.map((zone) => {
                 const pointsStr = zone.points.map((p) => `${p[0]},${p[1]}`).join(' ');
-                const isZoneMatched = currentHoveredEvent && currentHoveredEvent.zone.toLowerCase() === zone.name.toLowerCase();
+                const isZoneMatched = isZoneMatchingHover(zone);
 
                 return (
                   <polygon
                     key={zone.id}
                     points={pointsStr}
-                    fill={`${zone.color}${isZoneMatched ? '45' : '16'}`}
-                    stroke={zone.color}
-                    strokeWidth={isZoneMatched ? '2.5' : '1.6'}
+                    fill={`${zone.color}${isZoneMatched ? '50' : '16'}`}
+                    stroke={isZoneMatched ? '#ffffff' : zone.color}
+                    strokeWidth={isZoneMatched ? '3.2' : '1.6'}
                     strokeDasharray={isZoneMatched ? '0' : '6 4'}
                     vectorEffect="non-scaling-stroke"
-                    style={{ transition: 'all 0.18s ease' }}
+                    style={{
+                      transition: 'all 0.18s ease',
+                      filter: isZoneMatched ? `drop-shadow(0 0 8px ${zone.color})` : 'none'
+                    }}
                   />
                 );
               })}
@@ -320,7 +379,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
             {zones.map((zone) => {
               const centerX = zone.points.reduce((acc, p) => acc + p[0], 0) / zone.points.length;
               const centerY = zone.points.reduce((acc, p) => acc + p[1], 0) / zone.points.length;
-              const isZoneMatched = currentHoveredEvent && currentHoveredEvent.zone.toLowerCase() === zone.name.toLowerCase();
+              const isZoneMatched = isZoneMatchingHover(zone);
 
               return (
                 <span
@@ -329,19 +388,22 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
                     position: 'absolute',
                     left: `${centerX.toFixed(1)}%`,
                     top: `${centerY.toFixed(1)}%`,
-                    transform: 'translate(-50%, -50%)',
+                    transform: isZoneMatched ? 'translate(-50%, -50%) scale(1.15)' : 'translate(-50%, -50%) scale(1)',
                     fontSize: '10px',
                     fontWeight: 700,
-                    color: '#ffffff',
-                    backgroundColor: isZoneMatched ? zone.color : `${zone.color}cc`,
-                    padding: '2px 8px',
-                    borderRadius: '4px',
+                    color: isZoneMatched ? '#000000' : '#ffffff',
+                    backgroundColor: isZoneMatched ? '#ffffff' : `${zone.color}cc`,
+                    padding: '3px 9px',
+                    borderRadius: '5px',
                     backdropFilter: 'blur(4px)',
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                    boxShadow: isZoneMatched
+                      ? `0 0 18px rgba(255,255,255,0.9), 0 0 8px ${zone.color}`
+                      : '0 2px 8px rgba(0,0,0,0.5)',
                     whiteSpace: 'nowrap',
                     pointerEvents: 'none',
                     letterSpacing: '0.04em',
-                    transition: 'all 0.18s ease'
+                    transition: 'all 0.18s ease',
+                    zIndex: 8
                   }}
                 >
                   {zone.name.toUpperCase()}
@@ -351,9 +413,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
 
             {/* Detected Objects with Bounding Boxes */}
             {detectedObjects.map((obj) => {
-              const isObjMatchedByEvent = currentHoveredEvent && currentHoveredEvent.obj.toLowerCase().includes(obj.typeKey.toLowerCase());
-              const isObjMatchedByHover = hoveredFeedObjectKey === obj.id;
-              const isHighlighted = isObjMatchedByEvent || isObjMatchedByHover;
+              const isHighlighted = isObjectMatchingHover(obj);
 
               return (
                 <div
@@ -366,33 +426,38 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock, zones, events }
                     top: obj.by,
                     width: obj.bw,
                     height: obj.bh,
-                    border: `${isHighlighted ? '2.4px' : '1.8px'} solid ${isHighlighted ? '#ffffff' : obj.color}`,
-                    backgroundColor: isHighlighted ? `${obj.color}38` : obj.fill,
+                    border: `${isHighlighted ? '2.5px' : '1.8px'} solid ${isHighlighted ? '#ffffff' : obj.color}`,
+                    backgroundColor: isHighlighted ? `${obj.color}45` : obj.fill,
                     boxShadow: isHighlighted
-                      ? `0 0 20px ${obj.color}cc, 0 0 10px #ffffff`
+                      ? `0 0 24px ${obj.color}, 0 0 12px #ffffff`
                       : obj.color === '#f43f5e'
-                      ? '0 0 14px rgba(244,63,94,0.45)'
+                      ? '0 0 12px rgba(244,63,94,0.4)'
                       : 'none',
-                    borderRadius: '3px',
-                    transform: isHighlighted ? 'scale(1.03)' : 'scale(1)',
-                    transition: 'all 0.18s ease',
+                    borderRadius: '4px',
+                    transform: isHighlighted ? 'scale(1.04)' : 'scale(1)',
+                    transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
                     cursor: 'pointer',
-                    zIndex: 10
+                    zIndex: isHighlighted ? 15 : 10
                   }}
                 >
                   <span
                     style={{
                       position: 'absolute',
                       left: '-1px',
-                      top: '-20px',
+                      top: '-22px',
                       backgroundColor: isHighlighted ? '#ffffff' : obj.color,
                       color: isHighlighted ? '#000000' : '#ffffff',
                       fontSize: '9.5px',
                       fontWeight: 700,
-                      padding: '2px 7px',
-                      borderRadius: '3px',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
                       whiteSpace: 'nowrap',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+                      boxShadow: isHighlighted
+                        ? '0 0 14px rgba(255,255,255,0.9), 0 2px 8px rgba(0,0,0,0.5)'
+                        : '0 2px 8px rgba(0,0,0,0.5)',
+                      transform: isHighlighted ? 'scale(1.08)' : 'scale(1)',
+                      transformOrigin: 'bottom left',
+                      transition: 'all 0.18s ease'
                     }}
                   >
                     {obj.label}

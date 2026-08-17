@@ -90,12 +90,18 @@ Giao diện áp dụng phong cách **Modern Industrial Dark UI** với nền t�
 
 ### 2.4 Phân hệ Cài đặt (`set` — 3 Sub-tabs)
 1. **Gắn nhãn xe (`VehicleLabelTab.tsx`):**
-   - Thanh công cụ: Ô tìm kiếm đa trường + Sắp xếp theo Lượt vào (`Mặc định`, `Giảm dần ↓`, `Tăng dần ↑`) + Lọc trạng thái (`Tất cả`, `Xe quen`, `Xe lạ`) + Bộ đếm kết quả.
+   - Thanh công cụ: Ô tìm kiếm đa trường + Lọc trạng thái (`Tất cả`, `✓ Xe quen`, `⚠ Xe lạ`) + Lọc theo loại xe (`Tất cả loại xe`, `Container`, `Xe tải`, `Xe con`...) + Bộ đếm kết quả.
+   - Sắp xếp trực tiếp trên tiêu đề cột (Column Header Sorting): Bấm vào tiêu đề cột `Lượt vào` hoặc `Lần cuối ghi nhận` hoặc `Biển số xe` có mũi tên chỉ báo hướng tăng/giảm `↑` / `↓` ngay bên phải title.
    - Bảng dữ liệu: Ảnh crop, Biển số Mono, Loại xe, Lượt vào, Lần cuối ghi nhận, Nút bấm toggle tức thời `Xe quen (Hợp lệ)` ⇄ `Xe lạ (Cảnh báo)`.
 2. **Vẽ Zone tương tác (`ZoneEditorTab.tsx`):**
-   - Toolbar: Chọn camera (`Bãi Kiểm` / `Cổng vào`), Chế độ `Chọn / Sửa` vs `+ Vẽ zone mới`, Nút `Undo` (`Ctrl+Z`) / `Redo` (`Ctrl+Y`), Hoàn tất zone.
-   - Canvas tương tác: Kéo đỉnh sửa hình, kéo điểm giữa cạnh để chèn góc mới, kéo thân zone để di chuyển. Phím tắt `Ctrl+Z` hỗ trợ hoàn tác cả khi đang vẽ và khi đang nắn hình.
-   - Zone Cards: Đổi tên zone trực tiếp, Bảng chọn màu (Color Swatch) 9 màu + màu tùy chỉnh, Ma trận phân quyền đối tượng bấm toggle `✓ Được phép` / `✕ Cấm`.
+   - Toolbar: Chọn camera (`Bãi Kiểm` / `Cổng vào`), Chế độ `Chọn / Sửa` vs `+ Vẽ zone mới`, Nút `Undo` (`Ctrl+Z`) / `Redo` (`Ctrl+Y`), Nút `✓ Hoàn tất zone (Enter)`.
+   - Canvas tương tác:
+     - **Lưu Zone nhanh bằng phím Enter:** Khi vẽ từ 3 đỉnh trở lên, nhấn phím `Enter` để hoàn tất và lưu zone ngay lập tức.
+     - **Chống kéo nhầm:** Bấm vào Zone lần đầu để chọn (hiển thị viền và các đỉnh); chỉ khi Zone đã được chọn mới cho phép kéo di chuyển thân zone hoặc kéo đỉnh sửa hình dạng.
+     - **Xóa góc / đỉnh đa giác:** Hỗ trợ Nhấp đúp (Double-click), Chuột phải (Context Menu) hoặc chọn đỉnh rồi nhấn phím `Delete` / `Backspace` để xóa đỉnh (giữ tối thiểu 3 đỉnh).
+     - **Xóa Zone:** Chọn Zone và nhấn phím `Delete` hoặc `Backspace` để xóa tức thời (có lưu lịch sử Undo).
+     - **Thêm góc:** Kéo điểm giữa (midpoint) của cạnh để chèn đỉnh mới.
+   - Panel Quản lý Zone bên phải: Container dạng kính mờ đồng bộ chiều cao với camera feed (`maxHeight: 610px`, cuộn riêng biệt), có ô tìm kiếm zone tức thì, hiển thị số đỉnh, đổi màu sắc và tự động cuộn (auto-scroll) tới đúng Zone card khi người dùng click chọn Zone trên video feed.
 3. **Nhãn đối tượng (`ObjectLabelTab.tsx`):**
    - Strip thumbnails media nguồn (ảnh/video).
    - Scrubber timeline video với các mốc keyframe.

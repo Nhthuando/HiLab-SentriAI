@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import type { PolygonZone, ObjectLabel } from '../../types';
 
 interface ZoneEditorTabProps {
@@ -33,6 +33,11 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
   const [camSel, setCamSel] = useState<'BAI-KIEM' | 'GATE-01'>('BAI-KIEM');
   const [tool, setTool] = useState<'select' | 'draw'>('select');
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
+  const [selectedVertexIdx, setSelectedVertexIdx] = useState<number | null>(null);
+  const [zoneSearch, setZoneSearch] = useState<string>('');
+
+  // Toast / notification message
+  const [toastMsg, setToastMsg] = useState<string>('');
 
   // Drawing state
   const [draftPoints, setDraftPoints] = useState<[number, number][]>([]);
@@ -45,6 +50,9 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
 
   // Color picker popup for specific zone
   const [colorPickerZoneId, setColorPickerZoneId] = useState<string | null>(null);
+
+  // Card element refs for auto-scrolling
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Dragging state
   const dragRef = useRef<{
@@ -62,15 +70,39 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
   const currentZones = zonesByCam[camSel] || [];
   const selectedZone = currentZones.find((z) => z.id === selectedZoneId) || null;
 
+  // Filter zones by search keyword
+  const displayedZones = useMemo(() => {
+    if (!zoneSearch.trim()) return currentZones;
+    const q = zoneSearch.toLowerCase().trim();
+    return currentZones.filter((z) => z.name.toLowerCase().includes(q));
+  }, [currentZones, zoneSearch]);
+
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 2500);
+  };
+
   // Sync history when switching camera
   useEffect(() => {
     setHistory([zonesByCam[camSel] || []]);
     setHistoryIndex(0);
     setSelectedZoneId(null);
+    setSelectedVertexIdx(null);
     setDraftPoints([]);
     setDraftHover(null);
     setColorPickerZoneId(null);
+    setZoneSearch('');
   }, [camSel]);
+
+  // Auto-scroll right panel when a zone is selected on the left
+  useEffect(() => {
+    if (selectedZoneId && cardRefs.current[selectedZoneId]) {
+      cardRefs.current[selectedZoneId]?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest'
+      });
+    }
+  }, [selectedZoneId]);
 
   // Push new state to history stack
   const pushHistory = useCallback(
@@ -82,6 +114,41 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
       setHistoryIndex((prev) => prev + 1);
     },
     [historyIndex]
+  );
+
+  // Delete Vertex Handle
+  const handleDeleteVertex = useCallback(
+    (zoneId: string, idx: number) => {
+      const zone = currentZones.find((z) => z.id === zoneId);
+      if (!zone) return;
+      if (zone.points.length <= 3) {
+        showToast('⚠ Đa giác cần tối thiểu 3 đỉnh, không thể xóa thêm!');
+        return;
+      }
+
+      const newPoints = zone.points.filter((_, i) => i !== idx);
+      onUpdateZone(camSel, zoneId, { points: newPoints });
+      const nextState = currentZones.map((z) => (z.id === zoneId ? { ...z, points: newPoints } : z));
+      pushHistory(nextState);
+      setSelectedVertexIdx(null);
+      showToast('✓ Đã xóa đỉnh thành công!');
+    },
+    [currentZones, camSel, onUpdateZone, pushHistory]
+  );
+
+  // Delete entire Zone
+  const handleDeleteZoneWithHistory = useCallback(
+    (zoneId: string) => {
+      onDeleteZone(camSel, zoneId);
+      const nextState = currentZones.filter((z) => z.id !== zoneId);
+      pushHistory(nextState);
+      if (selectedZoneId === zoneId) {
+        setSelectedZoneId(null);
+        setSelectedVertexIdx(null);
+      }
+      showToast('✓ Đã xóa Zone thành công!');
+    },
+    [currentZones, camSel, onDeleteZone, pushHistory, selectedZoneId]
   );
 
   // Undo action
@@ -109,6 +176,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
           onDeleteZone(camSel, curr.id);
         }
       });
+      setSelectedVertexIdx(null);
     }
   }, [tool, draftPoints, historyIndex, history, currentZones, camSel, onUpdateZone, onAddZone, onDeleteZone]);
 
@@ -132,42 +200,9 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
           onDeleteZone(camSel, curr.id);
         }
       });
+      setSelectedVertexIdx(null);
     }
   }, [historyIndex, history, currentZones, camSel, onUpdateZone, onAddZone, onDeleteZone]);
-
-  // Keyboard shortcut listener for Ctrl+Z & Ctrl+Y / Ctrl+Shift+Z
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-        return;
-      }
-
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        handleUndo();
-      } else if (
-        (e.ctrlKey || e.metaKey) &&
-        (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))
-      ) {
-        e.preventDefault();
-        handleRedo();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo]);
-
-  // Convert mouse event to percentage (0 - 100)
-  const getPercentageCoords = useCallback((e: React.MouseEvent): [number, number] | null => {
-    if (!feedRef.current) return null;
-    const rect = feedRef.current.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
-    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-    return [+x.toFixed(1), +y.toFixed(1)];
-  }, []);
 
   // Complete zone drawing
   const handleFinishDraw = useCallback(() => {
@@ -193,10 +228,87 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     pushHistory(nextState);
 
     setSelectedZoneId(newId);
+    setSelectedVertexIdx(null);
     setTool('select');
     setDraftPoints([]);
     setDraftHover(null);
+    showToast('✓ Đã tạo Zone mới thành công!');
   }, [draftPoints, currentZones, objLabels, camSel, onAddZone, pushHistory]);
+
+  // Keyboard shortcut listener for Enter, Escape, Ctrl+Z, Ctrl+Y, Delete, Backspace
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
+      // Enter: Complete drawing zone if in draw mode and draftPoints >= 3
+      if (e.key === 'Enter') {
+        if (tool === 'draw' && draftPoints.length >= 3) {
+          e.preventDefault();
+          handleFinishDraw();
+        }
+      }
+      // Escape: Cancel drawing zone
+      else if (e.key === 'Escape') {
+        if (tool === 'draw') {
+          e.preventDefault();
+          setDraftPoints([]);
+          setDraftHover(null);
+          setTool('select');
+        }
+      }
+      // Undo: Ctrl+Z
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      }
+      // Redo: Ctrl+Y or Ctrl+Shift+Z
+      else if (
+        (e.ctrlKey || e.metaKey) &&
+        (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))
+      ) {
+        e.preventDefault();
+        handleRedo();
+      }
+      // Delete / Backspace: Delete selected vertex or selected zone
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (tool === 'select') {
+          if (selectedVertexIdx !== null && selectedZoneId) {
+            e.preventDefault();
+            handleDeleteVertex(selectedZoneId, selectedVertexIdx);
+          } else if (selectedZoneId) {
+            e.preventDefault();
+            handleDeleteZoneWithHistory(selectedZoneId);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    handleUndo,
+    handleRedo,
+    handleFinishDraw,
+    tool,
+    draftPoints.length,
+    selectedVertexIdx,
+    selectedZoneId,
+    handleDeleteVertex,
+    handleDeleteZoneWithHistory
+  ]);
+
+  // Convert mouse event to percentage (0 - 100)
+  const getPercentageCoords = useCallback((e: React.MouseEvent): [number, number] | null => {
+    if (!feedRef.current) return null;
+    const rect = feedRef.current.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+    return [+x.toFixed(1), +y.toFixed(1)];
+  }, []);
 
   const handleFeedMouseDown = (e: React.MouseEvent) => {
     if (tool === 'draw') {
@@ -213,8 +325,10 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
 
       setDraftPoints((prev) => [...prev, p]);
     } else {
+      // Clicked on background feed / empty area -> deselect
       if (e.target === feedRef.current || (e.target as HTMLElement).tagName === 'svg') {
         setSelectedZoneId(null);
+        setSelectedVertexIdx(null);
         setColorPickerZoneId(null);
       }
     }
@@ -274,13 +388,6 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     pushHistory(nextState);
   };
 
-  const handleDeleteZoneWithHistory = (zoneId: string) => {
-    onDeleteZone(camSel, zoneId);
-    const nextState = currentZones.filter((z) => z.id !== zoneId);
-    pushHistory(nextState);
-    if (selectedZoneId === zoneId) setSelectedZoneId(null);
-  };
-
   const canUndo = (tool === 'draw' && draftPoints.length > 0) || historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
 
@@ -288,7 +395,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1.58fr) minmax(360px, 1fr)',
+        gridTemplateColumns: 'minmax(0, 1.55fr) minmax(380px, 1fr)',
         gap: '18px',
         alignItems: 'start'
       }}
@@ -383,6 +490,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
               onClick={() => {
                 setTool('draw');
                 setSelectedZoneId(null);
+                setSelectedVertexIdx(null);
               }}
               style={{
                 fontSize: '12px',
@@ -464,6 +572,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
           {tool === 'draw' && draftPoints.length >= 3 && (
             <button
               onClick={handleFinishDraw}
+              title="Hoàn tất và lưu zone (Phím Enter)"
               style={{
                 fontSize: '12px',
                 fontWeight: 600,
@@ -474,10 +583,13 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                 color: '#fff',
                 cursor: 'pointer',
                 fontFamily: 'inherit',
-                boxShadow: '0 2px 8px rgba(16, 185, 129, 0.4)'
+                boxShadow: '0 2px 8px rgba(16, 185, 129, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
               }}
             >
-              ✓ Hoàn tất zone ({draftPoints.length} điểm)
+              <span>✓ Hoàn tất zone (Enter)</span>
             </button>
           )}
 
@@ -487,6 +599,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                 setDraftPoints([]);
                 setDraftHover(null);
               }}
+              title="Hủy các điểm đang vẽ (Phím Escape)"
               style={{
                 fontSize: '12px',
                 fontWeight: 600,
@@ -569,8 +682,34 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
               pointerEvents: 'none'
             }}
           >
-            {clock} · Trình chỉnh sửa Zone AI
+            {clock} · Trình cấu hình Zone
           </div>
+
+          {/* Toast message overlay on canvas */}
+          {toastMsg && (
+            <div
+              className="animate-msg"
+              style={{
+                position: 'absolute',
+                top: '16px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                backgroundColor: 'rgba(15, 23, 42, 0.92)',
+                backdropFilter: 'blur(8px)',
+                border: '1px solid var(--line2)',
+                color: '#ffffff',
+                fontSize: '12px',
+                fontWeight: 600,
+                padding: '6px 16px',
+                borderRadius: '20px',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+                zIndex: 40,
+                pointerEvents: 'none'
+              }}
+            >
+              {toastMsg}
+            </div>
+          )}
 
           {/* SVG Polygons and Draft */}
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
@@ -583,20 +722,30 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                   key={z.id}
                   points={pointsStr}
                   fill={`${z.color}${isSelected ? '38' : '16'}`}
-                  stroke={z.color}
-                  strokeWidth={isSelected ? '2.4' : '1.6'}
+                  stroke={isSelected ? '#ffffff' : z.color}
+                  strokeWidth={isSelected ? '2.8' : '1.6'}
                   strokeDasharray={isSelected ? '0' : '6 4'}
                   vectorEffect="non-scaling-stroke"
                   style={{
                     cursor: tool === 'select' ? (isSelected ? 'move' : 'pointer') : 'crosshair',
-                    pointerEvents: 'auto'
+                    pointerEvents: 'auto',
+                    filter: isSelected ? `drop-shadow(0 0 8px ${z.color})` : 'none',
+                    transition: 'all 0.15s ease'
                   }}
                   onMouseDown={(e) => {
                     if (tool !== 'select') return;
                     e.stopPropagation();
                     const p = getPercentageCoords(e);
                     if (!p) return;
-                    setSelectedZoneId(z.id);
+
+                    // FIRST CLICK ON UNSELECTED ZONE: Select only! (Tránh kéo nhầm)
+                    if (!isSelected) {
+                      setSelectedZoneId(z.id);
+                      setSelectedVertexIdx(null);
+                      return;
+                    }
+
+                    // ALREADY SELECTED: Now allow dragging the zone!
                     dragRef.current = {
                       mode: 'move',
                       zoneId: z.id,
@@ -627,6 +776,8 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
           {/* Zone Labels */}
           {currentZones.map((z) => {
             const topPoint = z.points.reduce((prev, curr) => (curr[1] < prev[1] ? curr : prev), z.points[0]);
+            const isSelected = selectedZoneId === z.id;
+
             return (
               <span
                 key={`lbl-${z.id}`}
@@ -634,16 +785,20 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                   position: 'absolute',
                   left: `${topPoint[0]}%`,
                   top: `${topPoint[1]}%`,
-                  transform: 'translateY(-115%)',
-                  backgroundColor: z.color,
-                  color: '#ffffff',
+                  transform: isSelected ? 'translateY(-125%) scale(1.1)' : 'translateY(-115%) scale(1)',
+                  backgroundColor: isSelected ? '#ffffff' : z.color,
+                  color: isSelected ? '#000000' : '#ffffff',
                   fontSize: '9.5px',
                   fontWeight: 700,
                   padding: '2px 8px',
                   borderRadius: '4px',
                   whiteSpace: 'nowrap',
                   pointerEvents: 'none',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+                  boxShadow: isSelected
+                    ? '0 0 14px rgba(255,255,255,0.9), 0 2px 8px rgba(0,0,0,0.5)'
+                    : '0 2px 8px rgba(0,0,0,0.5)',
+                  transition: 'all 0.15s ease',
+                  zIndex: 8
                 }}
               >
                 {z.name}
@@ -654,43 +809,62 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
           {/* Handles for Selected Zone in Select Mode */}
           {tool === 'select' && selectedZone && (
             <>
-              {/* Vertex Handles */}
-              {selectedZone.points.map((p, i) => (
-                <span
-                  key={`v-${i}`}
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    const coords = getPercentageCoords(e);
-                    if (!coords) return;
-                    dragRef.current = {
-                      mode: 'vertex',
-                      zoneId: selectedZone.id,
-                      idx: i,
-                      startX: coords[0],
-                      startY: coords[1],
-                      origPoints: selectedZone.points.map((pt) => [...pt]),
-                      hasMoved: false
-                    };
-                  }}
-                  title="Kéo góc để sửa hình dạng"
-                  style={{
-                    position: 'absolute',
-                    left: `${p[0]}%`,
-                    top: `${p[1]}%`,
-                    width: '13px',
-                    height: '13px',
-                    margin: '-6.5px 0 0 -6.5px',
-                    backgroundColor: '#ffffff',
-                    border: `2px solid ${selectedZone.color}`,
-                    borderRadius: '3px',
-                    cursor: 'grab',
-                    boxShadow: '0 2px 6px rgba(0,0,0,0.6)',
-                    zIndex: 10
-                  }}
-                />
-              ))}
+              {/* Vertex Handles (Drag to change shape, Click to select, Right-click / Double-click to delete) */}
+              {selectedZone.points.map((p, i) => {
+                const isVertexSelected = selectedVertexIdx === i;
 
-              {/* Edge Midpoint Handles */}
+                return (
+                  <span
+                    key={`v-${i}`}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      setSelectedVertexIdx(i);
+                      const coords = getPercentageCoords(e);
+                      if (!coords) return;
+
+                      // Start dragging this vertex
+                      dragRef.current = {
+                        mode: 'vertex',
+                        zoneId: selectedZone.id,
+                        idx: i,
+                        startX: coords[0],
+                        startY: coords[1],
+                        origPoints: selectedZone.points.map((pt) => [...pt]),
+                        hasMoved: false
+                      };
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteVertex(selectedZone.id, i);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleDeleteVertex(selectedZone.id, i);
+                    }}
+                    title="Kéo để nắn hình · Nhấp đúp / Chuột phải hoặc bấm Delete để xóa góc này"
+                    style={{
+                      position: 'absolute',
+                      left: `${p[0]}%`,
+                      top: `${p[1]}%`,
+                      width: isVertexSelected ? '15px' : '13px',
+                      height: isVertexSelected ? '15px' : '13px',
+                      margin: isVertexSelected ? '-7.5px 0 0 -7.5px' : '-6.5px 0 0 -6.5px',
+                      backgroundColor: isVertexSelected ? 'var(--p0)' : '#ffffff',
+                      border: isVertexSelected ? '2px solid #ffffff' : `2px solid ${selectedZone.color}`,
+                      borderRadius: '3px',
+                      cursor: 'grab',
+                      boxShadow: isVertexSelected
+                        ? '0 0 12px rgba(244, 63, 94, 0.9), 0 2px 6px rgba(0,0,0,0.6)'
+                        : '0 2px 6px rgba(0,0,0,0.6)',
+                      zIndex: 15,
+                      transition: 'transform 0.1s ease, width 0.1s ease, height 0.1s ease'
+                    }}
+                  />
+                );
+              })}
+
+              {/* Edge Midpoint Handles (Drag to insert new vertex) */}
               {selectedZone.points.map((p, i) => {
                 const nextP = selectedZone.points[(i + 1) % selectedZone.points.length];
                 const midX = (p[0] + nextP[0]) / 2;
@@ -704,9 +878,12 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                       const coords = getPercentageCoords(e);
                       if (!coords) return;
 
+                      // Insert new point in between
                       const newPoints = [...selectedZone.points];
                       newPoints.splice(i + 1, 0, [+midX.toFixed(1), +midY.toFixed(1)]);
                       onUpdateZone(camSel, selectedZone.id, { points: newPoints });
+
+                      setSelectedVertexIdx(i + 1);
 
                       dragRef.current = {
                         mode: 'vertex',
@@ -761,221 +938,365 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
             ))}
         </div>
 
-        {/* Helper Hint */}
-        <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--ink3)', display: 'flex', gap: '16px', padding: '0 4px' }}>
-          <span>⌨️ Phím tắt: <b>Ctrl+Z</b> Hoàn tác, <b>Ctrl+Y</b> Làm lại</span>
+        {/* Helper Hint with Key Shortcuts */}
+        <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--ink3)', display: 'flex', gap: '14px', flexWrap: 'wrap', padding: '0 4px' }}>
+          <span>⌨️ <b>Enter</b> Hoàn tất zone vẽ</span>
           <span>•</span>
-          <span>{tool === 'draw' ? 'Bấm vào góc đầu để đóng đa giác' : 'Kéo góc để nắn hình, kéo điểm giữa cạnh để thêm góc'}</span>
+          <span><b>Ctrl+Z / Ctrl+Y</b> Hoàn tác / Làm lại</span>
+          <span>•</span>
+          <span><b>Delete / Backspace</b> Xóa Zone hoặc xóa đỉnh</span>
+          <span>•</span>
+          <span><b>Chuột phải / Nhấp đúp</b> xóa góc</span>
+          <span>•</span>
+          <span>{tool === 'draw' ? 'Bấm góc đầu hoặc ấn Enter để đóng đa giác' : 'Bấm chọn Zone trước khi kéo di chuyển (tránh kéo nhầm)'}</span>
         </div>
       </div>
 
-      {/* Right: Zone Cards & Type Permission Matrix */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        {currentZones.map((z) => {
-          const isSelected = selectedZoneId === z.id;
-          const isColorPickerOpen = colorPickerZoneId === z.id;
+      {/* Right: Zone Management Panel (Fixed Scrollable Container) */}
+      <div
+        className="glass-panel"
+        style={{
+          borderRadius: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          maxHeight: '610px',
+          boxShadow: 'var(--shadow-lg)'
+        }}
+      >
+        {/* Panel Header with Zone Counter & Quick Search */}
+        <div
+          style={{
+            padding: '14px 18px',
+            borderBottom: '1px solid var(--line)',
+            backgroundColor: 'rgba(26, 30, 39, 0.6)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>Danh sách Zone</span>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                  color: 'var(--ink2)'
+                }}
+              >
+                {displayedZones.length} / {currentZones.length} zone
+              </span>
+            </div>
 
-          return (
-            <div
-              key={z.id}
-              onClick={() => setSelectedZoneId(z.id)}
-              className="glass-card"
-              style={{
-                borderRadius: '16px',
-                padding: '16px',
-                cursor: 'pointer',
-                border: isSelected ? `2px solid ${z.color}` : '1px solid var(--line)',
-                boxShadow: isSelected ? `0 0 20px ${z.color}33` : 'var(--shadow-md)',
-                transition: 'all 0.18s ease'
-              }}
+            {selectedZone && (
+              <span style={{ fontSize: '11.5px', color: 'var(--acc)', fontWeight: 600 }}>
+                Đang chọn: {selectedZone.name}
+              </span>
+            )}
+          </div>
+
+          {/* Quick Search for Zones */}
+          <div style={{ position: 'relative' }}>
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="var(--ink3)"
+              strokeWidth="2"
+              style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)' }}
             >
-              {/* Card Header */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-                {/* Color Swatch */}
-                <div style={{ position: 'relative' }}>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setColorPickerZoneId(isColorPickerOpen ? null : z.id);
-                    }}
-                    title="Bấm để đổi màu sắc zone"
-                    style={{
-                      width: '26px',
-                      height: '26px',
-                      borderRadius: '8px',
-                      backgroundColor: z.color,
-                      border: '2px solid rgba(255,255,255,0.4)',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      boxShadow: '0 1px 4px rgba(0,0,0,0.3)'
-                    }}
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="#ffffff">
-                      <path d="M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8z" />
-                    </svg>
-                  </button>
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              value={zoneSearch}
+              onChange={(e) => setZoneSearch(e.target.value)}
+              placeholder="Tìm theo tên zone…"
+              style={{
+                width: '100%',
+                backgroundColor: 'var(--bg)',
+                border: '1px solid var(--line2)',
+                borderRadius: '8px',
+                padding: '6px 10px 6px 30px',
+                fontSize: '12px',
+                color: 'var(--ink)',
+                outline: 'none'
+              }}
+            />
+            {zoneSearch && (
+              <button
+                onClick={() => setZoneSearch('')}
+                style={{
+                  position: 'absolute',
+                  right: '8px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  color: 'var(--ink3)',
+                  cursor: 'pointer',
+                  fontSize: '11px'
+                }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
 
-                  {/* Color Palette Popover */}
-                  {isColorPickerOpen && (
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      className="glass-panel"
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        top: '32px',
-                        borderRadius: '12px',
-                        padding: '10px',
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(5, 1fr)',
-                        gap: '6px',
-                        zIndex: 40,
-                        boxShadow: 'var(--shadow-lg)',
-                        width: '165px'
-                      }}
-                    >
-                      {PRESET_COLORS.map((c) => (
-                        <button
-                          key={c}
-                          onClick={() => {
-                            handleUpdateZoneProp(z.id, { color: c });
-                            setColorPickerZoneId(null);
-                          }}
-                          style={{
-                            width: '24px',
-                            height: '24px',
-                            borderRadius: '6px',
-                            backgroundColor: c,
-                            border: z.color === c ? '2px solid #ffffff' : '1px solid rgba(0,0,0,0.3)',
-                            cursor: 'pointer',
-                            padding: 0
-                          }}
-                        />
-                      ))}
-                      <label
-                        title="Chọn màu tùy chỉnh"
+        {/* Scrollable Zone Cards Stream */}
+        <div
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '12px 14px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px'
+          }}
+        >
+          {displayedZones.length === 0 ? (
+            <div style={{ padding: '32px 18px', textAlign: 'center', color: 'var(--ink3)', fontSize: '12.5px' }}>
+              Không tìm thấy zone nào phù hợp từ khóa
+            </div>
+          ) : (
+            displayedZones.map((z) => {
+              const isSelected = selectedZoneId === z.id;
+              const isColorPickerOpen = colorPickerZoneId === z.id;
+
+              return (
+                <div
+                  key={z.id}
+                  ref={(el) => {
+                    cardRefs.current[z.id] = el;
+                  }}
+                  onClick={() => {
+                    setSelectedZoneId(z.id);
+                    setSelectedVertexIdx(null);
+                  }}
+                  className="glass-card"
+                  style={{
+                    borderRadius: '13px',
+                    padding: '12px 14px',
+                    cursor: 'pointer',
+                    border: isSelected ? `2px solid ${z.color}` : '1px solid var(--line)',
+                    backgroundColor: isSelected ? 'rgba(30, 36, 48, 0.7)' : 'rgba(26, 30, 39, 0.5)',
+                    boxShadow: isSelected ? `0 0 16px ${z.color}33` : 'var(--shadow-sm)',
+                    transition: 'all 0.16s ease'
+                  }}
+                >
+                  {/* Card Header */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '9px', marginBottom: '8px' }}>
+                    {/* Color Swatch */}
+                    <div style={{ position: 'relative' }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setColorPickerZoneId(isColorPickerOpen ? null : z.id);
+                        }}
+                        title="Bấm để đổi màu sắc zone"
                         style={{
                           width: '24px',
                           height: '24px',
-                          borderRadius: '6px',
-                          backgroundColor: 'var(--raise)',
-                          border: '1px solid var(--line2)',
+                          borderRadius: '7px',
+                          backgroundColor: z.color,
+                          border: '2px solid rgba(255,255,255,0.4)',
+                          cursor: 'pointer',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          cursor: 'pointer'
+                          boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+                          flex: 'none'
                         }}
                       >
-                        <span style={{ fontSize: '11px', color: 'var(--ink)' }}>+</span>
-                        <input
-                          type="color"
-                          value={z.color}
-                          onChange={(e) => handleUpdateZoneProp(z.id, { color: e.target.value })}
-                          style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
-                        />
-                      </label>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="#ffffff">
+                          <path d="M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8z" />
+                        </svg>
+                      </button>
+
+                      {/* Color Palette Popover */}
+                      {isColorPickerOpen && (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="glass-panel"
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: '30px',
+                            borderRadius: '12px',
+                            padding: '8px',
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(5, 1fr)',
+                            gap: '5px',
+                            zIndex: 40,
+                            boxShadow: 'var(--shadow-lg)',
+                            width: '155px'
+                          }}
+                        >
+                          {PRESET_COLORS.map((c) => (
+                            <button
+                              key={c}
+                              onClick={() => {
+                                handleUpdateZoneProp(z.id, { color: c });
+                                setColorPickerZoneId(null);
+                              }}
+                              style={{
+                                width: '22px',
+                                height: '22px',
+                                borderRadius: '5px',
+                                backgroundColor: c,
+                                border: z.color === c ? '2px solid #ffffff' : '1px solid rgba(0,0,0,0.3)',
+                                cursor: 'pointer',
+                                padding: 0
+                              }}
+                            />
+                          ))}
+                          <label
+                            title="Chọn màu tùy chỉnh"
+                            style={{
+                              width: '22px',
+                              height: '22px',
+                              borderRadius: '5px',
+                              backgroundColor: 'var(--raise)',
+                              border: '1px solid var(--line2)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <span style={{ fontSize: '10px', color: 'var(--ink)' }}>+</span>
+                            <input
+                              type="color"
+                              value={z.color}
+                              onChange={(e) => handleUpdateZoneProp(z.id, { color: e.target.value })}
+                              style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
+                            />
+                          </label>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                {/* Editable Zone Name */}
-                <input
-                  value={z.name}
-                  onChange={(e) => handleUpdateZoneProp(z.id, { name: e.target.value })}
-                  onClick={(e) => e.stopPropagation()}
-                  placeholder="Tên zone…"
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    backgroundColor: 'transparent',
-                    border: '1px solid transparent',
-                    borderRadius: '8px',
-                    padding: '4px 8px',
-                    color: '#ffffff',
-                    fontSize: '13.5px',
-                    fontWeight: 700,
-                    outline: 'none'
-                  }}
-                  onFocus={(e) => {
-                    e.currentTarget.style.backgroundColor = 'var(--bg)';
-                    e.currentTarget.style.borderColor = 'var(--line2)';
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                    e.currentTarget.style.borderColor = 'transparent';
-                  }}
-                />
-
-                {/* Delete Zone Button */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteZoneWithHistory(z.id);
-                  }}
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    padding: '4px 10px',
-                    borderRadius: '7px',
-                    border: '1px solid var(--p0)',
-                    backgroundColor: 'transparent',
-                    color: 'var(--p0)',
-                    cursor: 'pointer',
-                    fontFamily: 'inherit'
-                  }}
-                >
-                  Xóa
-                </button>
-              </div>
-
-              <div style={{ fontSize: '11px', color: 'var(--ink3)', marginBottom: '10px' }}>
-                Phân quyền loại đối tượng vào zone (bấm để đổi ✓ được phép / ✕ cấm):
-              </div>
-
-              {/* Vehicle Permissions Matrix */}
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                {objLabels.map((obj) => {
-                  const isAllowed = !!z.types[obj.name];
-                  return (
-                    <button
-                      key={obj.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleUpdateZoneProp(z.id, {
-                          types: {
-                            ...z.types,
-                            [obj.name]: isAllowed ? 0 : 1
-                          }
-                        });
-                      }}
-                      title={`Bấm để ${isAllowed ? 'cấm' : 'cho phép'} ${obj.name}`}
+                    {/* Editable Zone Name */}
+                    <input
+                      value={z.name}
+                      onChange={(e) => handleUpdateZoneProp(z.id, { name: e.target.value })}
+                      onClick={(e) => e.stopPropagation()}
+                      placeholder="Tên zone…"
                       style={{
-                        fontSize: '11.5px',
-                        fontWeight: 600,
-                        padding: '5px 12px',
-                        borderRadius: '20px',
-                        border: `1px solid ${isAllowed ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}`,
-                        backgroundColor: isAllowed ? 'var(--okq)' : 'var(--p0q)',
-                        color: isAllowed ? 'var(--ok)' : 'var(--p0)',
-                        cursor: 'pointer',
-                        fontFamily: 'inherit',
-                        transition: 'all 0.15s ease'
+                        flex: 1,
+                        minWidth: 0,
+                        backgroundColor: 'transparent',
+                        border: '1px solid transparent',
+                        borderRadius: '6px',
+                        padding: '3px 6px',
+                        color: '#ffffff',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        outline: 'none'
+                      }}
+                      onFocus={(e) => {
+                        e.currentTarget.style.backgroundColor = 'var(--bg)';
+                        e.currentTarget.style.borderColor = 'var(--line2)';
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        e.currentTarget.style.borderColor = 'transparent';
+                      }}
+                    />
+
+                    {/* Vertices Count Badge */}
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        color: 'var(--ink3)',
+                        fontFamily: 'var(--font-mono)',
+                        backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        flex: 'none'
                       }}
                     >
-                      {isAllowed ? `✓ ${obj.name}` : `✕ ${obj.name}`}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
+                      {z.points.length} đỉnh
+                    </span>
 
-        <div style={{ fontSize: '11.5px', color: 'var(--ink3)', lineHeight: 1.55, padding: '0 4px' }}>
-          Phương tiện mang nhãn <b style={{ color: 'var(--p0)' }}>Xe lạ</b> hoặc sai loại được phép sẽ tự động kích hoạt cảnh
-          báo vi phạm khi đi vào zone.
+                    {/* Delete Zone Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteZoneWithHistory(z.id);
+                      }}
+                      style={{
+                        fontSize: '10.5px',
+                        fontWeight: 600,
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--p0)',
+                        backgroundColor: 'transparent',
+                        color: 'var(--p0)',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        flex: 'none'
+                      }}
+                    >
+                      Xóa
+                    </button>
+                  </div>
+
+                  {/* Vehicle Permissions Matrix */}
+                  <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '4px' }}>
+                    {objLabels.map((obj) => {
+                      const isAllowed = !!z.types[obj.name];
+                      return (
+                        <button
+                          key={obj.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUpdateZoneProp(z.id, {
+                              types: {
+                                ...z.types,
+                                [obj.name]: isAllowed ? 0 : 1
+                              }
+                            });
+                          }}
+                          title={`Bấm để ${isAllowed ? 'cấm' : 'cho phép'} ${obj.name}`}
+                          style={{
+                            fontSize: '10.5px',
+                            fontWeight: 600,
+                            padding: '3px 9px',
+                            borderRadius: '16px',
+                            border: `1px solid ${isAllowed ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}`,
+                            backgroundColor: isAllowed ? 'var(--okq)' : 'var(--p0q)',
+                            color: isAllowed ? 'var(--ok)' : 'var(--p0)',
+                            cursor: 'pointer',
+                            fontFamily: 'inherit',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          {isAllowed ? `✓ ${obj.name}` : `✕ ${obj.name}`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Panel Footer Note */}
+        <div
+          style={{
+            padding: '10px 16px',
+            borderTop: '1px solid var(--line)',
+            backgroundColor: 'rgba(15, 18, 23, 0.4)',
+            fontSize: '11px',
+            color: 'var(--ink3)'
+          }}
+        >
+          Phương tiện mang nhãn <b style={{ color: 'var(--p0)' }}>Xe lạ</b> hoặc sai loại sẽ cảnh báo vi phạm khi vào zone.
         </div>
       </div>
     </div>

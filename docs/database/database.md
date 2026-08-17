@@ -27,6 +27,8 @@
 1. **Cấu trúc sự kiện:** Tách thành 2 bảng chuyên biệt `gate_events` và `zone_violations` để đảm bảo kiểu dữ liệu chặt chẽ và tối ưu truy vấn nghiệp vụ.
 2. **Cấu trúc Zone & Rules:** Lưu tập trung tọa độ polygon và cấu hình quy tắc trong bảng `zones` dưới dạng `jsonb` để hỗ trợ đẩy cấu hình real-time và nạp nhanh vào Python Worker/React Canvas.
 3. **Lưu trữ Chat Q&A:** Thêm bảng `chat_messages` để lưu trữ bền vững lịch sử hỏi đáp AI và đường dẫn clip tham chiếu.
+4. **`object_labels.base_class` không unique:** Nhiều tên tiếng Việt (e.g. "Xe máy" và "Mô tô") có thể cùng map về một class YOLO gốc (e.g. `motorcycle`). Không thêm unique constraint trên `base_class`; Python Worker sử dụng `vietnamese_name` làm khóa tra cứu trong zone rules.
+5. **Lịch sử chat hiển thị toàn bộ:** `chat_messages` lưu bền vững và hiển thị toàn bộ lịch sử qua các phiên khác nhau; không có `session_id`.
 
 ---
 
@@ -205,7 +207,7 @@ erDiagram
 | Column | Engine type | Null | Default | Key | Meaning/source |
 |---|---|---|---|---|---|
 | `id` | `uuid` | No | `gen_random_uuid()` | PK | Định danh sự kiện cổng |
-| `camera_id` | `varchar(50)` | No | `'GATE-01'` | | Mã định danh camera (mặc định GATE-01) |
+| `camera_id` | `varchar(50)` | No | None | | Mã định danh camera (`'GATE-01'`) — Worker phải truyền tường minh |
 | `lane` | `varchar(20)` | No | None | | Làn xe di chuyển: `'IN_1'`, `'IN_2'` |
 | `license_plate` | `varchar(20)` | No | None | | Biển số xe nhận diện được |
 | `status` | `varchar(20)` | No | None | | Trạng thái đối chiếu: `'KNOWN'` hoặc `'STRANGER'` |
@@ -241,13 +243,14 @@ erDiagram
 | `camera_id` | `varchar(50)` | No | None | | Camera áp dụng (`BAI-KIEM`, `GATE-01`) |
 | `name` | `varchar(100)` | No | None | | Tên vùng (ví dụ: "Khu vực cấm xe máy") |
 | `polygon_points` | `jsonb` | No | None | | Danh sách tọa độ normalized: `[{"x":0.1,"y":0.2},...]` |
-| `rule_type` | `varchar(50)` | No | `'PROHIBIT_ALL_EXCEPT'` | | Kiểu quy tắc: `'PROHIBIT_SPECIFIED'` (cấm danh sách chỉ định), `'ALLOW_SPECIFIED'` (chỉ cho phép danh sách, còn lại cấm) |
+| `rule_type` | `varchar(50)` | No | `'PROHIBIT_SPECIFIED'` | | Kiểu quy tắc: `'PROHIBIT_SPECIFIED'` (cấm danh sách chỉ định), `'ALLOW_SPECIFIED'` (chỉ cho phép danh sách, còn lại cấm) |
 | `target_labels` | `jsonb` | No | `'[]'::jsonb` | | Danh sách nhãn đối tượng áp dụng rule: `["xe_may", "nguoi"]` |
 | `is_active` | `boolean` | No | `true` | | Trạng thái kích hoạt giám sát |
 | `created_at` | `timestamptz` | No | `now()` | | Thời điểm tạo |
 | `updated_at` | `timestamptz` | No | `now()` | | Thời điểm cập nhật cuối |
 
 - **Primary key:** `id`
+- **Unique constraints:** `uq_zones_camera_name` (`camera_id`, `name`) — tránh 2 zone trùng tên trên cùng camera; bắt buộc khi UI dùng tên zone để phân biệt.
 - **Check constraints:** `chk_zones_rule_type`: `rule_type IN ('PROHIBIT_SPECIFIED', 'ALLOW_SPECIFIED')`
 - **Indexes:**
   - `idx_zones_camera_active` (`camera_id`, `is_active`) — phục vụ **AP-05** (Python Worker nạp zone đang active).
@@ -264,7 +267,7 @@ erDiagram
 | Column | Engine type | Null | Default | Key | Meaning/source |
 |---|---|---|---|---|---|
 | `id` | `uuid` | No | `gen_random_uuid()` | PK | Định danh sự kiện vi phạm |
-| `camera_id` | `varchar(50)` | No | `'BAI-KIEM'` | | Mã camera xảy ra vi phạm |
+| `camera_id` | `varchar(50)` | No | None | | Mã camera xảy ra vi phạm (`'BAI-KIEM'`) — Worker phải truyền tường minh |
 | `zone_id` | `uuid` | No | None | FK | Vùng giám sát bị vi phạm |
 | `object_label` | `varchar(100)` | No | None | | Tên nhãn đối tượng vi phạm (hoặc `'CHƯA XÁC ĐỊNH'`) |
 | `status` | `varchar(20)` | No | `'OPEN'` | | Trạng thái sự kiện: `'OPEN'` (đang ở trong zone), `'CLOSED'` (đã rời khỏi zone) |
@@ -325,7 +328,7 @@ erDiagram
 - **Primary key:** `id`
 - **Foreign keys:** `fk_label_samples_label_id`: `label_id` REFERENCES `object_labels(id)` ON DELETE CASCADE ON UPDATE CASCADE
 - **Indexes:**
-  - `idx_label_samples_label_id` (`label_id`) — lọc các mẫu theo nhãn.
+  - `idx_label_samples_label_id` (`label_id`) — lọc các mẫu theo nhãn khi mở màn hình gán nhãn, phục vụ **AP-07**.
 - **Sensitive-data notes:** None.
 
 ---
@@ -401,12 +404,19 @@ erDiagram
 - **Index:** `idx_zone_violations_zone_entered` (`zone_id`, `entered_at DESC`)
 - **Why:** Hỗ trợ Gemini function calling tính toán thời lượng và số lượt vi phạm của từng zone.
 
+### AP-07 — Tải danh sách mẫu ảnh theo nhãn (Settings — Label tool)
+- **Source:** Màn hình Cài đặt nhãn đối tượng (Product M3, AC-06): load các mẫu đã gắn nhãn khi user chọn nhãn để xem/thêm.
+- **Filter/join/sort:** `SELECT * FROM label_samples WHERE label_id = :label_id ORDER BY created_at ASC`
+- **Index:** `idx_label_samples_label_id` (`label_id`)
+- **Why:** Tránh full-table scan khi label_samples tích lũy nhiều mẫu (≥ 20 mẫu/nhãn × ≥ 5 nhãn theo success metrics).
+
 ---
 
 ## 8. Data Rules
 
 - **Ownership & Tenancy:** Single-tenant, local runtime; toàn bộ dữ liệu thuộc một hệ thống duy nhất.
-- **Identity & Uniqueness:** Tất cả các bảng sử dụng UUID v4 làm khóa chính. `registered_vehicles.plate_number` và `object_labels.vietnamese_name` là duy nhất.
+- **Identity & Uniqueness:** Tất cả các bảng sử dụng UUID v4 làm khóa chính. `registered_vehicles.plate_number` và `object_labels.vietnamese_name` là duy nhất. `zones.(camera_id, name)` là duy nhất trong phạm vi camera.
+- **`object_labels.base_class` không unique:** Nhiều tên tiếng Việt có thể cùng trỏ tới một class YOLO gốc (e.g. "Xe máy" và "Mô tô" → `motorcycle`). Python Worker phải dùng `vietnamese_name` làm khóa tra cứu zone rules, không dùng `base_class`.
 - **Valid states & Invariants:**
   - `gate_events.status` chỉ nhận `'KNOWN'` hoặc `'STRANGER'`.
   - `gate_events.lane` chỉ nhận `'IN_1'` hoặc `'IN_2'`.
@@ -416,6 +426,7 @@ erDiagram
   - Không cho phép xóa `zones` nếu đang có dữ liệu `zone_violations` (`ON DELETE RESTRICT`).
   - Xóa `object_labels` sẽ tự động xóa các `label_samples` liên quan (`ON DELETE CASCADE`).
 - **Retention & Media:** Video clip và ảnh crop được lưu trên local filesystem (`/data/clips/`, `/data/crops/`), database chỉ lưu đường dẫn tương đối. Nếu ghi file thất bại, đường dẫn lưu `NULL` và sự kiện vẫn được ghi thành công (đáp ứng BR-05).
+- **Chat history persistence:** `chat_messages` lưu bền vững và hiển thị toàn bộ lịch sử qua các phiên khác nhau; không có session boundary trong MVP.
 - **Timezone:** Toàn bộ cột timestamp sử dụng `TIMESTAMPTZ` (UTC / lưu kèm múi giờ).
 
 ---

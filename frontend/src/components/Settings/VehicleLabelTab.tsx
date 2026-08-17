@@ -7,13 +7,41 @@ interface VehicleLabelTabProps {
   onToggleLabel: (plate: string) => void;
 }
 
-type SortOrder = 'default' | 'desc' | 'asc';
+type SortField = 'visits' | 'last' | 'plate' | null;
+type SortDirection = 'asc' | 'desc';
 type StatusFilter = 'all' | 'quen' | 'la';
 
 export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labels, onToggleLabel }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('default');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [sortField, setSortField] = useState<SortField>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+
+  // Distinct vehicle types
+  const uniqueTypes = useMemo(() => {
+    const set = new Set<string>();
+    vehicles.forEach((v) => {
+      if (v.type) set.add(v.type);
+    });
+    return Array.from(set);
+  }, [vehicles]);
+
+  // Handle column header sort toggle
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      if (sortDirection === 'desc') {
+        setSortDirection('asc');
+      } else {
+        // Reset sort
+        setSortField(null);
+        setSortDirection('desc');
+      }
+    } else {
+      setSortField(field);
+      setSortDirection('desc');
+    }
+  };
 
   // Filter and sort vehicles
   const filteredVehicles = useMemo(() => {
@@ -35,15 +63,58 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
       result = result.filter((v) => labels[v.plate] === statusFilter);
     }
 
-    // 3. Sort by visits (Lượt vào)
-    if (sortOrder === 'desc') {
-      result.sort((a, b) => b.visits - a.visits);
-    } else if (sortOrder === 'asc') {
-      result.sort((a, b) => a.visits - b.visits);
+    // 3. Vehicle type filter
+    if (typeFilter !== 'all') {
+      result = result.filter((v) => v.type === typeFilter);
+    }
+
+    // 4. Column Header Sorting
+    if (sortField) {
+      result.sort((a, b) => {
+        if (sortField === 'visits') {
+          return sortDirection === 'desc' ? b.visits - a.visits : a.visits - b.visits;
+        }
+        if (sortField === 'last') {
+          // Compare formatted timestamp '16/08 09:18'
+          return sortDirection === 'desc'
+            ? b.last.localeCompare(a.last)
+            : a.last.localeCompare(b.last);
+        }
+        if (sortField === 'plate') {
+          return sortDirection === 'desc'
+            ? b.plate.localeCompare(a.plate)
+            : a.plate.localeCompare(b.plate);
+        }
+        return 0;
+      });
     }
 
     return result;
-  }, [vehicles, labels, searchQuery, statusFilter, sortOrder]);
+  }, [vehicles, labels, searchQuery, statusFilter, typeFilter, sortField, sortDirection]);
+
+  // Render sort arrow indicator
+  const renderSortIndicator = (field: SortField) => {
+    const isActive = sortField === field;
+    if (!isActive) {
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ink3)" strokeWidth="2" style={{ opacity: 0.5 }}>
+          <path d="m7 15 5 5 5-5M7 9l5-5 5 5" />
+        </svg>
+      );
+    }
+    if (sortDirection === 'desc') {
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--acc)" strokeWidth="2.4">
+          <path d="M12 5v14M19 12l-7 7-7-7" />
+        </svg>
+      );
+    }
+    return (
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--acc)" strokeWidth="2.4">
+        <path d="M12 19V5M5 12l7-7 7 7" />
+      </svg>
+    );
+  };
 
   return (
     <div
@@ -82,8 +153,8 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
             position: 'relative',
             display: 'flex',
             alignItems: 'center',
-            minWidth: '260px',
-            flex: '1 1 260px'
+            minWidth: '240px',
+            flex: '1 1 240px'
           }}
         >
           <svg
@@ -132,68 +203,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
           )}
         </div>
 
-        {/* Sort by Visits */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ fontSize: '11.5px', color: 'var(--ink3)', fontWeight: 600 }}>Lượt vào:</span>
-          <div
-            style={{
-              display: 'flex',
-              backgroundColor: 'var(--bg)',
-              border: '1px solid var(--line2)',
-              borderRadius: '9px',
-              padding: '3px',
-              gap: '2px'
-            }}
-          >
-            <button
-              onClick={() => setSortOrder('default')}
-              style={{
-                fontSize: '11.5px',
-                fontWeight: 600,
-                padding: '5px 10px',
-                borderRadius: '7px',
-                border: 'none',
-                cursor: 'pointer',
-                backgroundColor: sortOrder === 'default' ? 'var(--acc)' : 'transparent',
-                color: sortOrder === 'default' ? '#fff' : 'var(--ink2)'
-              }}
-            >
-              Mặc định
-            </button>
-            <button
-              onClick={() => setSortOrder('desc')}
-              style={{
-                fontSize: '11.5px',
-                fontWeight: 600,
-                padding: '5px 10px',
-                borderRadius: '7px',
-                border: 'none',
-                cursor: 'pointer',
-                backgroundColor: sortOrder === 'desc' ? 'var(--acc)' : 'transparent',
-                color: sortOrder === 'desc' ? '#fff' : 'var(--ink2)'
-              }}
-            >
-              Giảm dần ↓
-            </button>
-            <button
-              onClick={() => setSortOrder('asc')}
-              style={{
-                fontSize: '11.5px',
-                fontWeight: 600,
-                padding: '5px 10px',
-                borderRadius: '7px',
-                border: 'none',
-                cursor: 'pointer',
-                backgroundColor: sortOrder === 'asc' ? 'var(--acc)' : 'transparent',
-                color: sortOrder === 'asc' ? '#fff' : 'var(--ink2)'
-              }}
-            >
-              Tăng dần ↑
-            </button>
-          </div>
-        </div>
-
-        {/* Filter by Status */}
+        {/* Filter by Status (Xe quen / Xe lạ) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span style={{ fontSize: '11.5px', color: 'var(--ink3)', fontWeight: 600 }}>Trạng thái:</span>
           <div
@@ -211,7 +221,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
               style={{
                 fontSize: '11.5px',
                 fontWeight: 600,
-                padding: '5px 10px',
+                padding: '5px 11px',
                 borderRadius: '7px',
                 border: 'none',
                 cursor: 'pointer',
@@ -226,7 +236,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
               style={{
                 fontSize: '11.5px',
                 fontWeight: 600,
-                padding: '5px 10px',
+                padding: '5px 11px',
                 borderRadius: '7px',
                 border: 'none',
                 cursor: 'pointer',
@@ -241,7 +251,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
               style={{
                 fontSize: '11.5px',
                 fontWeight: 600,
-                padding: '5px 10px',
+                padding: '5px 11px',
                 borderRadius: '7px',
                 border: 'none',
                 cursor: 'pointer',
@@ -252,6 +262,33 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
               ⚠ Xe lạ
             </button>
           </div>
+        </div>
+
+        {/* Filter by Vehicle Type (Container, Xe tải, Xe con...) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ fontSize: '11.5px', color: 'var(--ink3)', fontWeight: 600 }}>Loại xe:</span>
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            style={{
+              backgroundColor: 'var(--bg)',
+              border: '1px solid var(--line2)',
+              borderRadius: '9px',
+              padding: '6px 12px',
+              fontSize: '12px',
+              color: typeFilter === 'all' ? 'var(--ink2)' : 'var(--ink)',
+              fontWeight: 600,
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="all">Tất cả loại xe ({uniqueTypes.length})</option>
+            {uniqueTypes.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div style={{ flex: 1 }} />
@@ -268,11 +305,11 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
         </span>
       </div>
 
-      {/* Table Header */}
+      {/* Table Header with Sort Arrows on the right of Titles */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '70px 1.3fr 1fr 0.8fr 0.9fr 140px',
+          gridTemplateColumns: '70px 1.3fr 1fr 1fr 1fr 140px',
           padding: '12px 22px',
           borderBottom: '1px solid var(--line)',
           fontSize: '11.5px',
@@ -283,10 +320,62 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
         }}
       >
         <div>Ảnh</div>
-        <div>Biển số xe</div>
+
+        {/* Column 2: Biển số xe (Sortable) */}
+        <div
+          onClick={() => handleSort('plate')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            cursor: 'pointer',
+            userSelect: 'none',
+            color: sortField === 'plate' ? 'var(--acc)' : 'inherit'
+          }}
+          title="Bấm để sắp xếp theo biển số"
+        >
+          <span>Biển số xe</span>
+          {renderSortIndicator('plate')}
+        </div>
+
+        {/* Column 3: Loại phương tiện */}
         <div>Loại phương tiện</div>
-        <div>Lượt vào</div>
-        <div>Lần cuối ghi nhận</div>
+
+        {/* Column 4: Lượt vào (Sortable with arrow on right of title) */}
+        <div
+          onClick={() => handleSort('visits')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            cursor: 'pointer',
+            userSelect: 'none',
+            color: sortField === 'visits' ? 'var(--acc)' : 'inherit'
+          }}
+          title="Bấm để sắp xếp theo số lượt vào"
+        >
+          <span>Lượt vào</span>
+          {renderSortIndicator('visits')}
+        </div>
+
+        {/* Column 5: Lần cuối ghi nhận (Sortable with arrow on right of title) */}
+        <div
+          onClick={() => handleSort('last')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            cursor: 'pointer',
+            userSelect: 'none',
+            color: sortField === 'last' ? 'var(--acc)' : 'inherit'
+          }}
+          title="Bấm để sắp xếp theo thời gian mới/cũ nhất"
+        >
+          <span>Lần cuối ghi nhận</span>
+          {renderSortIndicator('last')}
+        </div>
+
+        {/* Column 6: Nhãn phân loại */}
         <div>Nhãn phân loại</div>
       </div>
 
@@ -298,7 +387,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
               Không tìm thấy phương tiện nào
             </div>
             <div style={{ fontSize: '12px' }}>
-              Thử thay đổi từ khóa tìm kiếm hoặc bỏ bộ lọc trạng thái.
+              Thử thay đổi từ khóa tìm kiếm hoặc bỏ bớt bộ lọc.
             </div>
           </div>
         ) : (
@@ -313,7 +402,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
                 key={v.plate}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '70px 1.3fr 1fr 0.8fr 0.9fr 140px',
+                  gridTemplateColumns: '70px 1.3fr 1fr 1fr 1fr 140px',
                   padding: '12px 22px',
                   borderBottom: '1px solid var(--line)',
                   alignItems: 'center',
@@ -365,7 +454,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
                       fontFamily: 'var(--font-mono)',
                       fontWeight: 600,
                       fontSize: '12px',
-                      color: 'var(--ink)',
+                      color: sortField === 'visits' ? 'var(--acc)' : 'var(--ink)',
                       backgroundColor: 'var(--raise)',
                       padding: '2px 8px',
                       borderRadius: '6px'
@@ -377,7 +466,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({ vehicles, labe
 
                 <div
                   style={{
-                    color: 'var(--ink3)',
+                    color: sortField === 'last' ? 'var(--acc)' : 'var(--ink3)',
                     fontFamily: 'var(--font-mono)',
                     fontSize: '12px'
                   }}
