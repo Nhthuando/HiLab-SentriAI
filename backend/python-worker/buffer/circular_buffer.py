@@ -7,11 +7,13 @@ and extracts MP4 video clips when gate / zone violation events are triggered (BR
 import collections
 import logging
 import os
+import subprocess
 import threading
 import time
 from typing import Deque, Optional, Tuple
 
 import cv2
+import imageio_ffmpeg
 import numpy as np
 
 logger = logging.getLogger("sentriai.buffer")
@@ -87,22 +89,66 @@ class CircularBuffer:
                 os.makedirs(dir_name, exist_ok=True)
 
             h, w = frames[0].shape[:2]
+            temporary_output_path = f"{output_path}.tmp.mp4"
+            command = [
+                imageio_ffmpeg.get_ffmpeg_exe(),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "rawvideo",
+                "-pixel_format",
+                "bgr24",
+                "-video_size",
+                f"{w}x{h}",
+                "-framerate",
+                f"{out_fps:.6f}",
+                "-i",
+                "-",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-profile:v",
+                "baseline",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                temporary_output_path,
+            ]
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                for frame in frames:
+                    if frame.shape[:2] != (h, w):
+                        frame = cv2.resize(frame, (w, h))
+                    assert process.stdin is not None
+                    process.stdin.write(np.ascontiguousarray(frame).tobytes())
+                process.stdin.close()
+                stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
+                if process.wait() != 0:
+                    raise RuntimeError(stderr or "FFmpeg could not encode the H.264 clip")
+                os.replace(temporary_output_path, output_path)
+            except Exception:
+                if process.stdin and not process.stdin.closed:
+                    process.stdin.close()
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+                if os.path.exists(temporary_output_path):
+                    os.remove(temporary_output_path)
+                raise
+            finally:
+                if process.stderr:
+                    process.stderr.close()
 
-            # Use mp4v fourcc codec for universal MP4 compatibility
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, out_fps, (w, h))
-
-            if not writer.isOpened():
-                logger.error("Failed to open VideoWriter for %s", output_path)
-                return None
-
-            for frame in frames:
-                # Ensure correct frame dimensions
-                if frame.shape[:2] != (h, w):
-                    frame = cv2.resize(frame, (w, h))
-                writer.write(frame)
-
-            writer.release()
             logger.info("Successfully saved %d frames (%.1fs) clip to %s", len(frames), len(frames) / out_fps, output_path)
             return output_path
 

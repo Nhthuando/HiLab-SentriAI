@@ -15,6 +15,8 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from uuid import uuid4
 
 # Ensure python-worker directory is on sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,9 +24,11 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
+import cv2
 import numpy as np
 from shapely.geometry import Point
 
+from buffer.circular_buffer import CircularBuffer
 from detection.area_pipeline import AreaPipeline
 from zone.zone_checker import (
     ActiveViolation,
@@ -116,9 +120,10 @@ class TestZoneRuleMatrix(unittest.TestCase):
         res1 = resolve_candidate_labels("motorcycle", "Xe máy", class_map)
         self.assertEqual(res1, ["Xe máy điện", "Xe máy số"])
 
-        # Fallback to COCO
+        # A model class without a DB mapping remains unknown and is still
+        # evaluated by ALLOW_SPECIFIED zone rules.
         res2 = resolve_candidate_labels("truck", "Xe tải", class_map)
-        self.assertEqual(res2, ["Xe tải"])
+        self.assertEqual(res2, ["CHƯA XÁC ĐỊNH"])
 
         # Completely unknown
         res3 = resolve_candidate_labels("alien_vehicle", "", class_map)
@@ -240,6 +245,168 @@ class TestViolationStateMachine(unittest.TestCase):
         )
         self.assertEqual(annotated[0]["status"], "VIOLATION")
         self.assertEqual(len(transitions), 0, "Untracked detections cannot emit persisted transitions")
+
+
+    def test_missing_detection_and_track_renumber_do_not_reopen_event(self):
+        t0 = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+        first_track = [{
+            "trackId": 1,
+            "bbox": [100, 100, 200, 200],
+            "normalized_bbox": [0.2, 0.2, 0.3, 0.4],
+            "class": "motorcycle",
+            "label": "Xe mĂ¡y",
+            "confidence": 0.9,
+        }]
+
+        _, started = self.checker.check_detections(
+            first_track, self.test_zones, self.class_map, timestamp=t0
+        )
+        self.assertEqual(len(started), 1)
+        violation_id = started[0].violation_id
+
+        for seconds in (1, 3):
+            _, transitions = self.checker.check_detections(
+                [], self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=seconds)
+            )
+            self.assertEqual(transitions, [], "Temporary detector loss must keep the violation open")
+
+        renumbered_track = [{**first_track[0], "trackId": 99}]
+        _, transitions = self.checker.check_detections(
+            renumbered_track, self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=4)
+        )
+        self.assertEqual(transitions, [], "A reidentified object must not create another STARTED event")
+        self.assertEqual(len(self.checker.active_violations), 1)
+        active = next(iter(self.checker.active_violations.values()))
+        self.assertEqual(active.violation_id, violation_id)
+        self.assertEqual(active.track_id, 99)
+
+    def test_missing_detection_closes_after_time_grace(self):
+        t0 = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+        inside = [{
+            "trackId": 1,
+            "bbox": [100, 100, 200, 200],
+            "normalized_bbox": [0.2, 0.2, 0.3, 0.4],
+            "class": "motorcycle",
+            "label": "Xe mĂ¡y",
+            "confidence": 0.9,
+        }]
+        self.checker.check_detections(inside, self.test_zones, self.class_map, timestamp=t0)
+
+        _, before_timeout = self.checker.check_detections(
+            [], self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=4.9)
+        )
+        self.assertEqual(before_timeout, [])
+
+        _, after_timeout = self.checker.check_detections(
+            [], self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=5.0)
+        )
+        self.assertEqual(len(after_timeout), 1)
+        self.assertEqual(after_timeout[0].action, "ENDED")
+
+    def test_boundary_jitter_does_not_close_or_reopen_violation(self):
+        t0 = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+        inside = [{
+            "trackId": 1,
+            "bbox": [100, 100, 200, 200],
+            "normalized_bbox": [0.2, 0.2, 0.3, 0.4],
+            "class": "motorcycle",
+            "label": "Xe mĂ¡y",
+            "confidence": 0.9,
+        }]
+        _, started = self.checker.check_detections(
+            inside, self.test_zones, self.class_map, timestamp=t0
+        )
+        self.assertEqual([transition.action for transition in started], ["STARTED"])
+        violation_id = started[0].violation_id
+
+        # The zone edge is x=0.50. A bottom-center x=0.51 is just outside
+        # the exact polygon but inside the 0.02 hysteresis buffer.
+        edge_jitter = [{
+            "trackId": 1,
+            "bbox": [300, 100, 360, 200],
+            "normalized_bbox": [0.49, 0.2, 0.53, 0.4],
+            "class": "motorcycle",
+            "label": "Xe mĂ¡y",
+            "confidence": 0.9,
+        }]
+        for seconds in range(1, 6):
+            annotated, transitions = self.checker.check_detections(
+                edge_jitter,
+                self.test_zones,
+                self.class_map,
+                timestamp=t0 + timedelta(seconds=seconds),
+            )
+            self.assertEqual(annotated[0]["status"], "VIOLATION")
+            self.assertEqual(
+                transitions,
+                [],
+                "Jitter within the boundary buffer must not close or reopen the event",
+            )
+
+        active = next(iter(self.checker.active_violations.values()))
+        self.assertEqual(active.violation_id, violation_id)
+        self.assertEqual(active.consecutive_outside, 0)
+
+        # A point clearly beyond the buffer is a genuine exit and must still
+        # close after the existing three observed-frame grace period.
+        clearly_outside = [{
+            **edge_jitter[0],
+            "bbox": [330, 100, 390, 200],
+            "normalized_bbox": [0.53, 0.2, 0.57, 0.4],
+        }]
+        for seconds in (6, 7):
+            _, transitions = self.checker.check_detections(
+                clearly_outside,
+                self.test_zones,
+                self.class_map,
+                timestamp=t0 + timedelta(seconds=seconds),
+            )
+            self.assertEqual(transitions, [])
+
+        _, transitions = self.checker.check_detections(
+            clearly_outside,
+            self.test_zones,
+            self.class_map,
+            timestamp=t0 + timedelta(seconds=8),
+        )
+        self.assertEqual(len(transitions), 1)
+        self.assertEqual(transitions[0].action, "ENDED")
+        self.assertEqual(transitions[0].violation_id, violation_id)
+        self.assertEqual(len(self.checker.active_violations), 0)
+
+
+class TestBrowserCompatibleClipEncoding(unittest.TestCase):
+    def test_circular_buffer_writes_h264_mp4(self):
+        buffer = CircularBuffer(max_seconds=3.0, target_fps=5.0)
+        started_at = 1_000.0
+        for index in range(10):
+            frame = np.full((48, 64, 3), index * 20, dtype=np.uint8)
+            buffer.append(frame, started_at + index * 0.2)
+
+        output_path = (
+            Path(parent_dir).parent
+            / "data"
+            / "clips"
+            / f"area_h264_test_{uuid4().hex}.mp4"
+        )
+        try:
+            saved_path = buffer.save_clip(
+                str(output_path),
+                duration_seconds=2.0,
+                end_time=started_at + 1.8,
+            )
+            self.assertEqual(saved_path, str(output_path))
+            self.assertTrue(output_path.exists())
+
+            capture = cv2.VideoCapture(str(output_path))
+            self.assertTrue(capture.isOpened())
+            fourcc_value = int(capture.get(cv2.CAP_PROP_FOURCC))
+            fourcc = "".join(chr((fourcc_value >> (8 * index)) & 0xFF) for index in range(4))
+            self.assertEqual(fourcc.lower(), "h264")
+            self.assertGreater(capture.get(cv2.CAP_PROP_FRAME_COUNT), 0)
+            capture.release()
+        finally:
+            output_path.unlink(missing_ok=True)
 
 
 class TestAreaPipelineExecution(unittest.TestCase):

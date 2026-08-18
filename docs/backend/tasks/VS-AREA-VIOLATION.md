@@ -10,13 +10,15 @@
 - Branch: feature/vs-area-violation
 - Priority: P0
 - Size: L
-- Status: invalidated
+- Status: blocked
 - Status history:
   - 2026-08-17T16:45:00+07:00 | none -> pending | planned | team1-plan
   - 2026-08-18T09:03:37+07:00 | pending -> ready | all FDN-* gates verified; redundant VS-GATE-LIVE delivery dependency removed because shared infrastructure is foundation-owned | team1-plan
   - 2026-08-18T09:30:00+07:00 | ready -> in_progress | started execution on feature branch | team1-backend
   - 2026-08-18T09:37:00+07:00 | in_progress -> backend_verified | all acceptance criteria passed with fresh unit and REST integration evidence | team1-backend
   - 2026-08-18 | backend_verified -> invalidated | stabilization changes changed runtime behavior; previous automated evidence is retained as historical only and must be rerun | team1-slice
+  - 2026-08-18T15:00:00+07:00 | invalidated -> in_progress | user reported unplayable browser clips and repeated Area events after intermittent tracking loss | team1-backend
+  - 2026-08-18T15:00:00+07:00 | in_progress -> blocked | Python unit and Node typecheck passed; standalone Neon REST verifier could not complete because the sandbox rejected TLS credentials and the approved unsandboxed retry timed out | team1-backend
 
 ## Inputs and dependencies
 
@@ -97,7 +99,7 @@ The implementation model must read these files in order before editing code. A l
 - A detection not yet assigned a ByteTrack ID may be shown in the feed with `trackId = null`, but it cannot open/close a persisted violation or emit an alert until the tracker confirms an ID.
 - The in-memory violation state key is `(camera_id, track_id, zone_id)`. One key can have at most one OPEN DB row.
 - Open when the key changes from outside/allowed to inside/prohibited. Remaining inside/prohibited updates frame metadata only and never inserts or alerts again.
-- Close after 3 consecutive processed frames outside, allowed, or absent. Use the last timestamp at which the key was inside/prohibited as `exited_at`; the grace period prevents boundary jitter from creating repeated enter/exit events.
+- Close after 3 consecutive processed frames when the confirmed track is observed outside or allowed. When the tracked detection is absent, keep the event open for 5 wall-clock seconds so intermittent detector loss or a ByteTrack ID change can reconnect to the same violation. Use the last timestamp at which the key was inside/prohibited as `exited_at`.
 - A transition lasting under one second is still inserted and closed. Persist `duration_seconds = max(0, floor(exited_at-entered_at))`; frontend displays `<1s` when the timestamps differ by less than one second.
 - On worker startup, close stale `BAI-KIEM` OPEN rows at startup time before accepting new tracks. Preserve their existing `clip_path`; this prevents a restart from leaving permanent OPEN rows or causing duplicate alerts.
 
@@ -120,7 +122,7 @@ The implementation model must read these files in order before editing code. A l
 
 - Insert the OPEN violation immediately with `clip_path = null`, then schedule one clip job for that violation ID.
 - At `entered_at + 10 seconds`, call the existing circular buffer so its latest 10-second window corresponds to approximately `[entered_at, entered_at+10s]`.
-- File name is `area_<violation-id>.mp4` under `CLIPS_DIR` (default `backend/data/clips` when the worker is started from `backend/`). Store the relative path `area_<violation-id>.mp4`, not an absolute machine path.
+- File name is `area_<violation-id>.mp4` under `CLIPS_DIR` (default `backend/data/clips` when the worker is started from `backend/`). Encode H.264 baseline/yuv420p MP4 with fast-start metadata so the browser can play the same static `/data/clips/<filename>` URL. Store the relative path `area_<violation-id>.mp4`, not an absolute machine path.
 - If the object exits before ten seconds, close the DB row immediately but keep the clip job running until the ten-second deadline, then update only `clip_path`.
 - A failed write or interrupted worker leaves `clip_path = null`; the event and close transition remain successful (BR-05).
 
@@ -315,11 +317,11 @@ Execute in this order. After each step, update this task's changed-files and nex
   - OpenAPI and backend handoff contain no unimplemented operation or mocked behavior.
 - Latest evidence:
   - Evidence ID: EVD-BE-AREA-01
-  - Command/procedure: `python tests/test_area_pipeline.py` & `npm run typecheck` & `npx ts-node src/tests/test_area_events.ts`
-  - Context: Local test execution with Neon PostgreSQL DB and Python Worker test suite
-  - Exit/result: Exit 0 (11/11 Python unit tests passed, 5/5 Node API tests passed, 0 type errors)
-  - Fresh: no; invalidated by the 2026-08-18 stabilization changes below.
-  - Summary: 100% test pass for polygon covers boundary, rule matrix, state transitions (open/sustain/grace/close), REST pagination/filtering/validation, and OpenAPI synchronization.
+  - Command/procedure: `python tests/test_area_pipeline.py`, `npm run typecheck`, and `NODE_ENV=test npx ts-node src/tests/test_area_events.ts`
+  - Context: Local Python unit suite plus Node typecheck. The REST verifier uses the configured Neon database and a disposable Zone/ZoneViolation fixture.
+  - Exit/result: Python unit suite exit 0 (15/15 passed, including H.264 MP4 output, intermittent detection/reidentification, and boundary-jitter suppression); Node typecheck exit 0. REST verifier did not complete: sandbox rejected Neon TLS credentials and the approved retry timed out after 120 seconds.
+  - Fresh: partially fresh; REST/HTTP proof remains unavailable.
+  - Summary: The new Area behavior is covered by pure worker tests, but the required REST verifier must be rerun successfully before `backend_verified`.
 
 ## Execution record
 
@@ -327,6 +329,8 @@ Execute in this order. After each step, update this task's changed-files and nex
   - `backend/python-worker/detection/tracked_detector.py`
   - `backend/python-worker/detection/area_pipeline.py`
   - `backend/python-worker/detection/__init__.py`
+  - `backend/python-worker/buffer/circular_buffer.py`
+  - `backend/python-worker/requirements.txt`
   - `backend/python-worker/zone/zone_checker.py`
   - `backend/python-worker/zone/zone_sync.py`
   - `backend/python-worker/zone/__init__.py`
@@ -342,9 +346,9 @@ Execute in this order. After each step, update this task's changed-files and nex
   - `backend/node-api/openapi/area.yaml`
   - `docs/backend/backend.md`
   - `docs/backend/tasks/VS-AREA-VIOLATION.md`
-- Decisions/assumptions: Standardized on Shapely `covers` on bottom-center point, 3-frame grace period for boundary jitter, non-blocking 10s clip scheduling with safe fallback.
-- Blocker: Formal backend verifier set was intentionally not run at the user's request.
-- Exact next action: User performs the paired manual browser acceptance procedure; then rerun the configured backend verifier set before restoring `backend_verified`.
+- Decisions/assumptions: Standardized on Shapely `covers` on bottom-center point. A confirmed track still uses 3-frame exit grace, while an absent track uses a 5-second reconnect window. Event clips use bundled FFmpeg via `imageio-ffmpeg` to produce browser-compatible H.264 MP4 without changing the public URL contract.
+- Blocker: The standalone Node REST verifier has no successful current result because Neon TLS failed in sandbox and the approved retry timed out. Browser acceptance remains user-owned.
+- Exact next action: Restart the Python worker so it loads `imageio-ffmpeg`; create a new Area violation, wait at least 10 seconds, then verify one event survives intermittent detection loss and its newly generated clip plays in the browser. Rerun the Node REST verifier successfully before restoring `backend_verified`.
 
 ## Stabilization addendum (2026-08-18)
 
@@ -363,3 +367,18 @@ Execute in this order. After each step, update this task's changed-files and nex
 - The zone state machine reconnects a fresh ByteTrack ID to an active violation when the same class/label remains spatially continuous during the grace window, preserving one violation ID until the object exits and re-enters.
 - Worker and Node API resolve relative `CLIPS_DIR` from the shared `backend/` root. Clip playback FPS is derived from captured timestamps so slow inference does not compress a ten-second window into a short/empty-looking MP4.
 - Formal verification remains intentionally pending; the exact next action is manual browser retest with the configured video, followed by the normal verifier set later.
+
+## Browser clip and continuity stabilization (2026-08-18)
+
+- Replaced the worker's FMP4/mp4v clip writer with H.264 baseline/yuv420p MP4 through `imageio-ffmpeg`, including `faststart` metadata for browser streaming.
+- Existing FMP4 historical files are not retroactively transcoded. Generate a new event after restarting the Python worker to test playback.
+- Split event closing into two paths: a known track observed outside/allowed closes after 3 frames; an absent track has a 5-second identity-reconnect window.
+- Reidentification only moves an active event to a new track ID when the original track is absent and the class/label plus bbox continuity match, preventing duplicate event rows during temporary loss.
+
+## Boundary jitter stabilization (2026-08-18)
+
+- Reported symptom: one visibly continuous person near a polygon edge repeatedly produced `STARTED`/`ENDED` transitions and multiple event rows.
+- Decision: opening remains an exact `Polygon.covers(bottom_center)` check. For the same already-open track and still-violating rule result, sustain containment accepts a `0.02` normalized outward polygon buffer (approximately 13px at the configured 640px inference width). A point beyond that buffer continues through the existing 3-frame close path.
+- Scope: this only changes Area worker in-memory event continuity; no REST/WS schema, stored rows, or Zone CRUD behavior changes.
+- Regression coverage: an event remains one violation through more than three frames of boundary jitter, then emits exactly one `ENDED` after three frames clearly outside the buffer.
+- Evidence: `python tests/test_area_pipeline.py` from `backend/python-worker` passed 15/15 on 2026-08-18. No browser test was run.

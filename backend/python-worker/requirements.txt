@@ -29,5 +29,7 @@ asyncpg>=0.31.0
 # --- Utilities ---
 python-dotenv==1.0.1
 aiofiles==23.2.1
+# Bundled FFmpeg executable used to write browser-compatible H.264 event clips.
+imageio-ffmpeg>=0.6.0,<0.7.0
 # numpy: 2.5.2 has pre-built wheel for Python 3.14 (cp314-cp314-win_amd64)
 numpy==2.5.2

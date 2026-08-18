@@ -6,7 +6,8 @@ Coordinates:
 - Detection: normalized bottom-center point ((x1+x2)/2, y2)
 - Containment: Shapely.Polygon.covers(Point) (boundary included)
 - Rules: PROHIBIT_SPECIFIED vs ALLOW_SPECIFIED
-- State Machine: (camera_id, track_id, zone_id) with 3-frame grace period
+- State Machine: (camera_id, track_id, zone_id) with entry/exit hysteresis,
+  3-frame exit grace, and missing-track reconnect grace
 """
 import logging
 import math
@@ -184,9 +185,20 @@ class ZoneChecker:
     Zone containment evaluation and in-memory violation state machine.
     """
 
-    def __init__(self, camera_id: str = "BAI-KIEM", grace_frames: int = 3):
+    def __init__(
+        self,
+        camera_id: str = "BAI-KIEM",
+        grace_frames: int = 3,
+        missing_grace_seconds: float = 5.0,
+        boundary_hysteresis: float = 0.02,
+    ):
         self.camera_id = camera_id
-        self.grace_frames = grace_frames
+        self.grace_frames = max(1, int(grace_frames))
+        self.missing_grace_seconds = max(0.0, float(missing_grace_seconds))
+        # Coordinates are normalized [0, 1]. At the 640px Area inference width,
+        # 0.02 is roughly 13px: enough to absorb detector jitter at a zone edge
+        # without treating a genuine exit as inside.
+        self.boundary_hysteresis = min(0.1, max(0.0, float(boundary_hysteresis)))
         # Key: (camera_id, track_id, zone_id)
         self.active_violations: Dict[Tuple[str, int, str], ActiveViolation] = {}
 
@@ -252,6 +264,8 @@ class ZoneChecker:
         object_label: str,
         yolo_class: str,
         normalized_bbox: Tuple[float, float, float, float],
+        observed_track_ids: Set[int],
+        now: datetime,
     ) -> Optional[Tuple[str, int, str]]:
         """Reconnect a just-renumbered ByteTrack identity before opening a duplicate event."""
         best_key: Optional[Tuple[str, int, str]] = None
@@ -262,7 +276,8 @@ class ZoneChecker:
                 active.camera_id != self.camera_id
                 or active.zone_id != zone_id
                 or active.track_id == track_id
-                or active.consecutive_outside >= self.grace_frames
+                or active.track_id in observed_track_ids
+                or (now - active.last_seen_inside).total_seconds() >= self.missing_grace_seconds
                 or active.object_label.casefold() != object_label.casefold()
                 or active.yolo_class != yolo_class
                 or active.normalized_bbox is None
@@ -290,17 +305,23 @@ class ZoneChecker:
         2. Advances in-memory violation state machine and returns any STARTED/ENDED transitions.
         """
         now = timestamp or datetime.now(timezone.utc)
-        parsed_zones: List[Tuple[Dict[str, Any], Optional[Polygon]]] = []
+        parsed_zones: List[Tuple[Dict[str, Any], Optional[Polygon], Optional[Any]]] = []
 
         for z in zones:
             poly = parse_polygon(z.get("polygon_points") or z.get("polygon"))
-            parsed_zones.append((z, poly))
+            buffered_poly = (
+                poly.buffer(self.boundary_hysteresis)
+                if poly is not None and self.boundary_hysteresis > 0.0
+                else poly
+            )
+            parsed_zones.append((z, poly, buffered_poly))
 
         # Track keys present in this frame with VIOLATION status
         current_violations_in_frame: Dict[
             Tuple[str, int, str],
             Tuple[Dict[str, Any], str, Tuple[float, float, float, float], str],
         ] = {}
+        observed_track_ids: Set[int] = set()
 
         annotated_detections: List[Dict[str, Any]] = []
 
@@ -323,48 +344,64 @@ class ZoneChecker:
             yolo_cls = det.get("class", "")
             coco_lbl = det.get("label", "")
             candidates = resolve_candidate_labels(yolo_cls, coco_lbl, class_to_labels)
+            raw_track_id = det.get("trackId")
+            track_id = int(raw_track_id) if raw_track_id is not None else None
+            if track_id is not None:
+                observed_track_ids.add(track_id)
 
             zone_matches: List[Dict[str, Any]] = []
             has_violation = False
             first_violating_label = None
 
-            for z_dict, poly in parsed_zones:
+            for z_dict, poly, buffered_poly in parsed_zones:
                 if poly is None:
                     continue
 
-                # Point-in-polygon covers check (boundary included)
-                if poly.covers(det_point):
-                    rule_type = z_dict.get("rule_type") or z_dict.get("ruleType") or "PROHIBIT_SPECIFIED"
-                    target_labels = z_dict.get("target_labels") or z_dict.get("targetLabels") or []
-                    if isinstance(target_labels, str):
-                        target_labels = [target_labels]
+                rule_type = z_dict.get("rule_type") or z_dict.get("ruleType") or "PROHIBIT_SPECIFIED"
+                target_labels = z_dict.get("target_labels") or z_dict.get("targetLabels") or []
+                if isinstance(target_labels, str):
+                    target_labels = [target_labels]
 
-                    match_status = evaluate_zone_rule(rule_type, target_labels, candidates)
-                    zone_id = str(z_dict["id"])
-                    zone_name = z_dict.get("name", "Zone")
+                match_status = evaluate_zone_rule(rule_type, target_labels, candidates)
+                zone_id = str(z_dict["id"])
+                zone_name = z_dict.get("name", "Zone")
+                key = (self.camera_id, track_id, zone_id) if track_id is not None else None
 
-                    zone_matches.append({
-                        "zoneId": zone_id,
-                        "zoneName": zone_name,
-                        "status": match_status,
-                    })
+                # Opening remains strict: only an exact polygon hit can create a
+                # violation. For an already-open violation, a small outward
+                # buffer avoids false exits/reopens when the detector jitters
+                # around the polygon edge.
+                exact_inside = poly.covers(det_point)
+                sustained_inside = (
+                    key is not None
+                    and key in self.active_violations
+                    and match_status == "VIOLATION"
+                    and buffered_poly is not None
+                    and buffered_poly.covers(det_point)
+                )
+                if not exact_inside and not sustained_inside:
+                    continue
 
-                    if match_status == "VIOLATION":
-                        has_violation = True
-                        disp_lbl = choose_display_label(candidates, target_labels)
-                        if first_violating_label is None:
-                            first_violating_label = disp_lbl
+                zone_matches.append({
+                    "zoneId": zone_id,
+                    "zoneName": zone_name,
+                    "status": match_status,
+                })
 
-                        # Only tracks with valid trackId can open/maintain persisted violations
-                        track_id = det.get("trackId")
-                        if track_id is not None:
-                            key = (self.camera_id, int(track_id), zone_id)
-                            current_violations_in_frame[key] = (
-                                z_dict,
-                                disp_lbl,
-                                tuple(float(value) for value in norm_bbox),
-                                yolo_cls,
-                            )
+                if match_status == "VIOLATION":
+                    has_violation = True
+                    disp_lbl = choose_display_label(candidates, target_labels)
+                    if first_violating_label is None:
+                        first_violating_label = disp_lbl
+
+                    # Only tracks with valid trackId can open/maintain persisted violations
+                    if track_id is not None:
+                        current_violations_in_frame[key] = (
+                            z_dict,
+                            disp_lbl,
+                            tuple(float(value) for value in norm_bbox),
+                            yolo_cls,
+                        )
 
             # Sort zoneMatches by zoneName then zoneId
             zone_matches.sort(key=lambda m: (m["zoneName"], m["zoneId"]))
@@ -397,7 +434,13 @@ class ZoneChecker:
                 active.yolo_class = yolo_class
             else:
                 prior_key = self._find_reidentified_active_key(
-                    track_id, zone_id, obj_label, yolo_class, norm_bbox
+                    track_id,
+                    zone_id,
+                    obj_label,
+                    yolo_class,
+                    norm_bbox,
+                    observed_track_ids,
+                    now,
                 )
                 if prior_key is not None:
                     # ByteTrack can assign a fresh ID after a brief occlusion. Keep the
@@ -439,12 +482,22 @@ class ZoneChecker:
                         entered_at=now,
                     ))
 
-        # 2. Check active violations not seen as violating in this frame (GRACE / CLOSE)
+        # 2. Check active violations not seen as violating in this frame.
+        # A confirmed track seen outside/allowed is a real exit candidate and uses the
+        # short frame grace. A missing track is held by wall-clock time so intermittent
+        # detector loss or ByteTrack renumbering cannot repeatedly reopen the same event.
         keys_to_remove: List[Tuple[str, int, str]] = []
         for key, active in list(self.active_violations.items()):
             if key not in current_violations_in_frame:
-                active.consecutive_outside += 1
-                if active.consecutive_outside >= self.grace_frames:
+                should_close = False
+                if active.track_id in observed_track_ids:
+                    active.consecutive_outside += 1
+                    should_close = active.consecutive_outside >= self.grace_frames
+                else:
+                    missing_seconds = (now - active.last_seen_inside).total_seconds()
+                    should_close = missing_seconds >= self.missing_grace_seconds
+
+                if should_close:
                     # Transition: CLOSED
                     exit_ts = active.last_seen_inside
                     dur = max(0, int((exit_ts - active.entered_at).total_seconds()))

@@ -134,7 +134,7 @@
 
 > The prior automated evidence is historical and was invalidated by the 2026-08-18 stabilization changes. No verifier was rerun at the user's request.
 
-The latest user-reported follow-up is addressed in the worker: Area inference is limited to `person`/`truck` (`truck` is the configured `Container` label), ByteTrack re-identification suppresses duplicate entries during grace, and relative clip storage is shared with the Node static media directory.
+The latest user-reported follow-up is addressed in the worker: Area inference is limited to `person`/`truck` (`truck` is the configured `Container` label), a missing track has a 5-second identity-reconnect window while an observed exit retains the 3-frame close rule, and new clips are H.264/yuv420p MP4 with browser-friendly fast-start metadata. Existing FMP4 historical clips are not transcoded. Entry remains exact-polygon-only, while an already-open violation gets a `0.02` normalized outward boundary buffer (about 13px at 640px inference width) to stop detector jitter at the edge from repeatedly closing and reopening one event.
 
-- Python Unit tests for Point-in-polygon covers, Rule Matrix, State Machine transitions, Grace period, Sub-second pass, and Startup cleanup: PASSED.
-- Node.js API Contract integration tests for validation, pagination, filtering, and Prisma integration: PASSED.
+- Python Unit tests for Point-in-polygon covers, Rule Matrix, state transitions, missing-track continuity, track reidentification, boundary jitter suppression, and H.264 clip output: PASSED (15/15) on 2026-08-18.
+- Node.js typecheck: PASSED. The standalone Neon REST verifier remains pending after a sandbox TLS failure and an approved retry timeout.
