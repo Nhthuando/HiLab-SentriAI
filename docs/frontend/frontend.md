@@ -54,3 +54,13 @@ Latest follow-up behavior: backend identity continuity now prevents repeated row
 4. Move object out of zone: confirm row closes with duration.
 5. Open browser tab 2 on **"Cài đặt"** or **"Hỏi đáp AI"**: trigger prohibited object entry, confirm red glass floating alert appears in bottom-right.
 6. Click **"Xem camera ngay →"**: confirm tab switches to Area monitor and alert is dismissed.
+
+## 2. VS-SETTINGS-ZONE — BAI-KIEM Zone Editor
+
+- **Status**: Implementation complete; real API/browser acceptance pending.
+- **Branch**: `feature/vs-settings-zone` (stacked on the committed Area branch).
+- **Flow**: Settings → Vẽ zone uses real BAI-KIEM zone data only; Gate selection is intentionally unavailable for this testing phase.
+- **API**: Loads/persists `/api/v1/zones?camera_id=BAI-KIEM`, creates/updates/deletes zones, and requests `/api/v1/cameras/BAI-KIEM/snapshot` for the editor background.
+- **States**: Loading overlay before snapshot/zones arrive; retry control; static BAI-KIEM image only when camera snapshot fails; API errors are surfaced in the editor.
+- **Rule adapter**: UI permission chips for `Người` and `Container` are translated to the compact backend `ALLOW_SPECIFIED` or `PROHIBIT_SPECIFIED` rule plus target-label set. Color remains presentation-only.
+- **Basic evidence**: TypeScript/Vite build passes. User must verify browser CRUD and wait approximately five seconds for the Area worker poll before checking the new overlay/rule.

@@ -138,3 +138,18 @@ The latest user-reported follow-up is addressed in the worker: Area inference is
 
 - Python Unit tests for Point-in-polygon covers, Rule Matrix, state transitions, missing-track continuity, track reidentification, boundary jitter suppression, and H.264 clip output: PASSED (15/15) on 2026-08-18.
 - Node.js typecheck: PASSED. The standalone Neon REST verifier remains pending after a sandbox TLS failure and an approved retry timeout.
+
+## 2. VS-SETTINGS-ZONE — BAI-KIEM Zone Editor
+
+- **Status**: Implementation complete; live HTTP/DB verification pending user acceptance.
+- **Branch**: `feature/vs-settings-zone` (stacked on the committed Area branch).
+- **OpenAPI Contract**: `backend/node-api/openapi/zones.yaml`
+- **Routes**:
+  - `GET /api/v1/zones?camera_id=BAI-KIEM`
+  - `POST /api/v1/zones`
+  - `PUT /api/v1/zones/:id`
+  - `DELETE /api/v1/zones/:id`
+  - `GET /api/v1/cameras/BAI-KIEM/snapshot`
+- **Rules**: Only `BAI-KIEM` is accepted; polygon points are normalized `[0,1]` with at least three points; `ruleType` is `PROHIBIT_SPECIFIED|ALLOW_SPECIFIED`; duplicate names return `409`; deleting a referenced zone returns `409`.
+- **Worker integration**: Area `ZoneSynchronizer` already polls active BAI-KIEM zones every five seconds. Snapshot proxy reads `PYTHON_WORKER_HTTP_URL` (default `http://localhost:8001`).
+- **Basic evidence**: Node typecheck and focused pure validation test pass. CRUD/snapshot HTTP evidence is intentionally pending manual user testing.
