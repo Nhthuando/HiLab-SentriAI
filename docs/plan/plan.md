@@ -6,19 +6,19 @@
 
 - Goal: Deliver SentriAI MVP — hệ thống giám sát camera AI với 4 module (Cổng, Bãi Kiểm, Cài đặt, Q&A) chạy local, single user, demo 2 tuần
 - State: planning
-- Revision: 1
-- Last updated: 2026-08-17T16:45:00+07:00 — team1-plan
+- Revision: 1.3
+- Last updated: 2026-08-18T09:21:08+07:00 — team1-plan
 - Change authority: team lead through `team1-plan`
 
 ## Controlling inputs
 
 | Owner | Path | Approval/revision | SHA-256 | Consumed scope | Last checked |
 |---|---|---|---|---|---|
-| Product | `docs/product/product.md` | Đã duyệt, HuuThuan, 2026-08-17T14:43:00+07:00 | `871DEC9C` | M1–M4, BR-01–BR-09, AC-01–AC-09 | 2026-08-17T16:45:00+07:00 |
+| Product | `docs/product/product.md` | Đã duyệt, HuuThuan, 2026-08-17T14:43:00+07:00 | `9C2C05C7` | M1–M4, BR-01–BR-09, AC-01–AC-09 | 2026-08-18T09:21:08+07:00 |
 | Architecture | `docs/architecture/architecture.md` | Đã duyệt, 2026-08-17 | `45F59BC5` | §3–§8, stack, flows, risks | 2026-08-17T16:45:00+07:00 |
-| Database | `docs/database/database.md` | Đã duyệt, 2026-08-17 | `F514CB6D` | 7 tables, AP-01–AP-07, data rules | 2026-08-17T16:45:00+07:00 |
-| Design Contract | `docs/design/ui-design-contract.md` | Approved | `F5A9D0E4` | §1–§3, tokens, components, responsive | 2026-08-17T16:45:00+07:00 |
-| UI handoff | `docs/design/ui-to-frontend-handoff.md` | Approved & Ready for Integration | `F40DB9E7` | §1–§5, API mapping, BR mapping, state machine | 2026-08-17T16:45:00+07:00 |
+| Database | `docs/database/database.md` | Đã duyệt, 2026-08-17 | `C635952D` | 7 tables, AP-01–AP-07, data rules | 2026-08-18T09:21:08+07:00 |
+| Design Contract | `docs/design/ui-design-contract.md` | Approved | `3198A3D7` | §1–§3, tokens, components, responsive | 2026-08-18T09:21:08+07:00 |
+| UI handoff | `docs/design/ui-to-frontend-handoff.md` | Approved & Ready for Integration | `DF5C18AD` | §1–§5, API mapping, BR mapping, state machine | 2026-08-18T09:21:08+07:00 |
 
 ## MVP boundaries
 
@@ -55,9 +55,9 @@
 | FDN-REPO-SCAFFOLD | Repository scaffold: python-worker, node-api, .env.example, scripts | None — only `frontend/` and `docs/` exist | `python-worker/`, `node-api/` directories with package manifests, `.env.example`, `data/clips/`, `data/crops/` | All slices | M | Hữu Thuận | completed | directories exist, `pip install` + `npm install` succeed |
 | FDN-DB-MIGRATION | Prisma schema + migration cho 7 tables | `backend/node-api/prisma/schema.prisma` with all tables, `npx prisma migrate deploy` succeeds against Neon | All slices except VS-QA-CHAT (indirectly) | M | Hữu Thuận | completed | `npx prisma migrate deploy` exits 0 (2 migrations applied); all 7 tables + 8 CHECK constraints confirmed in Neon via `db pull` |
 | FDN-PYTHON-DB | Python asyncpg client + connection pool for Neon | `backend/python-worker/db/` module with connection pool, basic CRUD helpers | VS-GATE-LIVE, VS-AREA-VIOLATION | S | Hữu Thuận | completed | Python connects, executes AP-01 to AP-06 CRUD, verifies jsonb codecs, exits 0 on full test suite |
-| FDN-WS-PROXY | Node.js WebSocket proxy: Python→Node→Browser | `node-api/src/ws/` WebSocket proxy with path routing, channel isolation & broadcast helpers | VS-GATE-LIVE, VS-AREA-VIOLATION | M | Hữu Thuận | completed | Browser receives test frame via WS chain, channel isolation + publishing verified on full test suite |
-| FDN-PYTHON-STREAM | Python AI Worker: OpenCV stream reader + YOLO inference pipeline | `python-worker/stream/`, `detection/`, `buffer/` modules with 640x480 resize, YOLOv8n, clip buffer, WS emitter | VS-GATE-LIVE, VS-AREA-VIOLATION | M | Hữu Thuận | completed | Python reads video stream, runs YOLO, extracts MP4 clip from buffer, emits annotated frames via WS |
-| FDN-API-CONTRACT | Node.js Express REST scaffold + API versioning + error contract | `node-api/src/routes/` with health check, Prisma client, error middleware, standard envelope, static media routes | All backend slices | S | Hữu Thuận | completed | `GET /api/v1/health` returns 200 with database connected, error contract & static media verified |
+| FDN-WS-PROXY | Node.js WebSocket proxy: Python→Node→Browser | `backend/node-api/src/ws/` WebSocket proxy with path routing, channel isolation & broadcast helpers | VS-GATE-LIVE, VS-AREA-VIOLATION | M | Hữu Thuận | completed | Browser receives test frame via WS chain, channel isolation + publishing verified on full test suite |
+| FDN-PYTHON-STREAM | Python AI Worker: OpenCV stream reader + YOLO inference pipeline | `backend/python-worker/stream/`, `backend/python-worker/detection/`, `backend/python-worker/buffer/` modules with 640x480 resize, YOLOv8n, clip buffer, WS emitter | VS-GATE-LIVE, VS-AREA-VIOLATION | M | Hữu Thuận | completed | Python reads video stream, runs YOLO, extracts MP4 clip from buffer, emits annotated frames via WS |
+| FDN-API-CONTRACT | Node.js Express REST scaffold + API versioning + error contract | `backend/node-api/src/routes/` with health check, Prisma client, error middleware, standard envelope, static media routes | All backend slices | S | Hữu Thuận | completed | `GET /api/v1/health` returns 200 with database connected, error contract & static media verified |
 | FDN-FRONTEND-API | Frontend API client + WebSocket hooks | `frontend/src/api/` + `frontend/src/hooks/useWebSocket.ts`, `useCameraFeed.ts`, `useBroadcastChannel.ts` | All frontend slices | S | Hữu Thuận | completed | `npm run build` exits 0 (322ms), all 7 API modules + 3 hooks type-safe |
 
 ## Vertical slices
@@ -93,9 +93,9 @@
 - Priority: P0
 - Size: L
 - Owner: Hữu Thuận
-- Status: planned
+- Status: ready_for_user_test
 - Requirements: M2-DETECT, M2-VIOLATION, M2-FEED, M2-FLOAT
-- Dependencies: FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION, FDN-PYTHON-DB, FDN-WS-PROXY, FDN-PYTHON-STREAM, FDN-API-CONTRACT, FDN-FRONTEND-API, VS-GATE-LIVE (shared Python stream infrastructure)
+- Dependencies: FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION, FDN-PYTHON-DB, FDN-WS-PROXY, FDN-PYTHON-STREAM, FDN-API-CONTRACT, FDN-FRONTEND-API
 - Contract checkpoint: `GET /api/v1/events/area`, `WS /ws/feed/area`, `WS /ws/events/area`, `WS /ws/alerts`
 - Backend task: `docs/backend/tasks/VS-AREA-VIOLATION.md`
 - Frontend task: `docs/frontend/tasks/VS-AREA-VIOLATION.md`
@@ -109,8 +109,8 @@
 - Quality baseline:
   - Reason/risk: R1 Performance, point-in-polygon accuracy
   - Verifier: Python unit test cho zone check + manual video test
-- Conflict zones: `python-worker/zone/`, `python-worker/detection/`, `frontend/src/components/AreaMonitor.tsx`, `frontend/src/components/FloatingAlert.tsx`
-- Ready when: FDN-* completed, VS-GATE-LIVE stream infrastructure merged (shared Python stream reader)
+- Conflict zones: `backend/python-worker/detection/`, `backend/python-worker/main.py`, `backend/node-api/src/ws/`, `frontend/src/components/AreaMonitor.tsx`, `frontend/src/components/FloatingAlert.tsx`; coordinate shared-file edits with VS-GATE-LIVE without creating a delivery dependency
+- Ready when: All FDN-* foundations are completed
 - Done when: backend verified, real API frontend verified, automated integrated checks pass, user acceptance passes, peer review and merge complete, post-merge smoke passes
 
 ### VS-SETTINGS-VEHICLE — Cài đặt: quản lý danh sách biển số xe
@@ -236,17 +236,17 @@
 
 ## Dependency and parallelization map
 
-- Critical path: FDN-REPO-SCAFFOLD → FDN-DB-MIGRATION → FDN-PYTHON-DB + FDN-API-CONTRACT → FDN-WS-PROXY + FDN-PYTHON-STREAM → VS-GATE-LIVE → VS-AREA-VIOLATION → VS-QA-CHAT → VS-KPI-ANALYTICS
+- Critical path: FDN-REPO-SCAFFOLD → FDN-DB-MIGRATION → FDN-PYTHON-DB + FDN-API-CONTRACT → FDN-WS-PROXY + FDN-PYTHON-STREAM → (VS-GATE-LIVE ‖ VS-AREA-VIOLATION) → VS-QA-CHAT → VS-KPI-ANALYTICS
 - Safe parallel slices:
+  - After all FDN-* foundations: VS-GATE-LIVE ‖ VS-AREA-VIOLATION; each slice owns its camera-specific pipeline and contract, while shared-file edits require coordination
   - After FDN-DB-MIGRATION + FDN-API-CONTRACT: VS-SETTINGS-VEHICLE ‖ VS-SETTINGS-ZONE ‖ VS-SETTINGS-LABEL (tất cả 3 slice cài đặt có thể chạy song song)
   - FDN-PYTHON-DB ‖ FDN-API-CONTRACT ‖ FDN-FRONTEND-API (3 foundation song song sau FDN-DB-MIGRATION)
 - Sequential gates:
-  - VS-AREA-VIOLATION chờ VS-GATE-LIVE (shared Python stream infrastructure)
   - VS-QA-CHAT chờ VS-GATE-LIVE + VS-AREA-VIOLATION (cần event data)
   - VS-KPI-ANALYTICS chờ VS-GATE-LIVE + VS-AREA-VIOLATION
 - Shared conflict zones:
-  - `python-worker/detection/` — VS-GATE-LIVE và VS-AREA-VIOLATION cùng sử dụng
-  - `node-api/src/ws/` — VS-GATE-LIVE và VS-AREA-VIOLATION cùng sử dụng WS proxy
+  - `backend/python-worker/detection/` và `backend/python-worker/main.py` — VS-GATE-LIVE và VS-AREA-VIOLATION cùng sử dụng; coordinate before editing
+  - `backend/node-api/src/ws/` — WS foundation đã expose channel riêng cho Gate/Area; reuse contract, coordinate before shared-file edits
   - `frontend/src/hooks/` — tất cả frontend slices cùng dùng API client hooks
 
 ## Work Allocation
@@ -260,8 +260,8 @@
 | FDN-PYTHON-STREAM | YOLO stream pipeline | Hữu Thuận | `feature/fdn-python-stream` | no | FDN-REPO-SCAFFOLD |
 | FDN-API-CONTRACT | Express REST scaffold | Hữu Thuận | `feature/fdn-api-contract` | no | FDN-REPO-SCAFFOLD |
 | FDN-FRONTEND-API | Frontend API client + hooks | Hữu Thuận | `feature/fdn-frontend-api` | no | FDN-REPO-SCAFFOLD |
-| VS-GATE-LIVE | LPR + live feed + alert + clip | Phạm Hưng | `feature/vs-gate-live` | no | All FDN-* |
-| VS-AREA-VIOLATION | Zone detect + violation + floating alert | Hữu Thuận | `feature/vs-area-violation` | no | All FDN-*, VS-GATE-LIVE |
+| VS-GATE-LIVE | LPR + live feed + alert + clip | Phạm Hưng | `feature/vs-gate-live` | yes | none — all FDN-* completed |
+| VS-AREA-VIOLATION | Zone detect + violation + floating alert | Hữu Thuận | `feature/vs-area-violation` | yes | none — independent camera-specific slice; coordinate only shared-file edits with VS-GATE-LIVE |
 | VS-SETTINGS-VEHICLE | Vehicle CRUD + label toggle | Phạm Hưng | `feature/vs-settings-vehicle` | no | FDN-DB-MIGRATION, FDN-API-CONTRACT, FDN-FRONTEND-API |
 | VS-SETTINGS-ZONE | Zone polygon CRUD | Phạm Hưng | `feature/vs-settings-zone` | no | FDN-DB-MIGRATION, FDN-API-CONTRACT, FDN-FRONTEND-API |
 | VS-SETTINGS-LABEL | Object label + sample CRUD | Phạm Hưng | `feature/vs-settings-label` | no | FDN-DB-MIGRATION, FDN-API-CONTRACT, FDN-FRONTEND-API |
@@ -293,11 +293,13 @@ The team lead and members must confirm unassigned work before implementation. A 
 |---|---|---|---|---|---|
 | 2026-08-17T16:45:00+07:00 | 1 | initial baseline | FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION, FDN-PYTHON-DB, FDN-WS-PROXY, FDN-PYTHON-STREAM, FDN-API-CONTRACT, FDN-FRONTEND-API, VS-GATE-LIVE, VS-AREA-VIOLATION, VS-SETTINGS-VEHICLE, VS-SETTINGS-ZONE, VS-SETTINGS-LABEL, VS-QA-CHAT, VS-KPI-ANALYTICS | none | created |
 | 2026-08-17T17:03:00+07:00 | 1.1 | Work allocation | All tasks | All | Assigned owners: Phạm Hưng (VS-GATE-LIVE, VS-SETTINGS-*), Hữu Thuận (Foundations, VS-AREA-VIOLATION, VS-QA-CHAT, VS-KPI-ANALYTICS) |
+| 2026-08-18T09:03:37+07:00 | 1.2 | Dependency topology and backend index reconciliation for VS-GATE-LIVE / VS-AREA-VIOLATION | VS-AREA-VIOLATION backend/frontend tasks; backend index | All completed foundation evidence and unrelated slices | Removed the redundant Gate→Area delivery dependency because verified FDN-PYTHON-STREAM, FDN-WS-PROXY, and FDN-FRONTEND-API own the shared infrastructure; Gate and Area may proceed in parallel with shared-file coordination |
+| 2026-08-18T09:21:08+07:00 | 1.3 | Execution-detail hardening for VS-AREA-VIOLATION plus normalized fingerprint metadata correction | BE-AREA-VIOLATION, FE-AREA-VIOLATION and worker index revisions | Scope, ownership, dependencies, approved input content/evidence, unrelated task execution state | Added deterministic read order, anti-invention rules, tracking/rule/clip decisions, exact REST/WS DTOs, implementation sequence, file ownership, verifier matrix and user acceptance procedure; corrected Area-consumed fingerprints using BOM/NFC/line-ending normalization without semantic invalidation |
 
 ## Planning status
 
 - State: allocated
-- Ready slices: FDN-REPO-SCAFFOLD
-- Blocked slices: FDN-DB-MIGRATION, FDN-PYTHON-DB, FDN-WS-PROXY, FDN-PYTHON-STREAM, FDN-API-CONTRACT, FDN-FRONTEND-API, VS-GATE-LIVE, VS-AREA-VIOLATION, VS-SETTINGS-VEHICLE, VS-SETTINGS-ZONE, VS-SETTINGS-LABEL, VS-QA-CHAT, VS-KPI-ANALYTICS
+- Ready slices: VS-GATE-LIVE, VS-AREA-VIOLATION, VS-SETTINGS-VEHICLE, VS-SETTINGS-ZONE, VS-SETTINGS-LABEL
+- Blocked slices: VS-QA-CHAT, VS-KPI-ANALYTICS
 - Unassigned slices: none
-- Next team-lead action: Bắt đầu triển khai FDN-REPO-SCAFFOLD (Hữu Thuận)
+- Next team-lead action: Phạm Hưng triển khai VS-GATE-LIVE và Hữu Thuận triển khai VS-AREA-VIOLATION song song trên hai feature branch riêng; phối hợp trước khi sửa shared seams

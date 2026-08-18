@@ -13,6 +13,7 @@
  * - /api/v1/clips         (VS-QA-CHAT / Media stream)
  */
 import { Router } from 'express';
+import { areaEventsRouter } from './areaEvents';
 import { healthRouter } from './health';
 import { testErrorRouter } from './testError';
 
@@ -24,12 +25,15 @@ apiRouter.use('/health', healthRouter);
 // Mount Test Error router for API contract verification
 apiRouter.use('/test-error', testErrorRouter);
 
+// Mount VS-AREA-VIOLATION events router
+apiRouter.use('/events/area', areaEventsRouter);
+
 // Downstream feature routes will be mounted here by their respective vertical slices
 // e.g.:
 // apiRouter.use('/vehicles', vehiclesRouter);
 // apiRouter.use('/zones', zonesRouter);
 // apiRouter.use('/labels', labelsRouter);
-// apiRouter.use('/events', eventsRouter);
+// apiRouter.use('/events/gate', gateEventsRouter);
 // apiRouter.use('/qa', qaRouter);
 // apiRouter.use('/analytics', analyticsRouter);
 

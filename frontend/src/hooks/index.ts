@@ -4,3 +4,4 @@
 export * from './useWebSocket';
 export * from './useCameraFeed';
 export * from './useBroadcastChannel';
+export * from './useAreaMonitor';

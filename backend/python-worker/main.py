@@ -7,14 +7,15 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Dict
+from typing import Any, Dict
 
 import cv2
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from db import check_db_health, close_db_pool, init_db_pool
+from db import check_db_health, close_db_pool, close_stale_open_violations, init_db_pool
+from detection import AreaPipeline
 from stream import CameraPipeline
 
 logging.basicConfig(
@@ -24,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger("sentriai.worker")
 
 # Global pipeline dictionary
-pipelines: Dict[str, CameraPipeline] = {}
+pipelines: Dict[str, Any] = {}
 
 
 @asynccontextmanager
@@ -36,6 +37,10 @@ async def lifespan(app: FastAPI):
     try:
         await init_db_pool()
         logger.info("Database pool initialized.")
+        # Clean up any stale OPEN violations for BAI-KIEM from previous crash/restart
+        stale_count = await close_stale_open_violations("BAI-KIEM")
+        if stale_count > 0:
+            logger.info("Cleaned up %d stale OPEN violation(s) on startup.", stale_count)
     except Exception as exc:
         logger.warning("Could not connect to Database on startup (%s). Will retry on demand.", exc)
 
@@ -49,7 +54,7 @@ async def lifespan(app: FastAPI):
         target_fps=10.0,
         resolution=(640, 480),
     )
-    area_pipeline = CameraPipeline(
+    area_pipeline = AreaPipeline(
         camera_id="BAI-KIEM",
         source=area_source,
         target_fps=10.0,
@@ -62,7 +67,7 @@ async def lifespan(app: FastAPI):
     # Start stream loops in background
     gate_pipeline.start()
     area_pipeline.start()
-    logger.info("Camera pipelines started (GATE-01 and BAI-KIEM).")
+    logger.info("Camera pipelines started (GATE-01: CameraPipeline, BAI-KIEM: AreaPipeline).")
 
     yield
 
@@ -101,6 +106,20 @@ async def health():
         "database": "connected" if db_ok else "disconnected",
         "cameras": stats,
     }
+
+
+@app.websocket("/ws/hub")
+async def ws_hub_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    logger.info("Node.js WebSocket Hub client connected on /ws/hub")
+    try:
+        while True:
+            # Keep connection open for heartbeat / status sync
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        logger.info("Node.js WebSocket Hub client disconnected from /ws/hub")
+    except Exception as exc:
+        logger.debug("Hub WebSocket connection ended: %s", exc)
 
 
 @app.get("/cameras/{camera_id}/snapshot")

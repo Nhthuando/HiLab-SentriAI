@@ -22,13 +22,64 @@ export interface GateEvent {
   status: VehicleStatus;
 }
 
+export type ViolationStatus = 'OPEN' | 'CLOSED';
+export type AreaAction = 'STARTED' | 'ENDED';
+
+export interface AreaViolationDto {
+  id: string;
+  cameraId: 'BAI-KIEM' | string;
+  zoneId: string;
+  zoneName: string;
+  objectLabel: string;
+  status: ViolationStatus;
+  enteredAt: string;
+  exitedAt: string | null;
+  durationSeconds: number | null;
+  clipUrl: string | null;
+}
+
+export interface AreaEventsPage {
+  items: AreaViolationDto[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AreaZoneFeedDto {
+  id: string;
+  name: string;
+  polygon: Array<{ x: number; y: number }> | Array<[number, number]>;
+  ruleType: 'PROHIBIT_SPECIFIED' | 'ALLOW_SPECIFIED' | string;
+  targetLabels: string[];
+}
+
+export interface AreaDetectionDto {
+  trackId: number | null;
+  bbox: [number, number, number, number];
+  normalized_bbox?: [number, number, number, number];
+  class: string;
+  label: string;
+  confidence: number;
+  status: 'VIOLATION' | 'ALLOWED' | string;
+  zoneMatches?: Array<{
+    zoneId: string;
+    zoneName: string;
+    status: 'VIOLATION' | 'ALLOWED' | string;
+  }>;
+}
+
 export interface AreaEvent {
   id: string;
   time: string;
   obj: string;
   zone: string;
+  zoneId?: string;
+  trackId?: number | null;
+  source?: 'violation' | 'live_allowed';
   st: 'Được phép' | 'Vi phạm';
   ok: boolean;
+  clipUrl?: string | null;
+  durationSeconds?: number | null;
 }
 
 export interface PolygonZone {
@@ -37,6 +88,8 @@ export interface PolygonZone {
   color: string;
   points: [number, number][]; // [x, y] percentages 0-100
   types: Record<string, number>; // 1 = allowed, 0 = forbidden
+  ruleType?: 'PROHIBIT_SPECIFIED' | 'ALLOW_SPECIFIED';
+  targetLabels?: string[];
 }
 
 export interface ObjectLabel {

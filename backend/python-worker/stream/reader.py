@@ -32,6 +32,7 @@ class StreamReader:
         self.source = source
         self.cap: Optional[cv2.VideoCapture] = None
         self.is_image_fallback = False
+        self.is_synthetic = False
         self.fallback_frame: Optional[np.ndarray] = None
         self.frame_count = 0
         self.last_frame_time = 0.0
@@ -56,12 +57,12 @@ class StreamReader:
             logger.info("[%s] Using local video file: %s", self.camera_id, self.source)
             return
 
-        # Check fallback sample assets from frontend or data
+        # Check the camera's bundled sample asset relative to the repository root.
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[3]
+        asset_name = "cam-gate.png" if "GATE" in self.camera_id else "cam-baikiem.png"
         possible_asset_paths = [
-            f"frontend/public/assets/cam-{self.camera_id.lower().replace('-01', '').replace('_', '')}.png",
-            f"frontend/public/assets/cam-{ 'gate' if 'GATE' in self.camera_id else 'baikiem' }.png",
-            "frontend/public/assets/cam-gate.png",
-            "frontend/public/assets/cam-baikiem.png",
+            str(repo_root / "frontend" / "public" / "assets" / asset_name),
         ]
 
         for asset_path in possible_asset_paths:
@@ -79,6 +80,7 @@ class StreamReader:
                     )
                     return
 
+        self.is_synthetic = True
         logger.warning(
             "[%s] No physical stream or asset found for '%s'. Using synthetic test video generator.",
             self.camera_id,
@@ -87,7 +89,7 @@ class StreamReader:
 
     def _open_stream(self) -> None:
         """Open VideoCapture or mark ready for fallback."""
-        if self.is_image_fallback:
+        if self.is_image_fallback or self.is_synthetic:
             self.is_connected = True
             return
 
@@ -99,21 +101,16 @@ class StreamReader:
             else:
                 logger.warning("[%s] Failed to open VideoCapture for: %s", self.camera_id, self.source)
                 self.is_connected = False
+                self.is_synthetic = True
         else:
             self.is_connected = True
+            self.is_synthetic = True
 
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
         Read the next frame, resized to target resolution (640x480).
-        Handles video file loop, synthetic frame generation, and rate throttling.
+        Handles video file loop, synthetic frame generation without blocking sleeps.
         """
-        now = time.time()
-        min_interval = 1.0 / self.target_fps
-        elapsed = now - self.last_frame_time
-        if elapsed < min_interval:
-            time.sleep(max(0.001, min_interval - elapsed))
-
-        self.last_frame_time = time.time()
         self.frame_count += 1
 
         # 1. Image fallback (creates animated simulation overlay)
@@ -154,21 +151,15 @@ class StreamReader:
         return True, self._generate_synthetic_frame()
 
     def _generate_synthetic_frame(self) -> np.ndarray:
-        """Generate a realistic test frame with moving mock vehicles."""
+        """Generate a realistic test frame with simulated background."""
         self.synthetic_frame_index += 1
         w, h = self.resolution
-        frame = np.full((h, w, 3), 35, dtype=np.uint8)
+        frame = np.full((h, w, 3), 32, dtype=np.uint8)
 
         # Draw road / parking ground
-        cv2.rectangle(frame, (0, int(h * 0.4)), (w, h), (60, 60, 60), -1)
+        cv2.rectangle(frame, (0, int(h * 0.35)), (w, h), (55, 55, 55), -1)
         # Lane divider lines
-        cv2.line(frame, (0, int(h * 0.7)), (w, int(h * 0.7)), (200, 200, 200), 2)
-
-        # Draw a moving simulated box (vehicle / person)
-        x_pos = int((self.synthetic_frame_index * 8) % (w + 100)) - 80
-        y_pos = int(h * 0.55)
-        cv2.rectangle(frame, (x_pos, y_pos), (x_pos + 90, y_pos + 50), (40, 160, 220), -1)
-        cv2.putText(frame, "TEST-VEHICLE", (x_pos + 5, y_pos + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        cv2.line(frame, (0, int(h * 0.68)), (w, int(h * 0.68)), (190, 190, 190), 2)
 
         # Header info
         ts_str = time.strftime("%Y-%m-%d %H:%M:%S")

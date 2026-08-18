@@ -5,18 +5,18 @@
 ## Index identity
 
 - Master plan: `docs/plan/plan.md`
-- Backend root: `node-api/` (Node.js/Express/Prisma) + `python-worker/` (Python AI pipeline)
-- Plan revision: 1
-- Last reconciled: 2026-08-17T16:45:00+07:00
+- Backend root: `backend/node-api/` (Node.js/Express/Prisma) + `backend/python-worker/` (Python AI pipeline)
+- Plan revision: 1.3
+- Last reconciled: 2026-08-18T09:21:08+07:00
 
 ## Inputs
 
 | Source | Path | SHA-256/revision |
 |---|---|---|
-| Master plan | `docs/plan/plan.md` | rev 1 |
-| Product | `docs/product/product.md` | `871DEC9C` |
+| Master plan | `docs/plan/plan.md` | rev 1.3 |
+| Product | `docs/product/product.md` | `9C2C05C7` |
 | Architecture | `docs/architecture/architecture.md` | `45F59BC5` |
-| Database | `docs/database/database.md` | `F514CB6D` |
+| Database | `docs/database/database.md` | `C635952D` |
 
 ## Task index
 
@@ -28,6 +28,8 @@
 | FDN-WS-PROXY | `docs/backend/tasks/FDN-WS-PROXY.md` | Hữu Thuận | backend_verified | FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION | complete — Node.js WebSocket proxy (Python -> Node -> Browser) verified |
 | FDN-PYTHON-STREAM | `docs/backend/tasks/FDN-PYTHON-STREAM.md` | Hữu Thuận | backend_verified | FDN-REPO-SCAFFOLD, FDN-WS-PROXY | complete — OpenCV stream reader + YOLO detection pipeline verified |
 | FDN-API-CONTRACT | `docs/backend/tasks/FDN-API-CONTRACT.md` | Hữu Thuận | backend_verified | FDN-DB-MIGRATION, FDN-WS-PROXY | complete — Express REST scaffold, error contract, and health checks verified |
+| VS-GATE-LIVE | `docs/backend/tasks/VS-GATE-LIVE.md` | Phạm Hưng | pending | FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION, FDN-PYTHON-DB, FDN-WS-PROXY, FDN-PYTHON-STREAM, FDN-API-CONTRACT | all foundation gates are complete; assigned owner can start the camera-specific Gate slice |
+| VS-AREA-VIOLATION | `docs/backend/tasks/VS-AREA-VIOLATION.md` | Hữu Thuận | backend_verified | FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION, FDN-PYTHON-DB, FDN-WS-PROXY, FDN-PYTHON-STREAM, FDN-API-CONTRACT | complete — camera-specific Area pipeline, REST/WS contracts, and unit/integration tests verified |
 | VS-SETTINGS-VEHICLE | `docs/backend/tasks/VS-SETTINGS-VEHICLE.md` | Phạm Hưng | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT | wait for FDN-DB-MIGRATION |
 | VS-SETTINGS-ZONE | `docs/backend/tasks/VS-SETTINGS-ZONE.md` | Phạm Hưng | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT | wait for FDN-DB-MIGRATION |
 | VS-SETTINGS-LABEL | `docs/backend/tasks/VS-SETTINGS-LABEL.md` | Phạm Hưng | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT | wait for FDN-DB-MIGRATION |
@@ -36,6 +38,7 @@
 
 ## Index rules
 
+- This file is a compact backend index, not an implementation plan. The execution authority for this slice is `docs/backend/tasks/VS-AREA-VIOLATION.md`.
 - Master plan owns scope and topology.
 - Per-slice task files own backend execution evidence.
 - Do not place full task bodies in this index.

@@ -1,8 +1,5 @@
-/**
- * api/events.ts — Gate & Area Monitoring Events API (VS-GATE-LIVE, VS-AREA-VIOLATION)
- */
 import { apiClient, API_BASE_URL } from './client';
-import type { AreaEvent, GateEvent } from '../types';
+import type { AreaEventsPage, GateEvent } from '../types';
 
 export async function getGateEvents(params?: {
   limit?: number;
@@ -20,16 +17,18 @@ export async function getGateEvents(params?: {
 
 export async function getAreaEvents(params?: {
   limit?: number;
-  cameraId?: string;
+  offset?: number;
   zoneId?: string;
-}): Promise<AreaEvent[]> {
+  status?: 'OPEN' | 'CLOSED';
+}): Promise<AreaEventsPage> {
   const query = new URLSearchParams();
-  if (params?.limit) query.set('limit', String(params.limit));
-  if (params?.cameraId) query.set('camera_id', params.cameraId);
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.offset !== undefined) query.set('offset', String(params.offset));
   if (params?.zoneId) query.set('zone_id', params.zoneId);
+  if (params?.status) query.set('status', params.status);
 
   const qs = query.toString() ? `?${query.toString()}` : '';
-  return apiClient.get<AreaEvent[]>(`/events/area${qs}`);
+  return apiClient.get<AreaEventsPage>(`/events/area${qs}`);
 }
 
 export function getCropImageUrl(cropPathOrName?: string | null): string {
@@ -49,5 +48,5 @@ export function getClipUrl(clipPathOrName?: string | null): string {
   }
   const cleanName = clipPathOrName.replace(/^.*[\\/]/, '');
   const baseUrl = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
-  return `${baseUrl}/data/clips/${cleanName}`;
+  return `${baseUrl}/data/clips/${encodeURIComponent(cleanName)}`;
 }

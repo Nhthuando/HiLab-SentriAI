@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type {
   TabId,
   SettingsSubTab,
@@ -15,7 +15,6 @@ import {
   INITIAL_VEHICLES,
   INITIAL_LABELS,
   INITIAL_GATE_EVENTS,
-  INITIAL_AREA_EVENTS,
   INITIAL_ZONES,
   INITIAL_OBJ_LABELS,
   INITIAL_ANN_SOURCES,
@@ -34,6 +33,7 @@ import { ObjectLabelTab } from './components/Settings/ObjectLabelTab';
 import { ThemeSettingsTab } from './components/Settings/ThemeSettingsTab';
 import { AIQAChat } from './components/AIQAChat';
 import { FloatingAlert } from './components/FloatingAlert';
+import { useBroadcastChannel, useWebSocket } from './hooks';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('mon');
@@ -58,7 +58,6 @@ export const App: React.FC = () => {
   const [vehicles] = useState(INITIAL_VEHICLES);
   const [labels, setLabels] = useState<Record<string, 'quen' | 'la'>>(INITIAL_LABELS);
   const [gateEvents] = useState(INITIAL_GATE_EVENTS);
-  const [areaEvents] = useState(INITIAL_AREA_EVENTS);
   const [zonesByCam, setZonesByCam] = useState<Record<string, PolygonZone[]>>(INITIAL_ZONES);
   const [objLabels, setObjLabels] = useState<ObjectLabel[]>(INITIAL_OBJ_LABELS);
   const [annSources] = useState<AnnotationSource[]>(INITIAL_ANN_SOURCES);
@@ -67,6 +66,8 @@ export const App: React.FC = () => {
 
   // Floating cross-tab notification
   const [floatingAlert, setFloatingAlert] = useState<FloatingNotification | null>(null);
+  const seenAreaAlertIdsRef = useRef(new Set<string>());
+  const pendingHiddenAlertRef = useRef<FloatingNotification | null>(null);
 
   // Synchronize Theme & Preferences to DOM and LocalStorage
   useEffect(() => {
@@ -258,24 +259,101 @@ export const App: React.FC = () => {
     setChatMessages((prev) => [...prev, userMsg, aiMsg]);
   };
 
-  // Simulate cross-tab floating alert if user is in Settings or QA
-  useEffect(() => {
-    if (activeTab === 'set' || activeTab === 'qa') {
-      const timer = setTimeout(() => {
-        setFloatingAlert({
-          id: 'alert-' + Date.now(),
-          title: 'CẢNH BÁO VI PHẠM ZONE',
-          message: 'Phát hiện Xe máy lạ vừa đi vào Zone cấm phương tiện cá nhân!',
-          zone: 'BAI-KIEM · Zone cấm PT cá nhân',
-          time: clockStr,
-          camId: 'BAI-KIEM'
-        });
-      }, 7000);
-      return () => clearTimeout(timer);
-    } else {
-      setFloatingAlert(null);
+  const acceptAreaAlert = (notification: FloatingNotification): boolean => {
+    if (seenAreaAlertIdsRef.current.has(notification.id)) return false;
+
+    seenAreaAlertIdsRef.current.add(notification.id);
+    if (seenAreaAlertIdsRef.current.size > 200) {
+      seenAreaAlertIdsRef.current.clear();
+      seenAreaAlertIdsRef.current.add(notification.id);
     }
-  }, [activeTab, clockStr]);
+
+    if (document.hidden && activeTab !== 'area') {
+      pendingHiddenAlertRef.current = notification;
+    } else if (activeTab !== 'area') {
+      setFloatingAlert(notification);
+    }
+    return true;
+  };
+
+  // Cross-tab BroadcastChannel for alert synchronization (BR-08)
+  const { postMessage: broadcastAlert } = useBroadcastChannel<FloatingNotification>(
+    'sentriai-alerts',
+    (incomingAlert) => {
+      if (
+        incomingAlert &&
+        typeof incomingAlert.id === 'string' &&
+        incomingAlert.camId === 'BAI-KIEM'
+      ) {
+        acceptAreaAlert(incomingAlert);
+      }
+    }
+  );
+
+  // Real-time WebSocket /ws/alerts subscription for urgent area violations
+  useWebSocket<{
+    type: string;
+    level: string;
+    title: string;
+    message: string;
+    cameraId?: string;
+    timestamp: string;
+    data?: Record<string, unknown>;
+  }>({
+    path: '/ws/alerts',
+    onMessage: (msg) => {
+      const alertData = msg?.data;
+      if (
+        !msg ||
+        msg.type !== 'alert' ||
+        msg.level !== 'critical' ||
+        msg.cameraId !== 'BAI-KIEM' ||
+        !alertData ||
+        typeof alertData.violationId !== 'string' ||
+        typeof alertData.zoneName !== 'string' ||
+        typeof msg.title !== 'string' ||
+        typeof msg.message !== 'string'
+      ) return;
+
+      const timestamp = new Date(msg.timestamp);
+      if (Number.isNaN(timestamp.getTime())) return;
+      const pad = (value: number) => String(value).padStart(2, '0');
+      const time = `${pad(timestamp.getHours())}:${pad(timestamp.getMinutes())}:${pad(timestamp.getSeconds())}`;
+
+      const notif: FloatingNotification = {
+        id: alertData.violationId,
+        title: msg.title,
+        message: msg.message,
+        zone: `BAI-KIEM · ${alertData.zoneName}`,
+        time,
+        camId: 'BAI-KIEM',
+      };
+
+      if (acceptAreaAlert(notif)) {
+        broadcastAlert(notif);
+      }
+    },
+  });
+
+  // Automatically dismiss floating alert when user navigates to area tab
+  useEffect(() => {
+    if (activeTab === 'area') {
+      setFloatingAlert(null);
+      pendingHiddenAlertRef.current = null;
+      return;
+    }
+
+    const showPendingAlert = () => {
+      if (!document.hidden && pendingHiddenAlertRef.current) {
+        setFloatingAlert(pendingHiddenAlertRef.current);
+        pendingHiddenAlertRef.current = null;
+      }
+    };
+
+    document.addEventListener('visibilitychange', showPendingAlert);
+    showPendingAlert();
+    return () => document.removeEventListener('visibilitychange', showPendingAlert);
+  }, [activeTab]);
 
   return (
     <div
@@ -312,8 +390,6 @@ export const App: React.FC = () => {
         {activeTab === 'area' && (
           <AreaMonitor
             clock={clockStr}
-            zones={zonesByCam['BAI-KIEM'] || []}
-            events={areaEvents}
           />
         )}
 

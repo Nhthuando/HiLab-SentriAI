@@ -1,16 +1,20 @@
-/**
- * hooks/useCameraFeed.ts — Dedicated Hook for Live Camera Video Feeds & Bounding Boxes
- */
 import { useState, useCallback } from 'react';
 import { useWebSocket } from './useWebSocket';
+import type { AreaZoneFeedDto } from '../types';
 
 export interface BoundingBoxDetection {
   bbox: [number, number, number, number]; // [x1, y1, x2, y2]
+  normalized_bbox?: [number, number, number, number];
   class: string;
   confidence: number;
   label?: string;
-  status?: 'KNOWN' | 'STRANGER' | 'VIOLATION' | 'NORMAL' | string;
-  normalized_bbox?: [number, number, number, number];
+  trackId?: number | null;
+  status?: 'KNOWN' | 'STRANGER' | 'VIOLATION' | 'ALLOWED' | 'NORMAL' | string;
+  zoneMatches?: Array<{
+    zoneId: string;
+    zoneName: string;
+    status: 'VIOLATION' | 'ALLOWED' | string;
+  }>;
 }
 
 export interface FramePacket {
@@ -20,6 +24,7 @@ export interface FramePacket {
   image: string; // base64 JPEG
   fps?: number;
   detections?: BoundingBoxDetection[];
+  zones?: AreaZoneFeedDto[];
 }
 
 export interface StatusPacket {
@@ -35,6 +40,7 @@ export type FeedMessage = FramePacket | StatusPacket;
 export interface UseCameraFeedReturn {
   frameImage: string | null;
   detections: BoundingBoxDetection[];
+  zones: AreaZoneFeedDto[];
   fps: number;
   isOnline: boolean;
   statusText: string;
@@ -45,6 +51,7 @@ export interface UseCameraFeedReturn {
 export function useCameraFeed(cameraId: string): UseCameraFeedReturn {
   const [frameImage, setFrameImage] = useState<string | null>(null);
   const [detections, setDetections] = useState<BoundingBoxDetection[]>([]);
+  const [zones, setZones] = useState<AreaZoneFeedDto[]>([]);
   const [fps, setFps] = useState<number>(10.0);
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [statusText, setStatusText] = useState<string>('ONLINE');
@@ -62,6 +69,9 @@ export function useCameraFeed(cameraId: string): UseCameraFeedReturn {
       const frame = msg as FramePacket;
       setFrameImage(frame.image);
       setDetections(frame.detections || []);
+      if (frame.zones) {
+        setZones(frame.zones);
+      }
       if (frame.fps !== undefined) {
         setFps(frame.fps);
       }
@@ -92,6 +102,7 @@ export function useCameraFeed(cameraId: string): UseCameraFeedReturn {
   return {
     frameImage,
     detections,
+    zones,
     fps,
     isOnline: isConnected && isOnline,
     statusText: isConnected && isOnline ? statusText : 'Mất kết nối',
