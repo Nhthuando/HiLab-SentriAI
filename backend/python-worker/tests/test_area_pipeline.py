@@ -16,6 +16,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 # Ensure python-worker directory is on sys.path
@@ -30,6 +31,7 @@ from shapely.geometry import Point
 
 from buffer.circular_buffer import CircularBuffer
 from detection.area_pipeline import AreaPipeline
+from stream.reader import StreamReader
 from zone.zone_checker import (
     ActiveViolation,
     ViolationTransition,
@@ -141,7 +143,11 @@ class TestZoneRuleMatrix(unittest.TestCase):
 
 class TestViolationStateMachine(unittest.TestCase):
     def setUp(self):
-        self.checker = ZoneChecker(camera_id="BAI-KIEM", grace_frames=3)
+        self.checker = ZoneChecker(
+            camera_id="BAI-KIEM",
+            grace_frames=3,
+            minimum_violation_seconds=0.0,
+        )
         self.test_zones = [
             {
                 "id": "zone-1",
@@ -293,15 +299,86 @@ class TestViolationStateMachine(unittest.TestCase):
         self.checker.check_detections(inside, self.test_zones, self.class_map, timestamp=t0)
 
         _, before_timeout = self.checker.check_detections(
-            [], self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=4.9)
+            [], self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=11.9)
         )
         self.assertEqual(before_timeout, [])
 
         _, after_timeout = self.checker.check_detections(
-            [], self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=5.0)
+            [], self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=12.0)
         )
         self.assertEqual(len(after_timeout), 1)
         self.assertEqual(after_timeout[0].action, "ENDED")
+
+    def test_outside_detection_is_not_classified_as_allowed(self):
+        t0 = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+        outside = [{
+            "trackId": 1,
+            "bbox": [500, 300, 600, 450],
+            "normalized_bbox": [0.75, 0.5, 0.9, 0.9],
+            "class": "motorcycle",
+            "label": "Xe mĂ¡y",
+            "confidence": 0.9,
+        }]
+
+        annotated, transitions = self.checker.check_detections(
+            outside, self.test_zones, self.class_map, timestamp=t0
+        )
+        self.assertEqual(annotated[0]["status"], "OUTSIDE")
+        self.assertEqual(annotated[0]["zoneMatches"], [])
+        self.assertEqual(transitions, [])
+
+    def test_violation_under_one_second_never_starts_event(self):
+        checker = ZoneChecker(
+            camera_id="BAI-KIEM",
+            grace_frames=3,
+            minimum_violation_seconds=1.0,
+        )
+        t0 = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+        inside = [{
+            "trackId": 1,
+            "bbox": [100, 100, 200, 200],
+            "normalized_bbox": [0.2, 0.2, 0.3, 0.4],
+            "class": "motorcycle",
+            "label": "Xe mĂ¡y",
+            "confidence": 0.9,
+        }]
+
+        _, first_frame = checker.check_detections(
+            inside, self.test_zones, self.class_map, timestamp=t0
+        )
+        self.assertEqual(first_frame, [])
+        self.assertEqual(len(checker.pending_violations), 1)
+
+        _, short_exit = checker.check_detections(
+            [], self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=0.9)
+        )
+        self.assertEqual(short_exit, [])
+        self.assertEqual(checker.active_violations, {})
+        self.assertEqual(checker.pending_violations, {})
+
+    def test_violation_starts_after_one_second_confirmation(self):
+        checker = ZoneChecker(
+            camera_id="BAI-KIEM",
+            grace_frames=3,
+            minimum_violation_seconds=1.0,
+        )
+        t0 = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
+        inside = [{
+            "trackId": 1,
+            "bbox": [100, 100, 200, 200],
+            "normalized_bbox": [0.2, 0.2, 0.3, 0.4],
+            "class": "motorcycle",
+            "label": "Xe mĂ¡y",
+            "confidence": 0.9,
+        }]
+
+        checker.check_detections(inside, self.test_zones, self.class_map, timestamp=t0)
+        _, transitions = checker.check_detections(
+            inside, self.test_zones, self.class_map, timestamp=t0 + timedelta(seconds=1)
+        )
+
+        self.assertEqual([transition.action for transition in transitions], ["STARTED"])
+        self.assertEqual(transitions[0].entered_at, t0)
 
     def test_boundary_jitter_does_not_close_or_reopen_violation(self):
         t0 = datetime(2026, 8, 18, 10, 0, 0, tzinfo=timezone.utc)
@@ -407,6 +484,44 @@ class TestBrowserCompatibleClipEncoding(unittest.TestCase):
             capture.release()
         finally:
             output_path.unlink(missing_ok=True)
+
+
+class TestStreamReaderLoopSignal(unittest.TestCase):
+    def test_local_video_rewind_sets_source_reset_signal(self):
+        reader = StreamReader(source=None, camera_id="BAI-KIEM", resolution=(64, 48))
+        capture = MagicMock()
+        capture.isOpened.return_value = True
+        frame = np.zeros((48, 64, 3), dtype=np.uint8)
+        capture.read.side_effect = [(False, None), (True, frame)]
+        reader.cap = capture
+        reader.is_image_fallback = False
+        reader.is_synthetic = False
+
+        success, output = reader.read_frame()
+
+        self.assertTrue(success)
+        self.assertIsNotNone(output)
+        self.assertTrue(reader.did_loop)
+        capture.set.assert_called_once_with(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    def test_local_video_skips_frames_to_keep_source_speed(self):
+        reader = StreamReader(source=None, camera_id="BAI-KIEM", resolution=(64, 48))
+        capture = MagicMock()
+        capture.isOpened.return_value = True
+        capture.read.return_value = (True, np.zeros((48, 64, 3), dtype=np.uint8))
+        capture.grab.return_value = True
+        reader.cap = capture
+        reader.is_image_fallback = False
+        reader.is_synthetic = False
+        reader.is_local_file = True
+        reader.source_fps = 50.0
+        reader._last_local_frame_at = 10.0
+
+        with patch("stream.reader.time.monotonic", return_value=10.1):
+            success, _ = reader.read_frame()
+
+        self.assertTrue(success)
+        self.assertEqual(capture.grab.call_count, 4)
 
 
 class TestAreaPipelineExecution(unittest.TestCase):

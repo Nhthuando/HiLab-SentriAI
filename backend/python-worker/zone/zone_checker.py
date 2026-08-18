@@ -166,6 +166,19 @@ class ActiveViolation:
 
 
 @dataclass
+class PendingViolation:
+    camera_id: str
+    track_id: int
+    zone_id: str
+    zone_name: str
+    object_label: str
+    entered_at: datetime
+    last_seen_inside: datetime
+    normalized_bbox: Tuple[float, float, float, float]
+    yolo_class: str
+
+
+@dataclass
 class ViolationTransition:
     action: str  # 'STARTED' or 'ENDED'
     violation_id: str
@@ -189,8 +202,9 @@ class ZoneChecker:
         self,
         camera_id: str = "BAI-KIEM",
         grace_frames: int = 3,
-        missing_grace_seconds: float = 5.0,
+        missing_grace_seconds: float = 12.0,
         boundary_hysteresis: float = 0.02,
+        minimum_violation_seconds: float = 1.0,
     ):
         self.camera_id = camera_id
         self.grace_frames = max(1, int(grace_frames))
@@ -199,8 +213,10 @@ class ZoneChecker:
         # 0.02 is roughly 13px: enough to absorb detector jitter at a zone edge
         # without treating a genuine exit as inside.
         self.boundary_hysteresis = min(0.1, max(0.0, float(boundary_hysteresis)))
+        self.minimum_violation_seconds = max(0.0, float(minimum_violation_seconds))
         # Key: (camera_id, track_id, zone_id)
         self.active_violations: Dict[Tuple[str, int, str], ActiveViolation] = {}
+        self.pending_violations: Dict[Tuple[str, int, str], PendingViolation] = {}
 
     def discard_started_transition(self, transition: ViolationTransition) -> None:
         """Drop a just-opened in-memory event when its DB insert failed."""
@@ -406,7 +422,14 @@ class ZoneChecker:
             # Sort zoneMatches by zoneName then zoneId
             zone_matches.sort(key=lambda m: (m["zoneName"], m["zoneId"]))
 
-            overall_status = "VIOLATION" if has_violation else "ALLOWED"
+            # A detected object outside every zone has no rule result. Keep that
+            # distinction explicit so the frontend never presents it as
+            # "ĐƯỢC PHÉP" or adds it to the Area panel.
+            overall_status = (
+                "VIOLATION"
+                if has_violation
+                else ("ALLOWED" if zone_matches else "OUTSIDE")
+            )
             chosen_label = first_violating_label or choose_display_label(candidates)
 
             annotated_det = dict(det)
@@ -453,39 +476,67 @@ class ZoneChecker:
                     active.yolo_class = yolo_class
                     self.active_violations[key] = active
                 else:
-                    # New transition: OPEN
-                    vid = str(uuid.uuid4())
-                    active = ActiveViolation(
-                        violation_id=vid,
-                        camera_id=cam_id,
-                        track_id=track_id,
-                        zone_id=zone_id,
-                        zone_name=zone_name,
-                        object_label=obj_label,
-                        entered_at=now,
-                        last_seen_inside=now,
-                        consecutive_outside=0,
-                        normalized_bbox=norm_bbox,
-                        yolo_class=yolo_class,
-                    )
-                    self.active_violations[key] = active
+                    pending = self.pending_violations.get(key)
+                    if pending is None:
+                        pending = PendingViolation(
+                            camera_id=cam_id,
+                            track_id=track_id,
+                            zone_id=zone_id,
+                            zone_name=zone_name,
+                            object_label=obj_label,
+                            entered_at=now,
+                            last_seen_inside=now,
+                            normalized_bbox=norm_bbox,
+                            yolo_class=yolo_class,
+                        )
+                        self.pending_violations[key] = pending
 
-                    transitions.append(ViolationTransition(
-                        action="STARTED",
-                        violation_id=vid,
-                        camera_id=cam_id,
-                        track_id=track_id,
-                        zone_id=zone_id,
-                        zone_name=zone_name,
-                        object_label=obj_label,
-                        status="OPEN",
-                        entered_at=now,
-                    ))
+                    if (
+                        now - pending.entered_at
+                    ).total_seconds() >= self.minimum_violation_seconds:
+                        # Confirm only sustained violations. Brief detections
+                        # never reach DB/WS/the event panel.
+                        vid = str(uuid.uuid4())
+                        active = ActiveViolation(
+                            violation_id=vid,
+                            camera_id=cam_id,
+                            track_id=track_id,
+                            zone_id=zone_id,
+                            zone_name=zone_name,
+                            object_label=obj_label,
+                            entered_at=pending.entered_at,
+                            last_seen_inside=now,
+                            consecutive_outside=0,
+                            normalized_bbox=norm_bbox,
+                            yolo_class=yolo_class,
+                        )
+                        self.active_violations[key] = active
+                        del self.pending_violations[key]
+
+                        transitions.append(ViolationTransition(
+                            action="STARTED",
+                            violation_id=vid,
+                            camera_id=cam_id,
+                            track_id=track_id,
+                            zone_id=zone_id,
+                            zone_name=zone_name,
+                            object_label=obj_label,
+                            status="OPEN",
+                            entered_at=active.entered_at,
+                        ))
+                    else:
+                        pending.last_seen_inside = now
+                        pending.normalized_bbox = norm_bbox
+                        pending.yolo_class = yolo_class
 
         # 2. Check active violations not seen as violating in this frame.
         # A confirmed track seen outside/allowed is a real exit candidate and uses the
         # short frame grace. A missing track is held by wall-clock time so intermittent
         # detector loss or ByteTrack renumbering cannot repeatedly reopen the same event.
+        for key in list(self.pending_violations):
+            if key not in current_violations_in_frame:
+                del self.pending_violations[key]
+
         keys_to_remove: List[Tuple[str, int, str]] = []
         for key, active in list(self.active_violations.items()):
             if key not in current_violations_in_frame:

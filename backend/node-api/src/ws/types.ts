@@ -34,7 +34,7 @@ export interface DetectionBox {
   confidence: number;
   label?: string;
   trackId?: number | null;
-  status?: 'KNOWN' | 'STRANGER' | 'VIOLATION' | 'ALLOWED' | 'NORMAL' | string;
+  status?: 'KNOWN' | 'STRANGER' | 'VIOLATION' | 'ALLOWED' | 'OUTSIDE' | 'NORMAL' | string;
   zoneMatches?: AreaZoneMatch[];
 }
 
@@ -46,6 +46,7 @@ export interface FrameMessage {
   fps?: number;
   detections?: DetectionBox[];
   zones?: AreaZoneFeedDto[];
+  sourceReset?: boolean;
 }
 
 export interface GateEventMessage {

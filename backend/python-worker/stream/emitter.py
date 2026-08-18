@@ -63,6 +63,7 @@ class StreamEmitter:
         detections: List[Dict[str, Any]],
         fps: float = 10.0,
         zones: Optional[List[Dict[str, Any]]] = None,
+        source_reset: bool = False,
     ) -> bool:
         """
         Send a video frame with bounding box detections to Node.js feed channel.
@@ -79,6 +80,8 @@ class StreamEmitter:
         }
         if zones is not None:
             payload["zones"] = zones
+        if source_reset:
+            payload["sourceReset"] = True
         return await self._send_json(path, payload)
 
     async def emit_gate_event(self, event_data: Dict[str, Any]) -> bool:

@@ -60,7 +60,7 @@ export interface AreaDetectionDto {
   class: string;
   label: string;
   confidence: number;
-  status: 'VIOLATION' | 'ALLOWED' | string;
+  status: 'VIOLATION' | 'ALLOWED' | 'OUTSIDE' | string;
   zoneMatches?: Array<{
     zoneId: string;
     zoneName: string;

@@ -38,6 +38,11 @@ class StreamReader:
         self.last_frame_time = 0.0
         self.is_connected = False
         self.synthetic_frame_index = 0
+        # True only for the first frame after a local video rewinds.
+        self.did_loop = False
+        self.is_local_file = False
+        self.source_fps = 0.0
+        self._last_local_frame_at: Optional[float] = None
 
         self._resolve_source()
         self._open_stream()
@@ -54,6 +59,7 @@ class StreamReader:
 
         # Check if local video file exists
         if self.source and os.path.exists(self.source):
+            self.is_local_file = True
             logger.info("[%s] Using local video file: %s", self.camera_id, self.source)
             return
 
@@ -97,6 +103,7 @@ class StreamReader:
             self.cap = cv2.VideoCapture(self.source)
             if self.cap.isOpened():
                 self.is_connected = True
+                self.source_fps = max(0.0, float(self.cap.get(cv2.CAP_PROP_FPS)))
                 logger.info("[%s] VideoCapture opened successfully.", self.camera_id)
             else:
                 logger.warning("[%s] Failed to open VideoCapture for: %s", self.camera_id, self.source)
@@ -106,12 +113,34 @@ class StreamReader:
             self.is_connected = True
             self.is_synthetic = True
 
+    def _advance_local_video_for_elapsed_time(self) -> None:
+        """Skip local-file frames so a high-FPS test clip keeps source speed."""
+        if (
+            not self.is_local_file
+            or self.cap is None
+            or not self.cap.isOpened()
+            or self.source_fps <= 0.0
+        ):
+            return
+
+        now = time.monotonic()
+        previous = self._last_local_frame_at
+        self._last_local_frame_at = now
+        if previous is None:
+            return
+
+        source_frames_elapsed = max(1, int(round((now - previous) * self.source_fps)))
+        for _ in range(source_frames_elapsed - 1):
+            if not self.cap.grab():
+                break
+
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
         Read the next frame, resized to target resolution (640x480).
         Handles video file loop, synthetic frame generation without blocking sleeps.
         """
         self.frame_count += 1
+        self.did_loop = False
 
         # 1. Image fallback (creates animated simulation overlay)
         if self.is_image_fallback and self.fallback_frame is not None:
@@ -135,13 +164,16 @@ class StreamReader:
             ret, frame = self.cap.read()
             if ret and frame is not None:
                 resized = cv2.resize(frame, self.resolution)
+                self._advance_local_video_for_elapsed_time()
                 return True, resized
             else:
                 # End of video file -> rewind to beginning
+                self.did_loop = True
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = self.cap.read()
                 if ret and frame is not None:
                     resized = cv2.resize(frame, self.resolution)
+                    self._advance_local_video_for_elapsed_time()
                     return True, resized
                 else:
                     logger.warning("[%s] Stream read returned empty frame. Attempting reconnect...", self.camera_id)

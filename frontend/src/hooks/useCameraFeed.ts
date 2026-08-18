@@ -25,6 +25,7 @@ export interface FramePacket {
   fps?: number;
   detections?: BoundingBoxDetection[];
   zones?: AreaZoneFeedDto[];
+  sourceReset?: boolean;
 }
 
 export interface StatusPacket {
@@ -45,6 +46,7 @@ export interface UseCameraFeedReturn {
   isOnline: boolean;
   statusText: string;
   lastTimestamp: number | null;
+  sourceResetSequence: number;
   reconnect: () => void;
 }
 
@@ -56,6 +58,7 @@ export function useCameraFeed(cameraId: string): UseCameraFeedReturn {
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [statusText, setStatusText] = useState<string>('ONLINE');
   const [lastTimestamp, setLastTimestamp] = useState<number | null>(null);
+  const [sourceResetSequence, setSourceResetSequence] = useState<number>(0);
 
   const canonicalPath =
     cameraId.toUpperCase().includes('GATE')
@@ -76,6 +79,9 @@ export function useCameraFeed(cameraId: string): UseCameraFeedReturn {
         setFps(frame.fps);
       }
       setLastTimestamp(frame.timestamp);
+      if (frame.sourceReset) {
+        setSourceResetSequence((current) => current + 1);
+      }
       setIsOnline(true);
       setStatusText('ONLINE');
     } else if (msg.type === 'status') {
@@ -107,6 +113,7 @@ export function useCameraFeed(cameraId: string): UseCameraFeedReturn {
     isOnline: isConnected && isOnline,
     statusText: isConnected && isOnline ? statusText : 'Mất kết nối',
     lastTimestamp,
+    sourceResetSequence,
     reconnect,
   };
 }

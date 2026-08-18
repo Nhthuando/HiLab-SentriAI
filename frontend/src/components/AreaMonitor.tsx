@@ -247,16 +247,18 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
         }}
       >
         {/* Left: Feed & Type Rules */}
-        <div>
+        <div style={{ paddingTop: '54px' }}>
           <div
             style={{
               position: 'relative',
               width: '100%',
-              aspectRatio: '16/9',
+              // Worker frames and normalized zone/bbox coordinates are 640x480.
+              // Keeping the same 4:3 canvas prevents visual coordinate drift.
+              aspectRatio: '4 / 3',
               backgroundColor: '#07090c',
               border: '1px solid var(--line2)',
               borderRadius: '16px',
-              overflow: 'hidden',
+              overflow: 'visible',
               boxShadow: 'var(--shadow-lg)',
             }}
           >
@@ -270,14 +272,16 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                   inset: 0,
                   width: '100%',
                   height: '100%',
-                  objectFit: 'cover',
+                  objectFit: 'fill',
+                  borderRadius: '15px',
                 }}
               />
             ) : (
-              <div
-                style={{
-                  position: 'absolute',
-                  inset: 0,
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    borderRadius: '15px',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
@@ -345,9 +349,9 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
               className="glass-panel"
               style={{
                 position: 'absolute',
-                left: '12px',
-                right: '12px',
-                top: '12px',
+                left: 0,
+                right: 0,
+                top: '-54px',
                 borderRadius: '10px',
                 padding: '8px 14px',
                 display: 'flex',
@@ -511,7 +515,9 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
             })}
 
             {/* Real-Time Detected Objects with Bounding Boxes */}
-            {displayDetections.map((det, idx) => {
+            {displayDetections
+              .filter((det) => det.zoneMatches && det.zoneMatches.length > 0)
+              .map((det, idx) => {
               const key = `det-${det.trackId ?? idx}`;
               const isHighlighted = isDetectionMatchingHover(det, idx);
 
@@ -591,7 +597,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                   </span>
                 </div>
               );
-            })}
+              })}
           </div>
 
           {/* Type Rule Chips */}

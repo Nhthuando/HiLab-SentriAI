@@ -80,7 +80,11 @@ class AreaPipeline:
         self.buffer = CircularBuffer(max_seconds=15.0, target_fps=target_fps)
         self.emitter = emitter or StreamEmitter()
         self.zone_sync = zone_sync or ZoneSynchronizer(camera_id=camera_id, sync_interval=5.0)
-        self.zone_checker = zone_checker or ZoneChecker(camera_id=camera_id, grace_frames=3)
+        self.zone_checker = zone_checker or ZoneChecker(
+            camera_id=camera_id,
+            grace_frames=3,
+            missing_grace_seconds=12.0,
+        )
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -160,6 +164,7 @@ class AreaPipeline:
             "zones": feed_zones,
             "transitions": transitions,
             "fps": self.fps_measured or self.target_fps,
+            "source_reset": self.reader.did_loop,
         }
 
     async def _handle_transition(self, t: ViolationTransition) -> None:
@@ -323,6 +328,7 @@ class AreaPipeline:
                         detections=result["detections"],
                         fps=result["fps"],
                         zones=result["zones"],
+                        source_reset=result.get("source_reset", False),
                     )
 
                     # 2. Handle state machine transitions (STARTED / ENDED)

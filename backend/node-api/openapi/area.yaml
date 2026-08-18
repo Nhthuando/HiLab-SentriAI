@@ -249,7 +249,7 @@ components:
           type: string
         status:
           type: string
-          enum: [VIOLATION, ALLOWED]
+          enum: [VIOLATION, ALLOWED, OUTSIDE]
 
     AreaDetectionDto:
       type: object
@@ -289,7 +289,7 @@ components:
           example: 0.91
         status:
           type: string
-          enum: [VIOLATION, ALLOWED]
+          enum: [VIOLATION, ALLOWED, OUTSIDE]
         zoneMatches:
           type: array
           items:
@@ -328,6 +328,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AreaZoneFeedDto'
+        sourceReset:
+          type: boolean
+          description: Present and true only on the first frame after a local video source rewinds.
 
     AreaEventMessage:
       type: object

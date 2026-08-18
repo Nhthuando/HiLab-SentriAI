@@ -160,7 +160,7 @@ interface AreaDetectionDto {
 }
 ```
 
-- `/ws/feed/area` is the foundation `FramePacket` extended with `detections: AreaDetectionDto[]` and `zones: AreaZoneFeedDto[]`.
+- `/ws/feed/area` is the foundation `FramePacket` extended with `detections: AreaDetectionDto[]`, `zones: AreaZoneFeedDto[]`, and optional `sourceReset: true` on the first frame after a local video file rewinds.
 - `/ws/events/area` is `{ type:'zone_violation'; action:AreaAction } & AreaViolationDto`.
 - `/ws/alerts` is the exact backend alert contract; accept only `type='alert'`, `level='critical'`, and `cameraId='BAI-KIEM'` for this slice.
 
@@ -261,7 +261,7 @@ interface AreaDetectionDto {
   1. Start Python worker (`main.py`), Node API (`src/index.ts`), and frontend (`npm run dev`) with BAI-KIEM video/zone data.
   2. Open browser tab A on “Giám sát khu vực”; confirm real feed, zone polygons/rule chips, and green allowed bbox.
   3. Trigger a prohibited object entry; confirm one red bbox and one violation row appear, with no repeated row/alert while it remains inside.
-  4. Move the object out; confirm the same row closes and duration displays (`<1s` is valid for a sub-second pass).
+  4. Move the object out after at least one second; confirm the same row closes. An object visible for under one second must not create a row.
   5. Open browser tab B on Settings or Q&A, trigger another entry, confirm one floating alert, click “Xem camera ngay →”, and confirm navigation to Area plus dismissal.
   6. Temporarily stop/restart the Node/Python connection; confirm “Mất kết nối”, automatic recovery, and no app crash.
 - User acceptance result: not_run
@@ -293,6 +293,14 @@ interface AreaDetectionDto {
 - Restricts Area floating alerts to a validated critical BAI-KIEM alert and de-duplicates violation IDs with a bounded set.
 - When the SPA is already on Area, a hidden browser document no longer retains a toast that would appear late on another tab.
 - Static inspection only. No lint, build, typecheck, service startup, browser automation, or manual acceptance was run after these changes.
+
+## Detection presentation stabilization (2026-08-18)
+
+- The live HUD now occupies space above the feed. The image and all normalized overlays use the worker's native 4:3 geometry, preventing the previous 16:9 `cover` crop from making zone boundaries appear to disagree with detections.
+- The Area hook keeps only in-zone detections, holds a missing presentation track for 12 seconds, and reconnects a spatially continuous replacement ByteTrack ID to the same live allowed row. A confirmed track that is still detected outside a zone is removed immediately.
+- `OUTSIDE` detections are not rendered as green “Được phép” boxes and do not enter the event panel.
+- `npm run build` passed after this change. Browser acceptance remains user-owned.
+- When a test MP4 loops, `sourceReset` clears only the previous cycle's held presentation detections, so stale boxes do not remain over the restarted video.
 
 ## User feedback addendum (2026-08-18)
 

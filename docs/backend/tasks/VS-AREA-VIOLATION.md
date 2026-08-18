@@ -99,8 +99,8 @@ The implementation model must read these files in order before editing code. A l
 - A detection not yet assigned a ByteTrack ID may be shown in the feed with `trackId = null`, but it cannot open/close a persisted violation or emit an alert until the tracker confirms an ID.
 - The in-memory violation state key is `(camera_id, track_id, zone_id)`. One key can have at most one OPEN DB row.
 - Open when the key changes from outside/allowed to inside/prohibited. Remaining inside/prohibited updates frame metadata only and never inserts or alerts again.
-- Close after 3 consecutive processed frames when the confirmed track is observed outside or allowed. When the tracked detection is absent, keep the event open for 5 wall-clock seconds so intermittent detector loss or a ByteTrack ID change can reconnect to the same violation. Use the last timestamp at which the key was inside/prohibited as `exited_at`.
-- A transition lasting under one second is still inserted and closed. Persist `duration_seconds = max(0, floor(exited_at-entered_at))`; frontend displays `<1s` when the timestamps differ by less than one second.
+- Close after 3 consecutive processed frames when the confirmed track is observed outside or allowed. When the tracked detection is absent, keep the event open for 12 wall-clock seconds so intermittent detector loss or a ByteTrack ID change can reconnect to the same violation. Use the last timestamp at which the key was inside/prohibited as `exited_at`.
+- A prohibited object must be confirmed continuously for at least one second before creating a DB row, `STARTED` event, alert, or clip job. A detection that exits/disappears before confirmation is discarded and never reaches the event panel.
 - On worker startup, close stale `BAI-KIEM` OPEN rows at startup time before accepting new tracks. Preserve their existing `clip_path`; this prevents a restart from leaving permanent OPEN rows or causing duplicate alerts.
 
 ### Label resolution and rule matrix
@@ -196,7 +196,7 @@ The implementation model must read these files in order before editing code. A l
 }
 ```
 
-- `trackId` is `number|null`. `zoneMatches` contains one entry per containing active zone, sorted by `zoneName` then `zoneId`; a single track may therefore open independent violations in multiple zones. Overall detection `status` is `VIOLATION` when any match violates, otherwise `ALLOWED`. An object outside all zones has an empty `zoneMatches` array and is not listed in the event panel.
+- `trackId` is `number|null`. `zoneMatches` contains one entry per containing active zone, sorted by `zoneName` then `zoneId`; a single track may therefore open independent violations in multiple zones. Overall detection `status` is `VIOLATION` when any match violates, `ALLOWED` when it is inside a zone without violating, and `OUTSIDE` when `zoneMatches` is empty. Objects outside all zones are not shown as allowed/violating overlays and are not listed in the event panel.
 
 ### WS — `/ws/events/area`
 
@@ -266,7 +266,7 @@ Execute in this order. After each step, update this task's changed-files and nex
 - [x] Prohibited object enters zone → open violation event: `zone_violations` with status=OPEN, entered_at, object_label, zone_id, clip buffer starts (BR-06, AC-03)
 - [x] While object is inside zone → no duplicate alerts, 1 event per entry/exit (BR-06)
 - [x] Object exits zone → close violation: set exited_at, duration_seconds, status=CLOSED, save clip 10s (AC-04)
-- [x] Object enters and exits < 1s → still create violation event (Product §7)
+- [x] Object enters and exits < 1s → no persisted violation, alert, clip, or event-panel row (user acceptance refinement)
 - [x] Clip 10s saved from circular buffer starting at entry time; clip_path = NULL if write fails (BR-05)
 - [x] Node.js receives violation events from Python WS, pushes to browser via `WS /ws/events/area`
 - [x] Node.js pushes floating alert via `WS /ws/alerts` for cross-tab notification (BR-08)
@@ -311,7 +311,7 @@ Execute in this order. After each step, update this task's changed-files and nex
   4. Compare implementation, `backend/node-api/openapi/area.yaml`, and the VS-AREA-VIOLATION handoff section field-by-field.
 - Pass criteria:
   - All automated commands exit 0 after the latest material backend change.
-  - Rule tests cover both rule types, mapped/unmapped labels, polygon boundary, duplicate suppression, sub-second transition, disappearance close, and clip failure.
+  - Rule tests cover both rule types, mapped/unmapped labels, polygon boundary, duplicate suppression, sub-second suppression, disappearance close, local-video playback pacing, and clip failure.
   - One entry produces exactly one DB OPEN row, one `STARTED` event and one alert; repeated inside frames produce zero additional inserts/alerts; exit produces one CLOSED update and one `ENDED` event with the same ID.
   - REST pagination/filters/sort and all wire payloads match this task exactly.
   - OpenAPI and backend handoff contain no unimplemented operation or mocked behavior.
@@ -319,7 +319,7 @@ Execute in this order. After each step, update this task's changed-files and nex
   - Evidence ID: EVD-BE-AREA-01
   - Command/procedure: `python tests/test_area_pipeline.py`, `npm run typecheck`, and `NODE_ENV=test npx ts-node src/tests/test_area_events.ts`
   - Context: Local Python unit suite plus Node typecheck. The REST verifier uses the configured Neon database and a disposable Zone/ZoneViolation fixture.
-  - Exit/result: Python unit suite exit 0 (15/15 passed, including H.264 MP4 output, intermittent detection/reidentification, and boundary-jitter suppression); Node typecheck exit 0. REST verifier did not complete: sandbox rejected Neon TLS credentials and the approved retry timed out after 120 seconds.
+  - Exit/result: Python unit suite exit 0 (17/17 passed, including H.264 MP4 output, intermittent detection/reidentification, boundary-jitter suppression, outside-zone classification, and local-video rewind reset); Node typecheck exit 0. REST verifier did not complete: sandbox rejected Neon TLS credentials and the approved retry timed out after 120 seconds.
   - Fresh: partially fresh; REST/HTTP proof remains unavailable.
   - Summary: The new Area behavior is covered by pure worker tests, but the required REST verifier must be rerun successfully before `backend_verified`.
 
@@ -346,7 +346,7 @@ Execute in this order. After each step, update this task's changed-files and nex
   - `backend/node-api/openapi/area.yaml`
   - `docs/backend/backend.md`
   - `docs/backend/tasks/VS-AREA-VIOLATION.md`
-- Decisions/assumptions: Standardized on Shapely `covers` on bottom-center point. A confirmed track still uses 3-frame exit grace, while an absent track uses a 5-second reconnect window. Event clips use bundled FFmpeg via `imageio-ffmpeg` to produce browser-compatible H.264 MP4 without changing the public URL contract.
+- Decisions/assumptions: Standardized on Shapely `covers` on bottom-center point. A confirmed track still uses 3-frame exit grace, while an absent track uses a 12-second reconnect window. Event clips use bundled FFmpeg via `imageio-ffmpeg` to produce browser-compatible H.264 MP4 without changing the public URL contract.
 - Blocker: The standalone Node REST verifier has no successful current result because Neon TLS failed in sandbox and the approved retry timed out. Browser acceptance remains user-owned.
 - Exact next action: Restart the Python worker so it loads `imageio-ffmpeg`; create a new Area violation, wait at least 10 seconds, then verify one event survives intermittent detection loss and its newly generated clip plays in the browser. Rerun the Node REST verifier successfully before restoring `backend_verified`.
 
@@ -372,7 +372,7 @@ Execute in this order. After each step, update this task's changed-files and nex
 
 - Replaced the worker's FMP4/mp4v clip writer with H.264 baseline/yuv420p MP4 through `imageio-ffmpeg`, including `faststart` metadata for browser streaming.
 - Existing FMP4 historical files are not retroactively transcoded. Generate a new event after restarting the Python worker to test playback.
-- Split event closing into two paths: a known track observed outside/allowed closes after 3 frames; an absent track has a 5-second identity-reconnect window.
+- Split event closing into two paths: a known track observed outside/allowed closes after 3 frames; an absent track has a 12-second identity-reconnect window.
 - Reidentification only moves an active event to a new track ID when the original track is absent and the class/label plus bbox continuity match, preventing duplicate event rows during temporary loss.
 
 ## Boundary jitter stabilization (2026-08-18)
@@ -381,4 +381,18 @@ Execute in this order. After each step, update this task's changed-files and nex
 - Decision: opening remains an exact `Polygon.covers(bottom_center)` check. For the same already-open track and still-violating rule result, sustain containment accepts a `0.02` normalized outward polygon buffer (approximately 13px at the configured 640px inference width). A point beyond that buffer continues through the existing 3-frame close path.
 - Scope: this only changes Area worker in-memory event continuity; no REST/WS schema, stored rows, or Zone CRUD behavior changes.
 - Regression coverage: an event remains one violation through more than three frames of boundary jitter, then emits exactly one `ENDED` after three frames clearly outside the buffer.
-- Evidence: `python tests/test_area_pipeline.py` from `backend/python-worker` passed 15/15 on 2026-08-18. No browser test was run.
+- Evidence: `python tests/test_area_pipeline.py` from `backend/python-worker` passed 17/17 on 2026-08-18. No browser test was run.
+
+## Detection presentation stabilization (2026-08-18)
+
+- Area uses the worker's native 640×480 (4:3) feed geometry in the browser so normalized zone polygons and bbox overlays align with the decoded image; the live HUD sits above the image rather than obscuring it.
+- The worker emits `OUTSIDE` for detections that do not intersect any zone. The frontend renders no allowed/violation overlay or panel item for this state.
+- An in-zone presentation track survives a fully missing detector result for up to 12 seconds and reconnects a spatially continuous replacement ByteTrack ID. A track visibly detected outside a zone is removed immediately; violation persistence still closes it after the normal 3 observed-frame grace.
+- Evidence: Node typecheck and frontend production build passed after this change; browser testing remains user-owned.
+- On a local MP4 rewind, the first `/ws/feed/area` frame carries optional `sourceReset: true`; the frontend clears only its presentation detection cache before rendering that new playback cycle.
+
+## Playback and event confirmation stabilization (2026-08-18)
+
+- Local MP4 sources now advance by the number of source frames corresponding to the elapsed wall-clock time. This preserves playback speed when a 50 FPS file is processed by the AI loop at a lower FPS.
+- A violation remains pending for one continuous second before the `STARTED` transition. A person/object that appears for less than one second is discarded without a database row, WS alert, event-panel row, or clip job.
+- Evidence: `python tests/test_area_pipeline.py` passed 20/20 on 2026-08-18. Browser testing remains user-owned.

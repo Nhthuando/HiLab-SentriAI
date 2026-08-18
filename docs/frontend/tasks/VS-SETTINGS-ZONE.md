@@ -105,3 +105,9 @@
 - Decisions/assumptions: The editor is intentionally BAI-KIEM-only for current Area testing. Zone color is presentation-only; the persisted contract contains polygon/rule/labels/active state only.
 - Blocker: Matching backend task has not reached `backend_verified` because live HTTP/DB and Python snapshot verification is deferred to the user's browser acceptance.
 - Exact next action: User manually creates, edits and deletes BAI-KIEM zones, then opens Area after the worker poll interval to verify overlays/rules.
+
+## Rename interaction stabilization (2026-08-18)
+
+- Zone name input now uses a local draft while typing. It does not call `PUT /api/v1/zones/:id` or create undo history entries per keystroke.
+- The completed trimmed name persists once on Enter or input blur. Empty names restore the existing name and display local validation feedback.
+- Evidence: `npm run build` from `frontend` passed after this change. Browser acceptance remains user-owned.

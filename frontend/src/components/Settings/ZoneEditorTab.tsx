@@ -43,6 +43,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [selectedVertexIdx, setSelectedVertexIdx] = useState<number | null>(null);
   const [zoneSearch, setZoneSearch] = useState<string>('');
+  const [zoneNameDrafts, setZoneNameDrafts] = useState<Record<string, string>>({});
 
   // Toast / notification message
   const [toastMsg, setToastMsg] = useState<string>('');
@@ -434,6 +435,35 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     const nextState = currentZones.map((z) => (z.id === zoneId ? { ...z, ...patch } : z));
     pushHistory(nextState);
   };
+
+  const commitZoneName = useCallback((zoneId: string) => {
+    const draftName = zoneNameDrafts[zoneId];
+    if (draftName === undefined) return;
+
+    const zone = currentZones.find((candidate) => candidate.id === zoneId);
+    if (!zone) return;
+
+    const nextName = draftName.trim();
+    if (!nextName) {
+      setZoneNameDrafts((previous) => ({ ...previous, [zoneId]: zone.name }));
+      showToast('Tên zone không được để trống.');
+      return;
+    }
+
+    if (nextName !== zone.name) {
+      onUpdateZone(camSel, zoneId, { name: nextName });
+      pushHistory(
+        currentZones.map((candidate) => (
+          candidate.id === zoneId ? { ...candidate, name: nextName } : candidate
+        )),
+      );
+    }
+
+    setZoneNameDrafts((previous) => {
+      const { [zoneId]: _committedDraft, ...remainingDrafts } = previous;
+      return remainingDrafts;
+    });
+  }, [camSel, currentZones, onUpdateZone, pushHistory, zoneNameDrafts]);
 
   const canUndo = (tool === 'draw' && draftPoints.length > 0) || historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
@@ -1252,9 +1282,18 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
 
                     {/* Editable Zone Name */}
                     <input
-                      value={z.name}
-                      onChange={(e) => handleUpdateZoneProp(z.id, { name: e.target.value })}
+                      value={zoneNameDrafts[z.id] ?? z.name}
+                      onChange={(e) => {
+                        const nextValue = e.target.value;
+                        setZoneNameDrafts((previous) => ({ ...previous, [z.id]: nextValue }));
+                      }}
                       onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          e.currentTarget.blur();
+                        }
+                      }}
                       placeholder="Tên zone…"
                       style={{
                         flex: 1,
@@ -1275,6 +1314,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                       onBlur={(e) => {
                         e.currentTarget.style.backgroundColor = 'transparent';
                         e.currentTarget.style.borderColor = 'transparent';
+                        commitZoneName(z.id);
                       }}
                     />
 

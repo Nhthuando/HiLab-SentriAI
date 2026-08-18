@@ -11,7 +11,7 @@
 - **Matching Backend Gate**: `docs/backend/tasks/VS-AREA-VIOLATION.md` (stabilized; evidence must be refreshed)
 - **OpenAPI Contract**: `backend/node-api/openapi/area.yaml`
 
-Latest follow-up behavior: backend identity continuity now prevents repeated rows for one continuous person/container entry, and clip URLs point to the shared Node-served media directory. Existing historical rows are not rewritten.
+Latest follow-up behavior: backend identity continuity now holds an absent track for 12 seconds and the UI reconnects a spatially continuous replacement track without changing the live row key. The Area canvas uses the worker's native 640×480 (4:3) geometry, with the live HUD above the image; detections with no zone match are `OUTSIDE` and receive no allowed/violation overlay. Clip URLs point to the shared Node-served media directory. Existing historical rows are not rewritten.
 
 ### 1.1 Route & UI View
 
