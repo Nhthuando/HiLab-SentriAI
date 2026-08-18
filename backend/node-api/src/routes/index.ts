@@ -14,8 +14,10 @@
  */
 import { Router } from 'express';
 import { areaEventsRouter } from './areaEvents';
+import { camerasRouter } from './cameras';
 import { healthRouter } from './health';
 import { testErrorRouter } from './testError';
+import { zonesRouter } from './zones';
 
 const apiRouter = Router();
 
@@ -28,10 +30,13 @@ apiRouter.use('/test-error', testErrorRouter);
 // Mount VS-AREA-VIOLATION events router
 apiRouter.use('/events/area', areaEventsRouter);
 
+// Mount VS-SETTINGS-ZONE routes (BAI-KIEM only)
+apiRouter.use('/zones', zonesRouter);
+apiRouter.use('/cameras', camerasRouter);
+
 // Downstream feature routes will be mounted here by their respective vertical slices
 // e.g.:
 // apiRouter.use('/vehicles', vehiclesRouter);
-// apiRouter.use('/zones', zonesRouter);
 // apiRouter.use('/labels', labelsRouter);
 // apiRouter.use('/events/gate', gateEventsRouter);
 // apiRouter.use('/qa', qaRouter);

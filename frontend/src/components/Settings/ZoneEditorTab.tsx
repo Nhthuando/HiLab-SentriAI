@@ -6,8 +6,12 @@ interface ZoneEditorTabProps {
   zonesByCam: Record<string, PolygonZone[]>;
   objLabels: ObjectLabel[];
   onUpdateZone: (camId: string, zoneId: string, patch: Partial<PolygonZone>) => void;
-  onAddZone: (camId: string, newZone: PolygonZone) => void;
+  onAddZone: (camId: string, newZone: PolygonZone) => Promise<PolygonZone>;
   onDeleteZone: (camId: string, zoneId: string) => void;
+  snapshotImage: string | null;
+  isLoading: boolean;
+  apiError: string | null;
+  onRetry: () => void;
 }
 
 const PRESET_COLORS = [
@@ -28,9 +32,13 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
   objLabels,
   onUpdateZone,
   onAddZone,
-  onDeleteZone
+  onDeleteZone,
+  snapshotImage,
+  isLoading,
+  apiError,
+  onRetry
 }) => {
-  const [camSel, setCamSel] = useState<'BAI-KIEM' | 'GATE-01'>('BAI-KIEM');
+  const camSel = 'BAI-KIEM' as const;
   const [tool, setTool] = useState<'select' | 'draw'>('select');
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [selectedVertexIdx, setSelectedVertexIdx] = useState<number | null>(null);
@@ -64,11 +72,26 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     origPoints: [number, number][];
     hasMoved?: boolean;
   } | null>(null);
+  const dragPreviewRef = useRef<{
+    zoneId: string;
+    points: [number, number][];
+  } | null>(null);
+  const [dragPreview, setDragPreview] = useState<{
+    zoneId: string;
+    points: [number, number][];
+  } | null>(null);
 
   const feedRef = useRef<HTMLDivElement>(null);
 
   const currentZones = zonesByCam[camSel] || [];
-  const selectedZone = currentZones.find((z) => z.id === selectedZoneId) || null;
+  const canvasZones = dragPreview
+    ? currentZones.map((zone) => (
+      zone.id === dragPreview.zoneId
+        ? { ...zone, points: dragPreview.points }
+        : zone
+    ))
+    : currentZones;
+  const selectedZone = canvasZones.find((z) => z.id === selectedZoneId) || null;
 
   // Filter zones by search keyword
   const displayedZones = useMemo(() => {
@@ -82,7 +105,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     setTimeout(() => setToastMsg(''), 2500);
   };
 
-  // Sync history when switching camera
+  // Scope is deliberately BAI-KIEM-only so newly drawn zones affect Area testing.
   useEffect(() => {
     setHistory([zonesByCam[camSel] || []]);
     setHistoryIndex(0);
@@ -92,7 +115,15 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     setDraftHover(null);
     setColorPickerZoneId(null);
     setZoneSearch('');
+    dragPreviewRef.current = null;
+    setDragPreview(null);
   }, [camSel]);
+
+  useEffect(() => {
+    if (apiError) {
+      setToastMsg(apiError);
+    }
+  }, [apiError]);
 
   // Auto-scroll right panel when a zone is selected on the left
   useEffect(() => {
@@ -205,7 +236,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
   }, [historyIndex, history, currentZones, camSel, onUpdateZone, onAddZone, onDeleteZone]);
 
   // Complete zone drawing
-  const handleFinishDraw = useCallback(() => {
+  const handleFinishDraw = useCallback(async () => {
     if (draftPoints.length < 3) return;
     const newId = 'z' + Date.now();
     const newColor = PRESET_COLORS[currentZones.length % PRESET_COLORS.length];
@@ -223,16 +254,20 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
       types: defaultTypes
     };
 
-    const nextState = [...currentZones, newZone];
-    onAddZone(camSel, newZone);
-    pushHistory(nextState);
+    try {
+      const persistedZone = await onAddZone(camSel, newZone);
+      const nextState = [...currentZones, persistedZone];
+      pushHistory(nextState);
 
-    setSelectedZoneId(newId);
-    setSelectedVertexIdx(null);
-    setTool('select');
-    setDraftPoints([]);
-    setDraftHover(null);
-    showToast('✓ Đã tạo Zone mới thành công!');
+      setSelectedZoneId(persistedZone.id);
+      setSelectedVertexIdx(null);
+      setTool('select');
+      setDraftPoints([]);
+      setDraftHover(null);
+      showToast('✓ Đã tạo Zone mới thành công!');
+    } catch {
+      showToast('⚠ Không thể lưu Zone mới. Hãy thử lại.');
+    }
   }, [draftPoints, currentZones, objLabels, camSel, onAddZone, pushHistory]);
 
   // Keyboard shortcut listener for Enter, Escape, Ctrl+Z, Ctrl+Y, Delete, Backspace
@@ -350,10 +385,12 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     drag.hasMoved = true;
 
     if (drag.mode === 'vertex' && drag.idx !== undefined) {
-      const zone = currentZones.find((z) => z.id === drag.zoneId);
-      if (!zone) return;
-      const newPoints = zone.points.map((pt, i) => (i === drag.idx ? p : pt));
-      onUpdateZone(camSel, drag.zoneId, { points: newPoints });
+      const newPoints = drag.origPoints.map((point, index) => (
+        index === drag.idx ? p : point
+      )) as [number, number][];
+      const preview = { zoneId: drag.zoneId, points: newPoints };
+      dragPreviewRef.current = preview;
+      setDragPreview(preview);
     } else if (drag.mode === 'move') {
       const dx = p[0] - drag.startX;
       const dy = p[1] - drag.startY;
@@ -371,15 +408,25 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
         +Math.max(0, Math.min(100, y + clampedDy)).toFixed(1)
       ]) as [number, number][];
 
-      onUpdateZone(camSel, drag.zoneId, { points: newPoints });
+      const preview = { zoneId: drag.zoneId, points: newPoints };
+      dragPreviewRef.current = preview;
+      setDragPreview(preview);
     }
   };
 
   const handleFeedMouseUp = () => {
-    if (dragRef.current && dragRef.current.hasMoved) {
-      pushHistory(currentZones);
+    const drag = dragRef.current;
+    const preview = dragPreviewRef.current;
+    if (drag && drag.hasMoved && preview?.zoneId === drag.zoneId) {
+      const nextState = currentZones.map((zone) => (
+        zone.id === drag.zoneId ? { ...zone, points: preview.points } : zone
+      ));
+      onUpdateZone(camSel, drag.zoneId, { points: preview.points });
+      pushHistory(nextState);
     }
     dragRef.current = null;
+    dragPreviewRef.current = null;
+    setDragPreview(null);
   };
 
   const handleUpdateZoneProp = (zoneId: string, patch: Partial<PolygonZone>) => {
@@ -412,48 +459,22 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
             flexWrap: 'wrap'
           }}
         >
-          {/* Camera Picker */}
+          {/* Camera scope */}
           <div
             className="glass-card"
             style={{
               display: 'flex',
+              alignItems: 'center',
               borderRadius: '11px',
-              padding: '3px',
-              gap: '3px'
+              padding: '7px 14px',
+              gap: '7px',
+              color: 'var(--ink2)',
+              fontSize: '12px',
+              fontWeight: 600,
             }}
           >
-            <button
-              onClick={() => setCamSel('BAI-KIEM')}
-              style={{
-                fontSize: '12px',
-                fontWeight: 600,
-                padding: '6px 14px',
-                borderRadius: '8px',
-                border: 'none',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-                backgroundColor: camSel === 'BAI-KIEM' ? 'var(--acc)' : 'transparent',
-                color: camSel === 'BAI-KIEM' ? '#fff' : 'var(--ink2)'
-              }}
-            >
-              Bãi Kiểm
-            </button>
-            <button
-              onClick={() => setCamSel('GATE-01')}
-              style={{
-                fontSize: '12px',
-                fontWeight: 600,
-                padding: '6px 14px',
-                borderRadius: '8px',
-                border: 'none',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-                backgroundColor: camSel === 'GATE-01' ? 'var(--acc)' : 'transparent',
-                color: camSel === 'GATE-01' ? '#fff' : 'var(--ink2)'
-              }}
-            >
-              Cổng vào
-            </button>
+            <span style={{ color: 'var(--acc)' }}>●</span>
+            Bãi Kiểm · BAI-KIEM
           </div>
 
           {/* Mode Switcher: Select vs Draw */}
@@ -615,6 +636,24 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
               Hủy
             </button>
           )}
+
+          <button
+            onClick={onRetry}
+            title="Tải lại zone và ảnh camera"
+            style={{
+              fontSize: '12px',
+              fontWeight: 600,
+              padding: '7px 12px',
+              borderRadius: '10px',
+              border: '1px solid var(--line2)',
+              backgroundColor: 'transparent',
+              color: 'var(--ink2)',
+              cursor: 'pointer',
+              fontFamily: 'inherit'
+            }}
+          >
+            Tải lại
+          </button>
         </div>
 
         {/* Interactive Feed Canvas */}
@@ -637,12 +676,16 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
             boxShadow: 'var(--shadow-lg)'
           }}
         >
-          {/* Feed Background Image */}
+          {/* Live BAI-KIEM snapshot; static image is an offline fallback only. */}
           <div
             style={{
               position: 'absolute',
               inset: 0,
-              backgroundImage: `url('${camSel === 'GATE-01' ? '/assets/cam-gate.png' : '/assets/cam-baikiem.png'}')`,
+              backgroundImage: snapshotImage
+                ? `url('${snapshotImage}')`
+                : apiError
+                  ? "url('/assets/cam-baikiem.png')"
+                  : 'none',
               backgroundSize: 'cover',
               backgroundPosition: 'center',
               pointerEvents: 'none'
@@ -665,7 +708,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
               pointerEvents: 'none'
             }}
           >
-            {camSel} · {camSel === 'GATE-01' ? 'Cổng vào' : 'Bãi Kiểm'}
+            {camSel} · Bãi Kiểm
           </div>
 
           <div
@@ -711,9 +754,28 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
             </div>
           )}
 
+          {isLoading && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'grid',
+                placeItems: 'center',
+                backgroundColor: 'rgba(5, 8, 12, 0.58)',
+                color: 'var(--ink2)',
+                fontSize: '13px',
+                fontWeight: 600,
+                zIndex: 35,
+                pointerEvents: 'none'
+              }}
+            >
+              Đang tải zone và ảnh camera…
+            </div>
+          )}
+
           {/* SVG Polygons and Draft */}
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-            {currentZones.map((z) => {
+            {canvasZones.map((z) => {
               const isSelected = selectedZoneId === z.id;
               const pointsStr = z.points.map((p) => `${p[0]},${p[1]}`).join(' ');
 
@@ -754,6 +816,8 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                       origPoints: z.points.map((pt) => [...pt]),
                       hasMoved: false
                     };
+                    dragPreviewRef.current = null;
+                    setDragPreview(null);
                   }}
                 />
               );
@@ -774,7 +838,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
           </svg>
 
           {/* Zone Labels */}
-          {currentZones.map((z) => {
+          {canvasZones.map((z) => {
             const topPoint = z.points.reduce((prev, curr) => (curr[1] < prev[1] ? curr : prev), z.points[0]);
             const isSelected = selectedZoneId === z.id;
 
@@ -832,6 +896,8 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                         origPoints: selectedZone.points.map((pt) => [...pt]),
                         hasMoved: false
                       };
+                      dragPreviewRef.current = null;
+                      setDragPreview(null);
                     }}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
@@ -881,7 +947,12 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                       // Insert new point in between
                       const newPoints = [...selectedZone.points];
                       newPoints.splice(i + 1, 0, [+midX.toFixed(1), +midY.toFixed(1)]);
-                      onUpdateZone(camSel, selectedZone.id, { points: newPoints });
+                      const preview = {
+                        zoneId: selectedZone.id,
+                        points: newPoints as [number, number][],
+                      };
+                      dragPreviewRef.current = preview;
+                      setDragPreview(preview);
 
                       setSelectedVertexIdx(i + 1);
 

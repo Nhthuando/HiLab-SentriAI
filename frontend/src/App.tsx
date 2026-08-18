@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type {
   TabId,
   SettingsSubTab,
@@ -34,6 +34,15 @@ import { ThemeSettingsTab } from './components/Settings/ThemeSettingsTab';
 import { AIQAChat } from './components/AIQAChat';
 import { FloatingAlert } from './components/FloatingAlert';
 import { useBroadcastChannel, useWebSocket } from './hooks';
+import {
+  createZone as createZoneRequest,
+  deleteZone as deleteZoneRequest,
+  getAreaCameraSnapshot,
+  getZones,
+  updateZone as updateZoneRequest,
+  zoneRecordToView,
+  zoneViewToWrite,
+} from './api/zones';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('mon');
@@ -58,7 +67,13 @@ export const App: React.FC = () => {
   const [vehicles] = useState(INITIAL_VEHICLES);
   const [labels, setLabels] = useState<Record<string, 'quen' | 'la'>>(INITIAL_LABELS);
   const [gateEvents] = useState(INITIAL_GATE_EVENTS);
-  const [zonesByCam, setZonesByCam] = useState<Record<string, PolygonZone[]>>(INITIAL_ZONES);
+  const [zonesByCam, setZonesByCam] = useState<Record<string, PolygonZone[]>>(() => ({
+    'GATE-01': INITIAL_ZONES['GATE-01'] || [],
+    'BAI-KIEM': [],
+  }));
+  const [zoneEditorLoading, setZoneEditorLoading] = useState(true);
+  const [zoneEditorError, setZoneEditorError] = useState<string | null>(null);
+  const [areaSnapshotImage, setAreaSnapshotImage] = useState<string | null>(null);
   const [objLabels, setObjLabels] = useState<ObjectLabel[]>(INITIAL_OBJ_LABELS);
   const [annSources] = useState<AnnotationSource[]>(INITIAL_ANN_SOURCES);
   const [annSamples, setAnnSamples] = useState<AnnotationSample[]>(INITIAL_ANN_SAMPLES);
@@ -146,27 +161,108 @@ export const App: React.FC = () => {
     }));
   };
 
-  // Zone handlers
+  const areaZoneLabels = useMemo(
+    () => objLabels.filter((label) => label.name === 'Người' || label.name === 'Container'),
+    [objLabels],
+  );
+  const areaZoneLabelNames = useMemo(
+    () => areaZoneLabels.map((label) => label.name),
+    [areaZoneLabels],
+  );
+
+  const loadZoneEditorData = useCallback(async () => {
+    setZoneEditorLoading(true);
+    setZoneEditorError(null);
+
+    try {
+      const records = await getZones();
+      setZonesByCam((prev) => ({
+        ...prev,
+        'BAI-KIEM': records.map((record) => zoneRecordToView(record, areaZoneLabelNames)),
+      }));
+    } catch {
+      setZoneEditorError('Không thể tải zone Bãi Kiểm. Nhấn để thử lại.');
+    } finally {
+      setZoneEditorLoading(false);
+    }
+
+    try {
+      setAreaSnapshotImage(await getAreaCameraSnapshot());
+    } catch {
+      setAreaSnapshotImage(null);
+      setZoneEditorError((current) => current || 'Không thể tải ảnh camera Bãi Kiểm.');
+    }
+  }, [areaZoneLabelNames]);
+
+  useEffect(() => {
+    void loadZoneEditorData();
+  }, [loadZoneEditorData]);
+
+  // Zone handlers: BAI-KIEM is persisted through VS-SETTINGS-ZONE API.
   const handleUpdateZone = (camId: string, zoneId: string, patch: Partial<PolygonZone>) => {
+    const previousZones = zonesByCam[camId] || [];
+    const updatedZones = previousZones.map((zone) => (
+      zone.id === zoneId ? { ...zone, ...patch } : zone
+    ));
+
     setZonesByCam((prev) => {
-      const list = prev[camId] || [];
-      const updated = list.map((z) => (z.id === zoneId ? { ...z, ...patch } : z));
-      return { ...prev, [camId]: updated };
+      return { ...prev, [camId]: updatedZones };
     });
+
+    if (camId !== 'BAI-KIEM') return;
+
+    const updatedZone = updatedZones.find((zone) => zone.id === zoneId);
+    if (!updatedZone) return;
+
+    void updateZoneRequest(zoneId, zoneViewToWrite(updatedZone, areaZoneLabelNames))
+      .then((record) => {
+        const persisted = zoneRecordToView(record, areaZoneLabelNames);
+        setZonesByCam((prev) => ({
+          ...prev,
+          'BAI-KIEM': (prev['BAI-KIEM'] || []).map((zone) => (
+            zone.id === zoneId ? { ...persisted, color: zone.color } : zone
+          )),
+        }));
+      })
+      .catch(() => {
+        setZonesByCam((prev) => ({ ...prev, 'BAI-KIEM': previousZones }));
+        setZoneEditorError('Không thể lưu thay đổi zone. Thay đổi đã được hoàn tác.');
+      });
   };
 
-  const handleAddZone = (camId: string, newZone: PolygonZone) => {
+  const handleAddZone = async (camId: string, newZone: PolygonZone): Promise<PolygonZone> => {
+    if (camId === 'BAI-KIEM') {
+      const record = await createZoneRequest(zoneViewToWrite(newZone, areaZoneLabelNames));
+      const persisted = {
+        ...zoneRecordToView(record, areaZoneLabelNames),
+        color: newZone.color,
+      };
+      setZonesByCam((prev) => ({
+        ...prev,
+        'BAI-KIEM': [...(prev['BAI-KIEM'] || []), persisted],
+      }));
+      return persisted;
+    }
+
     setZonesByCam((prev) => ({
       ...prev,
       [camId]: [...(prev[camId] || []), newZone]
     }));
+    return newZone;
   };
 
   const handleDeleteZone = (camId: string, zoneId: string) => {
+    const previousZones = zonesByCam[camId] || [];
     setZonesByCam((prev) => ({
       ...prev,
       [camId]: (prev[camId] || []).filter((z) => z.id !== zoneId)
     }));
+
+    if (camId !== 'BAI-KIEM') return;
+    void deleteZoneRequest(zoneId).catch(() => {
+      setZonesByCam((prev) => ({ ...prev, 'BAI-KIEM': previousZones }));
+      setZoneEditorError('Không thể xóa zone. Zone đã được khôi phục.');
+    });
   };
 
   // Object label handlers
@@ -501,10 +597,14 @@ export const App: React.FC = () => {
               <ZoneEditorTab
                 clock={clockStr}
                 zonesByCam={zonesByCam}
-                objLabels={objLabels}
+                objLabels={areaZoneLabels}
                 onUpdateZone={handleUpdateZone}
                 onAddZone={handleAddZone}
                 onDeleteZone={handleDeleteZone}
+                snapshotImage={areaSnapshotImage}
+                isLoading={zoneEditorLoading}
+                apiError={zoneEditorError}
+                onRetry={loadZoneEditorData}
               />
             )}
 

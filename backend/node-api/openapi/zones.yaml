@@ -1,0 +1,286 @@
+openapi: 3.0.3
+info:
+  title: SentriAI Zone Settings API
+  version: 1.0.0
+  description: BAI-KIEM-only zone editing contract for VS-SETTINGS-ZONE.
+servers:
+  - url: /api/v1
+paths:
+  /zones:
+    get:
+      operationId: listBaiKiemZones
+      summary: List BAI-KIEM zones
+      parameters:
+        - $ref: '#/components/parameters/CameraId'
+      responses:
+        '200':
+          description: Zone list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZoneListEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+    post:
+      operationId: createBaiKiemZone
+      summary: Create a BAI-KIEM zone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateZoneRequest'
+      responses:
+        '201':
+          description: Created zone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZoneEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/ZoneNameConflict'
+  /zones/{id}:
+    put:
+      operationId: updateBaiKiemZone
+      summary: Update a BAI-KIEM zone
+      parameters:
+        - $ref: '#/components/parameters/ZoneId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateZoneRequest'
+      responses:
+        '200':
+          description: Updated zone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZoneEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/ZoneNotFound'
+        '409':
+          $ref: '#/components/responses/ZoneNameConflict'
+    delete:
+      operationId: deleteBaiKiemZone
+      summary: Delete a BAI-KIEM zone and its linked violations
+      parameters:
+        - $ref: '#/components/parameters/ZoneId'
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          $ref: '#/components/responses/ZoneNotFound'
+  /cameras/BAI-KIEM/snapshot:
+    get:
+      operationId: getBaiKiemSnapshot
+      summary: Get the latest BAI-KIEM JPEG snapshot from the Python worker
+      responses:
+        '200':
+          description: Snapshot encoded as a data URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          description: Python worker or BAI-KIEM camera is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+components:
+  parameters:
+    CameraId:
+      name: camera_id
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [BAI-KIEM]
+    ZoneId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ZoneNotFound:
+      description: Zone was not found for BAI-KIEM
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ZoneNameConflict:
+      description: The zone name is already used by BAI-KIEM
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    PolygonPoint:
+      type: object
+      required: [x, y]
+      properties:
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+    Zone:
+      type: object
+      required: [id, cameraId, name, polygonPoints, ruleType, targetLabels, isActive, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        cameraId:
+          type: string
+          enum: [BAI-KIEM]
+        name:
+          type: string
+          maxLength: 100
+        polygonPoints:
+          type: array
+          minItems: 3
+          items:
+            $ref: '#/components/schemas/PolygonPoint'
+        ruleType:
+          type: string
+          enum: [PROHIBIT_SPECIFIED, ALLOW_SPECIFIED]
+        targetLabels:
+          type: array
+          items:
+            type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateZoneRequest:
+      type: object
+      required: [cameraId, name, polygonPoints]
+      properties:
+        cameraId:
+          type: string
+          enum: [BAI-KIEM]
+        name:
+          type: string
+        polygonPoints:
+          type: array
+          minItems: 3
+          items:
+            $ref: '#/components/schemas/PolygonPoint'
+        ruleType:
+          type: string
+          enum: [PROHIBIT_SPECIFIED, ALLOW_SPECIFIED]
+          default: PROHIBIT_SPECIFIED
+        targetLabels:
+          type: array
+          items:
+            type: string
+          default: []
+        isActive:
+          type: boolean
+          default: true
+    UpdateZoneRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+        polygonPoints:
+          type: array
+          minItems: 3
+          items:
+            $ref: '#/components/schemas/PolygonPoint'
+        ruleType:
+          type: string
+          enum: [PROHIBIT_SPECIFIED, ALLOW_SPECIFIED]
+        targetLabels:
+          type: array
+          items:
+            type: string
+        isActive:
+          type: boolean
+    ZoneEnvelope:
+      type: object
+      required: [success, data, timestamp]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Zone'
+        timestamp:
+          type: string
+          format: date-time
+    ZoneListEnvelope:
+      type: object
+      required: [success, data, timestamp]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Zone'
+        timestamp:
+          type: string
+          format: date-time
+    SnapshotEnvelope:
+      type: object
+      required: [success, data, timestamp]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required: [image]
+          properties:
+            image:
+              type: string
+              description: JPEG data URL
+              example: data:image/jpeg;base64,...
+        timestamp:
+          type: string
+          format: date-time
+    ErrorEnvelope:
+      type: object
+      required: [success, error, timestamp]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+        timestamp:
+          type: string
+          format: date-time

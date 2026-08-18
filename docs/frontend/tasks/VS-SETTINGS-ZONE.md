@@ -6,13 +6,14 @@
 - Task ID: FE-SETTINGS-ZONE
 - Master plan: `docs/plan/plan.md#vs-settings-zone`
 - Backend task: `docs/backend/tasks/VS-SETTINGS-ZONE.md`
-- Owner: Phạm Hưng
-- Branch: none
+- Owner: Hữu Thuận
+- Branch: feature/vs-settings-zone
 - Priority: P1
 - Size: M
-- Status: waiting_backend
+- Status: blocked
 - Status history:
   - 2026-08-17T16:45:00+07:00 | none -> waiting_backend | planned | team1-plan
+  - 2026-08-18T13:47:20+07:00 | waiting_backend -> blocked | user approved concurrent implementation for manual Area testing; backend HTTP gate and browser verification remain pending | team1-slice
 
 ## Inputs and dependencies
 
@@ -78,12 +79,12 @@
 - Planned command/procedure: Draw zone → save → switch to monitoring tab → verify zone overlay appears
 - Pass criteria: Zone CRUD works, zones persist, monitoring tab shows new zone
 - Latest evidence:
-  - Evidence ID: none
-  - Command/procedure: not_run
-  - Context: not_run
-  - Exit/result: not_run
-  - Fresh: no
-  - Summary: not_run
+  - Evidence ID: EVD-FE-ZONE-01
+  - Command/procedure: `npm run build`
+  - Context: `frontend`, local TypeScript + Vite production build; no browser or live backend.
+  - Exit/result: exit 0; 34 modules transformed and build completed.
+  - Fresh: yes, but incomplete for real API/browser criteria.
+  - Summary: Covers compile-time integration of the Zone Editor, API client, and snapshot data adapter.
 
 ## User acceptance and delivery
 
@@ -95,7 +96,12 @@
 
 ## Execution record
 
-- Changed files: none
-- Decisions/assumptions: none
-- Blocker: waiting for backend gate
-- Exact next action: wait for matching backend task to reach `backend_verified`
+- Changed files:
+  - `frontend/src/App.tsx`
+  - `frontend/src/api/zones.ts`
+  - `frontend/src/components/Settings/ZoneEditorTab.tsx`
+  - `docs/frontend/frontend.md`
+  - `docs/frontend/tasks/VS-SETTINGS-ZONE.md`
+- Decisions/assumptions: The editor is intentionally BAI-KIEM-only for current Area testing. Zone color is presentation-only; the persisted contract contains polygon/rule/labels/active state only.
+- Blocker: Matching backend task has not reached `backend_verified` because live HTTP/DB and Python snapshot verification is deferred to the user's browser acceptance.
+- Exact next action: User manually creates, edits and deletes BAI-KIEM zones, then opens Area after the worker poll interval to verify overlays/rules.
