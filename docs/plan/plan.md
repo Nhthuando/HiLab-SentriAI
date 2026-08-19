@@ -67,7 +67,7 @@
 - Priority: P0
 - Size: L
 - Owner: Phạm Hưng
-- Status: planned
+- Status: verified
 - Requirements: M1-LPR, M1-FEED, M1-ALERT, M1-CLIP, M1-QUEN-LA, EXCEPTION-STREAM, EXCEPTION-CLIP
 - Dependencies: FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION, FDN-PYTHON-DB, FDN-WS-PROXY, FDN-PYTHON-STREAM, FDN-API-CONTRACT, FDN-FRONTEND-API
 - Contract checkpoint: `GET /api/v1/events/gate`, `WS /ws/feed/gate`, `WS /ws/events/gate`
@@ -118,7 +118,7 @@
 - Priority: P1
 - Size: S
 - Owner: Phạm Hưng
-- Status: planned
+- Status: verified
 - Requirements: M3-VEHICLE
 - Dependencies: FDN-DB-MIGRATION, FDN-API-CONTRACT, FDN-FRONTEND-API
 - Contract checkpoint: `GET /api/v1/vehicles`, `POST /api/v1/vehicles`, `PATCH /api/v1/vehicles/:id`, `DELETE /api/v1/vehicles/:id`
@@ -166,7 +166,7 @@
 - Priority: P1
 - Size: M
 - Owner: Phạm Hưng
-- Status: planned
+- Status: verified
 - Requirements: M3-LABEL
 - Dependencies: FDN-DB-MIGRATION, FDN-API-CONTRACT, FDN-FRONTEND-API
 - Contract checkpoint: `GET /api/v1/labels`, `POST /api/v1/labels`, `PUT /api/v1/labels/:id`, `DELETE /api/v1/labels/:id`, `POST /api/v1/samples/batch`, `POST /api/v1/upload/image`

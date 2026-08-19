@@ -20,6 +20,11 @@ export interface GateEvent {
   zone: string;
   conf: number | null;
   status: VehicleStatus;
+  clipPath?: string | null;
+  cropPath?: string | null;
+  cameraId?: string;
+  lane?: string;
+  eventTimestamp?: string;
 }
 
 export interface AreaEvent {

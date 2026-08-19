@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import type { PolygonZone, ObjectLabel } from '../../types';
+import { useCameraFeed } from '../../hooks/useCameraFeed';
 
 interface ZoneEditorTabProps {
   clock: string;
@@ -30,7 +31,8 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
   onAddZone,
   onDeleteZone
 }) => {
-  const [camSel, setCamSel] = useState<'BAI-KIEM' | 'GATE-01'>('BAI-KIEM');
+  const [camSel, setCamSel] = useState<'BAI-KIEM' | 'GATE-01'>('GATE-01');
+  const { frameImage } = useCameraFeed(camSel);
   const [tool, setTool] = useState<'select' | 'draw'>('select');
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [selectedVertexIdx, setSelectedVertexIdx] = useState<number | null>(null);
@@ -637,17 +639,32 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
             boxShadow: 'var(--shadow-lg)'
           }}
         >
-          {/* Feed Background Image */}
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              backgroundImage: `url('${camSel === 'GATE-01' ? '/assets/cam-gate.png' : '/assets/cam-baikiem.png'}')`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              pointerEvents: 'none'
-            }}
-          />
+          {/* Feed Background Image (Live Stream Frame or Video Snapshot) */}
+          {frameImage ? (
+            <img
+              src={frameImage}
+              alt="Live Camera Frame"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'contain',
+                pointerEvents: 'none'
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                backgroundImage: `url('${camSel === 'GATE-01' ? '/assets/cam-gate.png' : '/assets/cam-baikiem.png'}')`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                pointerEvents: 'none'
+              }}
+            />
+          )}
           <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(5, 8, 12, 0.12)', pointerEvents: 'none' }} />
 
           {/* Camera Info Overlay */}

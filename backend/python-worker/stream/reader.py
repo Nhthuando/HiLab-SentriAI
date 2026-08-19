@@ -51,10 +51,35 @@ class StreamReader:
             logger.info("[%s] Using network stream source: %s", self.camera_id, self.source)
             return
 
-        # Check if local video file exists
-        if self.source and os.path.exists(self.source):
-            logger.info("[%s] Using local video file: %s", self.camera_id, self.source)
-            return
+        # Check if local video file exists or discover in data folders
+        if self.source:
+            candidate_paths = [
+                self.source,
+                os.path.abspath(self.source),
+                os.path.join(os.getcwd(), self.source),
+                os.path.join(os.path.dirname(__file__), "../../data/samples", os.path.basename(self.source)),
+                os.path.join(os.path.dirname(__file__), "../../../data/samples", os.path.basename(self.source)),
+                os.path.join(os.path.dirname(__file__), "../../data", os.path.basename(self.source)),
+            ]
+            for p in candidate_paths:
+                if os.path.exists(p) and os.path.isfile(p):
+                    self.source = p
+                    logger.info("[%s] Found and using local video file: %s", self.camera_id, self.source)
+                    return
+
+        # Auto-discover video file matching camera_id in data/samples
+        search_dirs = [
+            os.path.join(os.path.dirname(__file__), "../../data/samples"),
+            os.path.join(os.path.dirname(__file__), "../../../data/samples"),
+        ]
+        cam_prefix = "gate" if "GATE" in self.camera_id.upper() else "area"
+        for s_dir in search_dirs:
+            if os.path.exists(s_dir) and os.path.isdir(s_dir):
+                for f in os.listdir(s_dir):
+                    if cam_prefix in f.lower() and f.lower().endswith(('.mp4', '.avi', '.mkv', '.mov')):
+                        self.source = os.path.join(s_dir, f)
+                        logger.info("[%s] Auto-discovered video file: %s", self.camera_id, self.source)
+                        return
 
         # Check fallback sample assets from frontend or data
         possible_asset_paths = [
@@ -104,22 +129,15 @@ class StreamReader:
 
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
-        Read the next frame, resized to target resolution (640x480).
-        Handles video file loop, synthetic frame generation, and rate throttling.
+        Read next frame without blocking event loop.
+        Fast resize with INTER_LINEAR for smooth, high-definition streaming.
         """
-        now = time.time()
-        min_interval = 1.0 / self.target_fps
-        elapsed = now - self.last_frame_time
-        if elapsed < min_interval:
-            time.sleep(max(0.001, min_interval - elapsed))
-
         self.last_frame_time = time.time()
         self.frame_count += 1
 
         # 1. Image fallback (creates animated simulation overlay)
         if self.is_image_fallback and self.fallback_frame is not None:
             frame = self.fallback_frame.copy()
-            # Add dynamic timestamp and frame counter in top corner
             ts_str = time.strftime("%Y-%m-%d %H:%M:%S")
             cv2.putText(
                 frame,
@@ -137,18 +155,21 @@ class StreamReader:
         if self.cap is not None and self.cap.isOpened():
             ret, frame = self.cap.read()
             if ret and frame is not None:
-                resized = cv2.resize(frame, self.resolution)
+                resized = cv2.resize(frame, self.resolution, interpolation=cv2.INTER_LINEAR)
                 return True, resized
             else:
-                # End of video file -> rewind to beginning
+                # End of video file -> rewind to beginning seamlessly
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = self.cap.read()
                 if ret and frame is not None:
-                    resized = cv2.resize(frame, self.resolution)
+                    resized = cv2.resize(frame, self.resolution, interpolation=cv2.INTER_LINEAR)
                     return True, resized
                 else:
                     logger.warning("[%s] Stream read returned empty frame. Attempting reconnect...", self.camera_id)
                     self._open_stream()
+
+        # 3. Synthetic test generator
+        return True, self._generate_synthetic_frame()
 
         # 3. Synthetic test generator
         return True, self._generate_synthetic_frame()

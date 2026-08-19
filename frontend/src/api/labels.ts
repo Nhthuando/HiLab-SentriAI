@@ -20,15 +20,52 @@ export async function getLabels(): Promise<ObjectLabel[]> {
 
 export async function createLabel(data: {
   vietnameseName: string;
-  baseClass: string;
+  baseClass?: string;
   tint?: string;
   kind?: 'xe' | 'nguoi';
+  name?: string;
 }): Promise<ObjectLabel> {
-  return apiClient.post<ObjectLabel>('/labels', data);
+  const payload = {
+    vietnameseName: data.vietnameseName || data.name || '',
+    baseClass: data.baseClass || (data.kind === 'nguoi' ? 'person' : 'car'),
+    tint: data.tint,
+    kind: data.kind,
+  };
+  return apiClient.post<ObjectLabel>('/labels', payload);
+}
+
+export async function updateLabel(
+  id: string,
+  data: {
+    vietnameseName?: string;
+    name?: string;
+    baseClass?: string;
+    tint?: string;
+    kind?: 'xe' | 'nguoi';
+  }
+): Promise<ObjectLabel> {
+  const payload = {
+    vietnameseName: data.vietnameseName || data.name,
+    baseClass: data.baseClass,
+    tint: data.tint,
+    kind: data.kind,
+  };
+  return apiClient.put<ObjectLabel>(`/labels/${id}`, payload);
+}
+
+export async function deleteLabel(id: string): Promise<void> {
+  return apiClient.delete<void>(`/labels/${id}`);
 }
 
 export async function saveAnnotationSamples(
   samples: AnnotationSample[]
 ): Promise<{ count: number }> {
   return apiClient.post<{ count: number }>('/samples/batch', { samples });
+}
+
+export async function uploadLabelImage(data: {
+  image: string;
+  filename?: string;
+}): Promise<{ path: string; url: string }> {
+  return apiClient.post<{ path: string; url: string }>('/upload/image', data);
 }

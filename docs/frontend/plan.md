@@ -26,9 +26,9 @@
 | FDN-FRONTEND-API | `docs/frontend/tasks/FDN-FRONTEND-API.md` | Hữu Thuận | frontend_verified | `docs/backend/tasks/FDN-API-CONTRACT.md` (verified) | complete — API client & custom WebSocket hooks verified |
 | VS-GATE-LIVE | `docs/frontend/tasks/VS-GATE-LIVE.md` | Phạm Hưng | waiting_backend | `docs/backend/tasks/VS-GATE-LIVE.md` | wait for backend gate |
 | VS-AREA-VIOLATION | `docs/frontend/tasks/VS-AREA-VIOLATION.md` | Hữu Thuận | waiting_backend | `docs/backend/tasks/VS-AREA-VIOLATION.md` | wait for backend gate |
-| VS-SETTINGS-VEHICLE | `docs/frontend/tasks/VS-SETTINGS-VEHICLE.md` | Phạm Hưng | waiting_backend | `docs/backend/tasks/VS-SETTINGS-VEHICLE.md` | wait for backend gate |
+| VS-SETTINGS-VEHICLE | `docs/frontend/tasks/VS-SETTINGS-VEHICLE.md` | Phạm Hưng | frontend_verified | `docs/backend/tasks/VS-SETTINGS-VEHICLE.md` (verified) | complete — VehicleLabelTab real API CRUD & sort/filter verified |
 | VS-SETTINGS-ZONE | `docs/frontend/tasks/VS-SETTINGS-ZONE.md` | Phạm Hưng | waiting_backend | `docs/backend/tasks/VS-SETTINGS-ZONE.md` | wait for backend gate |
-| VS-SETTINGS-LABEL | `docs/frontend/tasks/VS-SETTINGS-LABEL.md` | Phạm Hưng | waiting_backend | `docs/backend/tasks/VS-SETTINGS-LABEL.md` | wait for backend gate |
+| VS-SETTINGS-LABEL | `docs/frontend/tasks/VS-SETTINGS-LABEL.md` | Phạm Hưng | frontend_verified | `docs/backend/tasks/VS-SETTINGS-LABEL.md` (verified) | complete — ObjectLabelTab real API CRUD, shortcuts & batch samples verified |
 | VS-QA-CHAT | `docs/frontend/tasks/VS-QA-CHAT.md` | Hữu Thuận | waiting_backend | `docs/backend/tasks/VS-QA-CHAT.md` | wait for backend gate |
 | VS-KPI-ANALYTICS | `docs/frontend/tasks/VS-KPI-ANALYTICS.md` | Hữu Thuận | waiting_backend | `docs/backend/tasks/VS-KPI-ANALYTICS.md` | wait for backend gate |
 

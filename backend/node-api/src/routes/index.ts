@@ -15,6 +15,11 @@
 import { Router } from 'express';
 import { healthRouter } from './health';
 import { testErrorRouter } from './testError';
+import { vehiclesRouter } from './vehicles';
+import { labelsRouter } from './labels';
+import { samplesRouter } from './samples';
+import { uploadRouter } from './upload';
+import { eventsRouter } from './events';
 
 const apiRouter = Router();
 
@@ -24,13 +29,15 @@ apiRouter.use('/health', healthRouter);
 // Mount Test Error router for API contract verification
 apiRouter.use('/test-error', testErrorRouter);
 
-// Downstream feature routes will be mounted here by their respective vertical slices
-// e.g.:
-// apiRouter.use('/vehicles', vehiclesRouter);
-// apiRouter.use('/zones', zonesRouter);
-// apiRouter.use('/labels', labelsRouter);
-// apiRouter.use('/events', eventsRouter);
-// apiRouter.use('/qa', qaRouter);
-// apiRouter.use('/analytics', analyticsRouter);
+// Mount Registered Vehicles CRUD (VS-SETTINGS-VEHICLE)
+apiRouter.use('/vehicles', vehiclesRouter);
+
+// Mount Object Labels & Annotation Samples (VS-SETTINGS-LABEL)
+apiRouter.use('/labels', labelsRouter);
+apiRouter.use('/samples', samplesRouter);
+apiRouter.use('/upload', uploadRouter);
+
+// Mount Monitoring Events (VS-GATE-LIVE, VS-AREA-VIOLATION)
+apiRouter.use('/events', eventsRouter);
 
 export { apiRouter };

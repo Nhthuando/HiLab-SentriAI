@@ -46,3 +46,7 @@ export async function registerVehicle(data: {
 }): Promise<VehicleRecord> {
   return apiClient.post<VehicleRecord>('/vehicles', data);
 }
+
+export async function deleteVehicle(idOrPlate: string): Promise<void> {
+  return apiClient.delete<void>(`/vehicles/${encodeURIComponent(idOrPlate)}`);
+}

@@ -7,14 +7,15 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Dict
+from typing import Any, Dict
 
 import cv2
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from db import check_db_health, close_db_pool, init_db_pool
+from detection.gate_pipeline import GatePipeline
 from stream import CameraPipeline
 
 logging.basicConfig(
@@ -24,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger("sentriai.worker")
 
 # Global pipeline dictionary
-pipelines: Dict[str, CameraPipeline] = {}
+pipelines: Dict[str, Any] = {}
 
 
 @asynccontextmanager
@@ -39,21 +40,21 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Could not connect to Database on startup (%s). Will retry on demand.", exc)
 
-    # 2. Initialize Camera Pipelines (GATE-01 and BAI-KIEM)
+    # 2. Initialize Camera Pipelines (GATE-01 with LPR and BAI-KIEM)
     gate_source = os.getenv("GATE_CAMERA_URL") or "./data/samples/gate_sample.mp4"
     area_source = os.getenv("AREA_CAMERA_URL") or "./data/samples/area_sample.mp4"
 
-    gate_pipeline = CameraPipeline(
+    gate_pipeline = GatePipeline(
         camera_id="GATE-01",
         source=gate_source,
-        target_fps=10.0,
-        resolution=(640, 480),
+        target_fps=15.0,
+        resolution=(1280, 720),
     )
     area_pipeline = CameraPipeline(
         camera_id="BAI-KIEM",
         source=area_source,
-        target_fps=10.0,
-        resolution=(640, 480),
+        target_fps=15.0,
+        resolution=(854, 480),
     )
 
     pipelines["GATE-01"] = gate_pipeline
@@ -103,6 +104,26 @@ async def health():
     }
 
 
+@app.websocket("/ws/hub")
+async def websocket_hub(websocket: WebSocket):
+    """
+    WebSocket endpoint for Node.js API PythonConnector.
+    Maintains persistent duplex connection and handles ping/heartbeats.
+    """
+    await websocket.accept()
+    logger.info("Accepted inbound WebSocket connection from Node.js API (/ws/hub).")
+    try:
+        while True:
+            msg = await websocket.receive_text()
+            # Respond to ping or heartbeat
+            if msg == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        logger.info("Node.js API client disconnected from /ws/hub.")
+    except Exception as exc:
+        logger.debug("WebSocket hub closed: %s", exc)
+
+
 @app.get("/cameras/{camera_id}/snapshot")
 async def get_snapshot(camera_id: str):
     cid = camera_id.strip().upper()
@@ -135,4 +156,9 @@ async def get_snapshot(camera_id: str):
 if __name__ == "__main__":
     port = int(os.getenv("PYTHON_WORKER_PORT", "8001"))
     logger.info("Starting SentriAI Python Worker on port %d", port)
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    try:
+        uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    except KeyboardInterrupt:
+        logger.info("Received KeyboardInterrupt (Ctrl+C). Terminating cleanly...")
+    finally:
+        os._exit(0)

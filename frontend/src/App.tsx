@@ -168,20 +168,52 @@ export const App: React.FC = () => {
     }));
   };
 
-  // Object label handlers
-  const handleAddLabel = (name: string, kind: 'xe' | 'nguoi', tint?: string) => {
+  // Fetch labels from API on mount
+  useEffect(() => {
+    import('./api/labels').then(({ getLabels }) => {
+      getLabels()
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) {
+            setObjLabels(data);
+          }
+        })
+        .catch((err) => console.warn('Could not fetch labels from API:', err));
+    });
+  }, []);
+
+  // Object label handlers with API integration
+  const handleAddLabel = async (name: string, kind: 'xe' | 'nguoi', tint?: string) => {
     const tints = ['#3b82f6', '#10b981', '#06b6d4', '#a855f7', '#f59e0b', '#f43f5e', '#8b5cf6', '#64748b'];
-    const newLabel: ObjectLabel = {
-      id: 'l' + Date.now(),
-      name,
-      kind,
-      tint: tint || tints[objLabels.length % tints.length],
-      samples: 0
-    };
-    setObjLabels((prev) => [...prev, newLabel]);
+    const assignedTint = tint || tints[objLabels.length % tints.length];
+    
+    try {
+      const { createLabel } = await import('./api/labels');
+      const created = await createLabel({
+        vietnameseName: name,
+        kind,
+        tint: assignedTint,
+      });
+      setObjLabels((prev) => [...prev, created]);
+    } catch (err: any) {
+      console.warn('API error creating label, updating local state:', err);
+      const newLabel: ObjectLabel = {
+        id: 'l' + Date.now(),
+        name,
+        kind,
+        tint: assignedTint,
+        samples: 0
+      };
+      setObjLabels((prev) => [...prev, newLabel]);
+    }
   };
 
-  const handleRenameLabel = (id: string, newName: string, kind?: 'xe' | 'nguoi', tint?: string) => {
+  const handleRenameLabel = async (id: string, newName: string, kind?: 'xe' | 'nguoi', tint?: string) => {
+    try {
+      const { updateLabel } = await import('./api/labels');
+      await updateLabel(id, { vietnameseName: newName, kind, tint });
+    } catch (err) {
+      console.warn('API error updating label, updating local state:', err);
+    }
     setObjLabels((prev) =>
       prev.map((l) =>
         l.id === id
@@ -196,7 +228,13 @@ export const App: React.FC = () => {
     );
   };
 
-  const handleDeleteLabel = (id: string) => {
+  const handleDeleteLabel = async (id: string) => {
+    try {
+      const { deleteLabel } = await import('./api/labels');
+      await deleteLabel(id);
+    } catch (err) {
+      console.warn('API error deleting label:', err);
+    }
     setObjLabels((prev) => prev.filter((l) => l.id !== id));
     setAnnSamples((prev) => prev.filter((s) => s.labelId !== id));
   };
@@ -218,7 +256,17 @@ export const App: React.FC = () => {
     setAnnSamples((prev) => prev.filter((s) => s.id !== id));
   };
 
-  const handleSaveSamples = () => {
+  const handleSaveSamples = async () => {
+    const pending = annSamples.filter((s) => s.session === 1);
+    if (pending.length > 0) {
+      try {
+        const { saveAnnotationSamples } = await import('./api/labels');
+        await saveAnnotationSamples(pending);
+      } catch (err) {
+        console.warn('API error saving samples:', err);
+      }
+    }
+
     const counts: Record<string, number> = {};
     annSamples.forEach((s) => {
       if (s.session === 1) {

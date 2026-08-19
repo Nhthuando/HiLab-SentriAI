@@ -28,9 +28,9 @@
 | FDN-WS-PROXY | `docs/backend/tasks/FDN-WS-PROXY.md` | Hữu Thuận | backend_verified | FDN-REPO-SCAFFOLD, FDN-DB-MIGRATION | complete — Node.js WebSocket proxy (Python -> Node -> Browser) verified |
 | FDN-PYTHON-STREAM | `docs/backend/tasks/FDN-PYTHON-STREAM.md` | Hữu Thuận | backend_verified | FDN-REPO-SCAFFOLD, FDN-WS-PROXY | complete — OpenCV stream reader + YOLO detection pipeline verified |
 | FDN-API-CONTRACT | `docs/backend/tasks/FDN-API-CONTRACT.md` | Hữu Thuận | backend_verified | FDN-DB-MIGRATION, FDN-WS-PROXY | complete — Express REST scaffold, error contract, and health checks verified |
-| VS-SETTINGS-VEHICLE | `docs/backend/tasks/VS-SETTINGS-VEHICLE.md` | Phạm Hưng | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT | wait for FDN-DB-MIGRATION |
+| VS-SETTINGS-VEHICLE | `docs/backend/tasks/VS-SETTINGS-VEHICLE.md` | Phạm Hưng | backend_verified | FDN-DB-MIGRATION, FDN-API-CONTRACT | complete — vehicle CRUD + plate normalization verified |
 | VS-SETTINGS-ZONE | `docs/backend/tasks/VS-SETTINGS-ZONE.md` | Phạm Hưng | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT | wait for FDN-DB-MIGRATION |
-| VS-SETTINGS-LABEL | `docs/backend/tasks/VS-SETTINGS-LABEL.md` | Phạm Hưng | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT | wait for FDN-DB-MIGRATION |
+| VS-SETTINGS-LABEL | `docs/backend/tasks/VS-SETTINGS-LABEL.md` | Phạm Hưng | backend_verified | FDN-DB-MIGRATION, FDN-API-CONTRACT | complete — label CRUD, batch samples & image upload verified |
 | VS-QA-CHAT | `docs/backend/tasks/VS-QA-CHAT.md` | Hữu Thuận | pending | FDN-DB-MIGRATION, FDN-API-CONTRACT, VS-GATE-LIVE, VS-AREA-VIOLATION | wait for event data |
 | VS-KPI-ANALYTICS | `docs/backend/tasks/VS-KPI-ANALYTICS.md` | Hữu Thuận | pending | VS-GATE-LIVE, VS-AREA-VIOLATION | wait for event tables populated |
 
