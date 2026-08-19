@@ -73,6 +73,81 @@ def get_detection_bottom_center(
     Compute normalized bottom-center point ((x1+x2)/2, y2) in [0, 1].
     Represents ground contact for overhead camera BAI-KIEM.
     """
+"""
+zone.zone_checker — Pure Point-in-Polygon Containment, Rule Matrix, and Violation State Machine
+
+Coordinates:
+- DB polygon_points: [{"x": float, "y": float}] in [0, 1]
+- Detection: normalized bottom-center point ((x1+x2)/2, y2)
+- Containment: Shapely.Polygon.covers(Point) (boundary included)
+- Rules: PROHIBIT_SPECIFIED vs ALLOW_SPECIFIED
+- State Machine: (camera_id, track_id, zone_id) with entry/exit hysteresis,
+  3-frame exit grace, and missing-track reconnect grace
+"""
+import logging
+import math
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Set, Tuple
+import uuid
+
+from shapely.geometry import Point, Polygon
+
+logger = logging.getLogger("sentriai.zone.checker")
+
+
+def parse_polygon(points_data: Any) -> Optional[Polygon]:
+    """
+    Parse polygon points from JSON array of {'x': float, 'y': float} or [[x, y], ...].
+    Returns a valid Shapely Polygon or None if invalid.
+    """
+    if not points_data or not isinstance(points_data, (list, tuple)):
+        return None
+
+    coords: List[Tuple[float, float]] = []
+    for pt in points_data:
+        if isinstance(pt, dict) and "x" in pt and "y" in pt:
+            try:
+                coords.append((float(pt["x"]), float(pt["y"])))
+            except (ValueError, TypeError):
+                return None
+        elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
+            try:
+                coords.append((float(pt[0]), float(pt[1])))
+            except (ValueError, TypeError):
+                return None
+        else:
+            return None
+
+    if len(coords) < 3:
+        return None
+
+    if any(
+        not math.isfinite(coord) or coord < 0.0 or coord > 1.0
+        for point in coords
+        for coord in point
+    ):
+        return None
+
+    try:
+        poly = Polygon(coords)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if poly.is_empty or len(poly.exterior.coords) < 4:
+            return None
+        return poly
+    except Exception as exc:
+        logger.warning("Failed to create Polygon: %s", exc)
+        return None
+
+
+def get_detection_bottom_center(
+    normalized_bbox: List[float],
+) -> Tuple[float, float]:
+    """
+    Compute normalized bottom-center point ((x1+x2)/2, y2) in [0, 1].
+    Represents ground contact for overhead camera BAI-KIEM.
+    """
     x1, y1, x2, y2 = normalized_bbox
     px = (x1 + x2) / 2.0
     py = y2
@@ -108,7 +183,6 @@ def evaluate_zone_rule(
     elif norm_rule == "ALLOW_SPECIFIED":
         return "ALLOWED" if has_target_match else "VIOLATION"
     else:
-        # Default fallback to PROHIBIT_SPECIFIED
         return "VIOLATION" if has_target_match else "ALLOWED"
 
 
@@ -120,11 +194,22 @@ def resolve_candidate_labels(
     """
     Resolve candidate Vietnamese names for a YOLO class.
     1. Check class_to_labels (from object_labels table)
-    2. If no database mapping exists, return ['CHƯA XÁC ĐỊNH'].
+    2. Map warehouse vehicle classes (forklift, crane) to truck category if present
+    3. Fallback to COCO translated name if available
+    4. If no mapping exists, return ['CHƯA XÁC ĐỊNH'].
     """
     c_folded = yolo_class.strip().casefold() if yolo_class else ""
     if c_folded in class_to_labels and class_to_labels[c_folded]:
         return class_to_labels[c_folded]
+
+    # Map industrial / warehouse equipment synonyms to truck category in DB
+    if c_folded in ["forklift", "crane", "mobile crane"]:
+        if "truck" in class_to_labels and class_to_labels["truck"]:
+            return class_to_labels["truck"]
+
+    # Fallback to COCO translated name if present and not raw class
+    if coco_label and coco_label.strip().casefold() != c_folded:
+        return [coco_label]
 
     return ["CHƯA XÁC ĐỊNH"]
 
@@ -283,7 +368,16 @@ class ZoneChecker:
         observed_track_ids: Set[int],
         now: datetime,
     ) -> Optional[Tuple[str, int, str]]:
-        """Reconnect a just-renumbered ByteTrack identity before opening a duplicate event."""
+        """
+        Reconnect a just-renumbered ByteTrack identity before opening a duplicate event.
+
+        NOTE: We intentionally do NOT require object_label or yolo_class to match.
+        YOLO-World can assign different class text-prompts to the same physical object
+        across frames (e.g. "truck" vs "forklift" for the same forklift), causing the
+        cross-class NMS winner to alternate. Requiring label equality would prevent
+        reconnection and create a new violation for every class flip.
+        Only zone + bbox proximity are needed to identify the same physical object.
+        """
         best_key: Optional[Tuple[str, int, str]] = None
         best_iou = 0.0
 
@@ -294,8 +388,6 @@ class ZoneChecker:
                 or active.track_id == track_id
                 or active.track_id in observed_track_ids
                 or (now - active.last_seen_inside).total_seconds() >= self.missing_grace_seconds
-                or active.object_label.casefold() != object_label.casefold()
-                or active.yolo_class != yolo_class
                 or active.normalized_bbox is None
             ):
                 continue

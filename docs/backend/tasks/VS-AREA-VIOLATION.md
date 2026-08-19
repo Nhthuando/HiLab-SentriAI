@@ -396,3 +396,10 @@ Execute in this order. After each step, update this task's changed-files and nex
 - Local MP4 sources now advance by the number of source frames corresponding to the elapsed wall-clock time. This preserves playback speed when a 50 FPS file is processed by the AI loop at a lower FPS.
 - A violation remains pending for one continuous second before the `STARTED` transition. A person/object that appears for less than one second is discarded without a database row, WS alert, event-panel row, or clip job.
 - Evidence: `python tests/test_area_pipeline.py` passed 20/20 on 2026-08-18. Browser testing remains user-owned.
+
+## YOLO-World detector trial (2026-08-18)
+
+- Area can switch from the original YOLOv8n detector to YOLO-World using `AREA_DETECTOR_KIND=world`; prompts come from `AREA_DETECTOR_CLASSES`.
+- Current trial prompts: `person`, `forklift`, `mobile crane`, `car`, `truck`, `bus`, `motorcycle`; the standard YOLO path remains the fallback when the flag is `yolov8`.
+- `yolov8s-world.pt` was downloaded locally and loaded successfully. A single-frame smoke check on the configured video returned a `car` detection at confidence `0.713`; no browser acceptance has been claimed.
+- Python unit suite remains green at 20/20. Compare live FPS and forklift/crane precision manually before deciding whether to keep or revert this trial.

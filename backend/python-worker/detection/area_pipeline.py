@@ -313,6 +313,12 @@ class AreaPipeline:
     async def _loop(self) -> None:
         """Asynchronous processing and emission loop."""
         logger.info("[%s] Area camera pipeline started (target: %.1f FPS).", self.camera_id, self.target_fps)
+        # Immediate initial sync so first frames have DB labels
+        try:
+            await self.zone_sync.refresh_now()
+        except Exception as exc:
+            logger.warning("[%s] Initial zone sync failed: %s", self.camera_id, exc)
+
         interval = 1.0 / self.target_fps
 
         while self._running:

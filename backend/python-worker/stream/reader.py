@@ -114,7 +114,10 @@ class StreamReader:
             self.is_synthetic = True
 
     def _advance_local_video_for_elapsed_time(self) -> None:
-        """Skip local-file frames so a high-FPS test clip keeps source speed."""
+        """
+        Advance playback time tracking for local video files.
+        Avoid heavy multi-frame grab loops on 4K/high-res videos which stall the decoder.
+        """
         if (
             not self.is_local_file
             or self.cap is None
@@ -129,10 +132,11 @@ class StreamReader:
         if previous is None:
             return
 
-        source_frames_elapsed = max(1, int(round((now - previous) * self.source_fps)))
-        for _ in range(source_frames_elapsed - 1):
-            if not self.cap.grab():
-                break
+        # Cap skipped frames to at most 1 frame per cycle to prevent decoder stalling on 4K files
+        elapsed = now - previous
+        expected_interval = 1.0 / self.target_fps
+        if elapsed > expected_interval * 1.8:
+            self.cap.grab()
 
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """

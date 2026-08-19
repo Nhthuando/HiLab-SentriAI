@@ -136,6 +136,8 @@
 
 The latest user-reported follow-up is addressed in the worker: Area inference is limited to `person`/`truck` (`truck` is the configured `Container` label), a missing track has a 12-second identity-reconnect window while an observed exit retains the 3-frame close rule, and new clips are H.264/yuv420p MP4 with browser-friendly fast-start metadata. Existing FMP4 historical clips are not transcoded. Local video files skip source frames according to elapsed wall-clock time, preventing a high-FPS test video from playing in slow motion through a slower AI loop. Entry remains exact-polygon-only, while an already-open violation gets a `0.02` normalized outward boundary buffer (about 13px at 640px inference width) to stop detector jitter at the edge from repeatedly closing and reopening one event. Detections with no zone match are explicitly `OUTSIDE`, not allowed. A violation must remain confirmed for at least one second before it can create a row, alert, or clip job.
 
+For the YOLO-World trial, Area supports `AREA_DETECTOR_KIND=world`, `AREA_DETECTOR_MODEL=yolov8s-world.pt`, and comma-separated `AREA_DETECTOR_CLASSES` prompts. The default test prompt set is `person,forklift,mobile crane,car,truck,bus,motorcycle`; the downloaded weight is local-only and is not committed.
+
 - Python Unit tests for Point-in-polygon covers, Rule Matrix, state transitions, missing-track continuity, track reidentification, boundary jitter suppression, outside-zone classification, local-video rewind/reset and playback pacing, one-second event confirmation, and H.264 clip output: PASSED (20/20) on 2026-08-18.
 - Node.js typecheck: PASSED. The standalone Neon REST verifier remains pending after a sandbox TLS failure and an approved retry timeout.
 

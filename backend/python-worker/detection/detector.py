@@ -46,6 +46,8 @@ class YoloDetector:
         self.conf_threshold = conf_threshold
         self.target_classes = target_classes or ["car", "truck", "motorcycle", "bus", "person", "bicycle"]
         self.model: Optional[YOLO] = None
+        import torch
+        self.device = 0 if torch.cuda.is_available() else "cpu"
         self._load_model()
 
     @staticmethod
@@ -75,8 +77,11 @@ class YoloDetector:
     def _load_model(self) -> None:
         """Load YOLO model."""
         try:
-            logger.info("Loading YOLO model from %s...", self.model_path)
+            device_str = "cuda:0" if self.device == 0 else "cpu"
+            logger.info("Loading YOLO model from %s on %s...", self.model_path, device_str)
             self.model = YOLO(self.model_path)
+            if self.device == 0:
+                self.model.to(device_str)
             logger.info("YOLO model loaded successfully.")
         except Exception as exc:
             logger.error("Failed to load YOLO model: %s", exc)
@@ -99,7 +104,7 @@ class YoloDetector:
 
         try:
             # Run inference (verbose=False to avoid console spam)
-            results = self.model(frame, conf=threshold, verbose=False)
+            results = self.model(frame, conf=threshold, device=self.device, verbose=False)
             detections: List[Dict[str, Any]] = []
 
             for r in results:
