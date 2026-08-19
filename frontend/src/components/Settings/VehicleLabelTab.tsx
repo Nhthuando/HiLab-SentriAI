@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import type { Vehicle } from '../../types';
 import { getVehicles, updateVehicleStatus, registerVehicle } from '../../api/vehicles';
 
@@ -12,6 +13,12 @@ type SortField = 'visits' | 'last' | 'plate' | null;
 type SortDirection = 'asc' | 'desc';
 type StatusFilter = 'all' | 'quen' | 'la';
 
+interface ToastItem {
+  id: string;
+  msg: string;
+  type: 'to-known' | 'to-stranger' | 'error' | 'success';
+}
+
 export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
   vehicles: initialVehicles,
   labels: initialLabels,
@@ -20,7 +27,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
   const [vehicleList, setVehicleList] = useState<Vehicle[]>(initialVehicles || []);
   const [labelMap, setLabelMap] = useState<Record<string, 'quen' | 'la'>>(initialLabels || {});
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -34,6 +41,22 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
   const [newStatus, setNewStatus] = useState<'KNOWN' | 'STRANGER'>('KNOWN');
   const [newNote, setNewNote] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  const addToast = (msg: string, type: 'to-known' | 'to-stranger' | 'error' | 'success') => {
+    const id = 'toast-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+    const newToast: ToastItem = { id, msg, type };
+
+    setToasts((prev) => {
+      // Newest on top, keep max 3
+      const updated = [newToast, ...prev];
+      return updated.slice(0, 3);
+    });
+
+    // Auto dismiss after 3 seconds
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 3000);
+  };
 
   // Fetch from real API
   const loadVehicles = useCallback(async () => {
@@ -61,11 +84,6 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
   useEffect(() => {
     loadVehicles();
   }, [loadVehicles]);
-
-  const showToast = (msg: string) => {
-    setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 3500);
-  };
 
   // Distinct vehicle types
   const uniqueTypes = useMemo(() => {
@@ -102,13 +120,18 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
       externalToggle(plate);
     }
 
+    if (nextStatus === 'quen') {
+      addToast(`✓ Đã chuyển biển số ${plate} thành Xe quen (Hợp lệ)`, 'to-known');
+    } else {
+      addToast(`⚠ Đã chuyển biển số ${plate} thành Xe lạ (Cảnh báo)`, 'to-stranger');
+    }
+
     try {
       await updateVehicleStatus(plate, nextStatus);
-      showToast(`✓ Đã đổi trạng thái biển số ${plate} thành ${nextStatus === 'quen' ? 'Xe quen' : 'Xe lạ'}`);
     } catch (err: any) {
       // Rollback on error
       setLabelMap((prev) => ({ ...prev, [plate]: currentStatus }));
-      showToast(`⚠ Lỗi khi cập nhật trạng thái: ${err.message || 'Không kết nối được server'}`);
+      addToast(`⚠ Lỗi khi cập nhật trạng thái: ${err.message || 'Không kết nối được server'}`, 'error');
     }
   };
 
@@ -124,13 +147,13 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
         status: newStatus,
         note: newNote.trim() || undefined,
       });
-      showToast(`✓ Đăng ký thành công biển số ${newPlate.trim().toUpperCase()}`);
+      addToast(`✓ Đăng ký thành công biển số ${newPlate.trim().toUpperCase()}`, 'success');
       setIsAddModalOpen(false);
       setNewPlate('');
       setNewNote('');
       await loadVehicles();
     } catch (err: any) {
-      showToast(`⚠ ${err.message || 'Không thể đăng ký biển số'}`);
+      addToast(`⚠ ${err.message || 'Không thể đăng ký biển số'}`, 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -214,28 +237,70 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
         position: 'relative',
       }}
     >
-      {/* Toast Notification */}
-      {toastMsg && (
-        <div
-          className="glass-panel animate-msg"
-          style={{
-            position: 'absolute',
-            top: '16px',
-            right: '20px',
-            zIndex: 50,
-            padding: '10px 18px',
-            borderRadius: '10px',
-            backgroundColor: toastMsg.startsWith('✓') ? 'var(--okq)' : 'var(--p0q)',
-            border: `1px solid ${toastMsg.startsWith('✓') ? 'var(--ok)' : 'var(--p0)'}`,
-            color: toastMsg.startsWith('✓') ? 'var(--ok)' : 'var(--p0)',
-            fontSize: '12.5px',
-            fontWeight: 600,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-          }}
-        >
-          {toastMsg}
-        </div>
-      )}
+      {/* Floating Toast Notification Stack — Mounted directly to document.body via Portal */}
+      {typeof document !== 'undefined' &&
+        toasts.length > 0 &&
+        createPortal(
+          <div
+            style={{
+              position: 'fixed',
+              bottom: '24px',
+              right: '24px',
+              zIndex: 99999,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+              pointerEvents: 'none',
+            }}
+          >
+            {toasts.map((t) => {
+              const isKnown = t.type === 'to-known';
+              const isStranger = t.type === 'to-stranger';
+              const isError = t.type === 'error';
+              const bg = isKnown
+                ? 'rgba(16, 185, 129, 0.22)'
+                : isStranger || isError
+                ? 'rgba(244, 63, 94, 0.22)'
+                : 'rgba(59, 130, 246, 0.22)';
+              const borderColor = isKnown
+                ? 'var(--ok)'
+                : isStranger || isError
+                ? 'var(--p0)'
+                : 'var(--acc)';
+              const textColor = isKnown
+                ? 'var(--ok)'
+                : isStranger || isError
+                ? 'var(--p0)'
+                : '#ffffff';
+
+              return (
+                <div
+                  key={t.id}
+                  className="glass-panel animate-msg"
+                  style={{
+                    padding: '10px 18px',
+                    borderRadius: '10px',
+                    backgroundColor: bg,
+                    border: `1px solid ${borderColor}`,
+                    color: textColor,
+                    fontSize: '12.5px',
+                    fontWeight: 600,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+                    backdropFilter: 'blur(16px)',
+                    minWidth: '260px',
+                    maxWidth: '400px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}
+                >
+                  <span>{t.msg}</span>
+                </div>
+              );
+            })}
+          </div>,
+          document.body
+        )}
 
       {/* Header with Title & Description & Add Button */}
       <div

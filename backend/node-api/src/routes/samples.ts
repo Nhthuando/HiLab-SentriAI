@@ -13,6 +13,38 @@ import { sendCreated, sendNoContent, sendSuccess } from '../utils/response';
 const samplesRouter = Router();
 
 /**
+ * GET /api/v1/samples
+ * Returns all annotation samples from database.
+ */
+samplesRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const records = await prisma.labelSample.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+
+    const formatted = records.map((r) => {
+      const bbox = (r.bbox as any) || {};
+      return {
+        id: r.id,
+        labelId: r.labelId,
+        srcId: r.imagePath,
+        x: bbox.x ?? 0,
+        y: bbox.y ?? 0,
+        w: bbox.w ?? 0,
+        h: bbox.h ?? 0,
+        frame: bbox.frame ?? null,
+        session: 0,
+      };
+    });
+
+    return sendSuccess(res, formatted);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/**
  * POST /api/v1/samples/batch
  * Body: { samples: Array<{ labelId, imagePath?, bbox: { x, y, w, h } | [x, y, w, h] }> }
  */
@@ -45,6 +77,7 @@ samplesRouter.post('/batch', async (req: Request, res: Response, next: NextFunct
         y: item.y ?? 0,
         w: item.w ?? 0,
         h: item.h ?? 0,
+        frame: item.frame ?? null,
       };
 
       insertData.push({

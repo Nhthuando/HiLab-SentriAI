@@ -22,7 +22,13 @@ import cv2
 import numpy as np
 
 from buffer.circular_buffer import CircularBuffer
-from db.repositories import create_gate_event, get_active_zones_by_camera, get_vehicle_status_by_plate
+from db.repositories import (
+    create_gate_event,
+    get_active_zones_by_camera,
+    get_all_registered_plates,
+    get_vehicle_status_by_plate,
+    register_vehicle,
+)
 from detection.detector import YoloDetector
 from detection.lpr import LicensePlateReader
 from detection.plate_tracker import PlateTracker
@@ -119,8 +125,9 @@ class GatePipeline:
         self._recent_events: Dict[str, float] = {}
         self._cooldown_seconds = 20.0
 
-        # Zone synchronization for in-zone only LPR
+        # Zone & Registered Vehicle synchronization
         self._active_zones: List[Dict[str, Any]] = []
+        self._registered_plates_cache: Dict[str, str] = {}
         self._last_zone_sync: float = 0.0
 
         self._running = False
@@ -131,13 +138,19 @@ class GatePipeline:
         self._fps_counter = 0
 
     async def _sync_active_zones(self, now: float) -> None:
-        """Fetch active monitoring zones for GATE-01 from database."""
+        """Fetch active monitoring zones and registered vehicle labels for GATE-01 from database."""
         self._last_zone_sync = now
         try:
             zones = await get_active_zones_by_camera(self.camera_id)
             self._active_zones = zones or []
         except Exception as exc:
             logger.debug("[%s] Zone sync error: %s", self.camera_id, exc)
+
+        try:
+            plates = await get_all_registered_plates()
+            self._registered_plates_cache = plates or {}
+        except Exception as exc:
+            logger.debug("[%s] Registered plates sync error: %s", self.camera_id, exc)
 
     def _find_matching_zone(self, bbox: List[int], frame_w: int, frame_h: int) -> Tuple[bool, str, str]:
         """
@@ -197,18 +210,22 @@ class GatePipeline:
             logger.warning("Clip extraction failed for plate %s (%s). Continuing event logging.", plate, exc)
             return None
 
-    @staticmethod
-    def resolve_vehicle_status(plate_str: str) -> str:
-        """Single Source of Truth for resolving plate KNOWN / STRANGER status."""
+    def resolve_vehicle_status(self, plate_str: str) -> str:
+        """Single Source of Truth for resolving plate KNOWN / STRANGER status based on Settings/Database."""
         if not plate_str:
             return "STRANGER"
-        clean = plate_str.upper().replace(" ", "").replace("-", "").replace(".", "")
-        known_samples = [
-            "15R", "29A", "51C", "30F", "30A", "ABC", "7XYZ",
-            "KA02", "DL02", "LK12", "OE56", "AJ08", "LM07", "L407", "LH07", "OF56"
-        ]
-        if any(k in clean for k in known_samples):
-            return "KNOWN"
+        clean = plate_str.strip().upper()
+        # 1. Direct match in registered plates cache
+        if clean in self._registered_plates_cache:
+            return self._registered_plates_cache[clean]
+
+        # 2. Normalized match (ignoring dashes, spaces, dots)
+        no_punct = clean.replace(" ", "").replace("-", "").replace(".", "")
+        for p, st in self._registered_plates_cache.items():
+            if p.replace(" ", "").replace("-", "").replace(".", "") == no_punct:
+                return st
+
+        # 3. Default for any unregistered vehicle is strictly STRANGER (Xe lạ)
         return "STRANGER"
 
     async def _handle_detected_plate(
@@ -228,7 +245,18 @@ class GatePipeline:
         except Exception as exc:
             logger.debug("Database lookup failed (%s). Defaulting status.", exc)
 
-        status = db_status or self.resolve_vehicle_status(plate)
+        if db_status:
+            status = db_status
+            self._registered_plates_cache[plate] = status
+        else:
+            status = "STRANGER"
+            # Auto-register newly detected stranger vehicle into database
+            try:
+                await register_vehicle(plate_number=plate, status="STRANGER", note="Nhận diện tự động tại Cổng")
+                self._registered_plates_cache[plate] = "STRANGER"
+                logger.info("[%s] Auto-registered new vehicle '%s' as STRANGER in database", self.camera_id, plate)
+            except Exception as reg_exc:
+                logger.debug("Could not auto-register vehicle (%s): %s", plate, reg_exc)
 
         # 2. Save media artifacts
         crop_path = await asyncio.to_thread(self._save_crop_image, crop, plate)

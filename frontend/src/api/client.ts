@@ -8,6 +8,16 @@
 export const API_BASE_URL =
   (import.meta.env.VITE_API_URL as string | undefined) || 'http://localhost:3001/api/v1';
 
+export function resolveMediaUrl(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('blob:') || url.startsWith('data:')) {
+    return url;
+  }
+  const base = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
+  const cleanPath = url.startsWith('/') ? url : `/${url}`;
+  return `${base}${cleanPath}`;
+}
+
 export class ApiError extends Error {
   public readonly status: number;
   public readonly code: string;

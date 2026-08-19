@@ -9,34 +9,11 @@ import type {
   ChatMessage
 } from './types';
 
-export const INITIAL_VEHICLES: Vehicle[] = [
-  { plate: '15R-158.45', type: 'Container', visits: 42, last: '16/08 08:42', tint: '#2a4a6b' },
-  { plate: '16H-678.90', type: 'Xe tải', visits: 31, last: '16/08 07:15', tint: '#3d5a40' },
-  { plate: '16L-998.21', type: 'Xe con', visits: 2, last: '16/08 09:18', tint: '#5a4a3d' },
-  { plate: '29H-887.12', type: 'Xe tải', visits: 1, last: '15/08 22:04', tint: '#4a3d5a' },
-  { plate: '15H-012.34', type: 'Container', visits: 27, last: '16/08 06:51', tint: '#2a4a6b' },
-  { plate: '16K-345.67', type: 'Container', visits: 19, last: '16/08 05:33', tint: '#3d4a5a' }
-];
+export const INITIAL_VEHICLES: Vehicle[] = [];
 
-export const INITIAL_LABELS: Record<string, 'quen' | 'la'> = {
-  '15R-158.45': 'quen',
-  '16H-678.90': 'quen',
-  '16L-998.21': 'la',
-  '29H-887.12': 'la',
-  '15H-012.34': 'quen',
-  '16K-345.67': 'quen'
-};
+export const INITIAL_LABELS: Record<string, 'quen' | 'la'> = {};
 
-export const INITIAL_GATE_EVENTS: GateEvent[] = [
-  { id: 'ge1', time: '09:41', plate: '15R-158.45', zone: 'Làn IN 2', conf: 97, status: 'quen' },
-  { id: 'ge2', time: '09:18', plate: '16L-998.21', zone: 'Làn IN 1', conf: 95, status: 'la' },
-  { id: 'ge3', time: '08:56', plate: '15H-012.34', zone: 'Làn IN 1', conf: 98, status: 'quen' },
-  { id: 'ge4', time: '08:42', plate: '15R-158.45', zone: 'Làn IN 2', conf: 96, status: 'quen' },
-  { id: 'ge5', time: '08:11', plate: '—', zone: 'Làn IN 2', conf: null, status: 'la' },
-  { id: 'ge6', time: '07:15', plate: '16H-678.90', zone: 'Làn IN 1', conf: 94, status: 'quen' },
-  { id: 'ge7', time: '06:51', plate: '15H-012.34', zone: 'Làn IN 2', conf: 97, status: 'quen' },
-  { id: 'ge8', time: '05:33', plate: '16K-345.67', zone: 'Làn IN 1', conf: 99, status: 'quen' }
-];
+export const INITIAL_GATE_EVENTS: GateEvent[] = [];
 
 export const INITIAL_AREA_EVENTS: AreaEvent[] = [
   { id: 'ae1', time: '09:52', obj: 'Xe máy', zone: 'Zone cấm phương tiện cá nhân', st: 'Vi phạm', ok: false },
@@ -101,9 +78,8 @@ export const INITIAL_OBJ_LABELS: ObjectLabel[] = [
 ];
 
 export const INITIAL_ANN_SOURCES: AnnotationSource[] = [
-  { id: 'src1', name: 'baikiem-cam-01.jpg', kind: 'img', img: '/assets/cam-baikiem.png' },
-  { id: 'src2', name: 'gate-lan-in-06-15.jpg', kind: 'img', img: '/assets/cam-gate.png' },
-  { id: 'src3', name: 'yard-ca-chieu.mp4', kind: 'video', tint: '#3d4a3a' }
+  { id: 'src1', name: 'baikiem-cam-01.jpg', kind: 'img', img: '/assets/cam-baikiem.png', isDefault: true },
+  { id: 'src2', name: 'gate-lan-in-06-15.jpg', kind: 'img', img: '/assets/cam-gate.png', isDefault: true },
 ];
 
 export const INITIAL_ANN_SAMPLES: AnnotationSample[] = [

@@ -110,7 +110,10 @@ export interface AnnotationSource {
   name: string;
   kind: 'img' | 'video';
   img?: string;
+  thumbnail?: string;
   tint?: string;
+  isDefault?: boolean;
+  filename?: string;
 }
 
 export interface AnnotationSample {

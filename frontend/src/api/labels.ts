@@ -57,6 +57,10 @@ export async function deleteLabel(id: string): Promise<void> {
   return apiClient.delete<void>(`/labels/${id}`);
 }
 
+export async function getAnnotationSamples(): Promise<AnnotationSample[]> {
+  return apiClient.get<AnnotationSample[]>('/samples');
+}
+
 export async function saveAnnotationSamples(
   samples: AnnotationSample[]
 ): Promise<{ count: number }> {
@@ -69,3 +73,21 @@ export async function uploadLabelImage(data: {
 }): Promise<{ path: string; url: string }> {
   return apiClient.post<{ path: string; url: string }>('/upload/image', data);
 }
+
+export async function getMediaSources(): Promise<any[]> {
+  return apiClient.get<any[]>('/upload/media');
+}
+
+export async function uploadMediaSource(data: {
+  data: string;
+  filename: string;
+  kind?: 'img' | 'video';
+  thumbnail?: string;
+}): Promise<any> {
+  return apiClient.post<any>('/upload/media', data);
+}
+
+export async function deleteMediaSource(filename: string): Promise<void> {
+  return apiClient.delete<void>(`/upload/media/${filename}`);
+}
+

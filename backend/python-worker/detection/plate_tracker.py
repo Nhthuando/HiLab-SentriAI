@@ -210,9 +210,8 @@ class PlateTracker:
 
             if plate_text:
                 track.add_plate_vote(plate_text, conf)
-                if not track.status_locked and status:
+                if status:
                     track.status = status
-                    track.status_locked = True
 
             return track
         else:
@@ -221,7 +220,7 @@ class PlateTracker:
                 vehicle_bbox=vehicle_bbox,
                 plate_bbox=[int(v) for v in plate_bbox] if plate_bbox else None,
                 plate=plate_text or "",
-                status=status or ("KNOWN" if plate_text else "SCANNING"),
+                status=status or ("STRANGER" if plate_text else "SCANNING"),
                 confidence=conf or 0.85,
                 last_seen=now,
             )
