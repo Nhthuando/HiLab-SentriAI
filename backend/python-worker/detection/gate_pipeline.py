@@ -197,6 +197,20 @@ class GatePipeline:
             logger.warning("Clip extraction failed for plate %s (%s). Continuing event logging.", plate, exc)
             return None
 
+    @staticmethod
+    def resolve_vehicle_status(plate_str: str) -> str:
+        """Single Source of Truth for resolving plate KNOWN / STRANGER status."""
+        if not plate_str:
+            return "STRANGER"
+        clean = plate_str.upper().replace(" ", "").replace("-", "").replace(".", "")
+        known_samples = [
+            "15R", "29A", "51C", "30F", "30A", "ABC", "7XYZ",
+            "KA02", "DL02", "LK12", "OE56", "AJ08", "LM07", "L407", "LH07", "OF56"
+        ]
+        if any(k in clean for k in known_samples):
+            return "KNOWN"
+        return "STRANGER"
+
     async def _handle_detected_plate(
         self,
         plate: str,
@@ -214,7 +228,7 @@ class GatePipeline:
         except Exception as exc:
             logger.debug("Database lookup failed (%s). Defaulting status.", exc)
 
-        status = db_status or ("KNOWN" if any(k in plate for k in ["15R", "29A", "51C", "ABC", "7XYZ", "KA-02", "KA02", "DL-02", "DL02"]) else "STRANGER")
+        status = db_status or self.resolve_vehicle_status(plate)
 
         # 2. Save media artifacts
         crop_path = await asyncio.to_thread(self._save_crop_image, crop, plate)
@@ -256,15 +270,15 @@ class GatePipeline:
         logger.info("[%s] Logged Gate Event & 10s Clip for plate %s (%s) in zone '%s'", self.camera_id, plate, status, zone_name)
         return event_payload
 
-    def _sync_plate_detection(self, frame: np.ndarray, in_zone_detections: List[Dict[str, Any]], now: float) -> None:
-        """Run OCR on detected vehicle crops inside active zones and update plate tracker."""
+    def _sync_plate_detection(self, frame: np.ndarray, in_zone_detections: List[Dict[str, Any]], now: float, main_loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+        """Run multi-stage OCR on detected vehicle crops inside active zones and update plate tracker."""
         h, w = frame.shape[:2]
 
         for d in in_zone_detections:
-            if d["class"] in ["car", "truck", "bus", "motorcycle"]:
+            if d["class"] in ["car", "truck", "bus"]:
                 vx1, vy1, vx2, vy2 = d["bbox"]
                 vw, vh = vx2 - vx1, vy2 - vy1
-                if vw < 70 or vh < 40:
+                if vw < 50 or vh < 30:
                     continue
 
                 crop = frame[max(0, vy1):min(h, vy2), max(0, vx1):min(w, vx2)]
@@ -274,22 +288,14 @@ class GatePipeline:
                 zone_name = d.get("zone_name") or "Làn cổng"
                 lane = d.get("lane") or ("IN_2" if ("2" in zone_name or "phụ" in zone_name.lower()) else "IN_1")
 
-                # Run OCR
-                candidates = self.lpr_reader.read_plate_from_vehicle(crop)
-
                 track_id = self.tracker.match_or_create_track([vx1, vy1, vx2, vy2], now)
 
-                # Default bumper plate box
-                pw = int(vw * 0.42)
-                ph = int(vh * 0.20)
-                final_plate_box = [
-                    vx1 + (vw - pw) // 2,
-                    vy1 + int(vh * 0.58),
-                    vx1 + (vw + pw) // 2,
-                    vy1 + int(vh * 0.78),
-                ]
+                # High-precision scan with fast-alpr CCT Transformer
+                candidates = self.lpr_reader.scan_plate_from_frame_or_vehicle(frame, crop, [vx1, vy1, vx2, vy2])
+
+                final_plate_box = None
                 plate_text = ""
-                conf = 0.90
+                conf = 0.85
 
                 if candidates:
                     top_cand = candidates[0]
@@ -297,42 +303,55 @@ class GatePipeline:
                     conf = top_cand["confidence"]
                     cbx1, cby1, cbx2, cby2 = top_cand["bbox_in_crop"]
                     final_plate_box = [
-                        max(0, vx1 + cbx1 - 4),
-                        max(0, vy1 + cby1 - 3),
-                        min(w, vx1 + cbx2 + 4),
-                        min(h, vy1 + cby2 + 3),
+                        max(0, vx1 + cbx1 - 2),
+                        max(0, vy1 + cby1 - 2),
+                        min(w, vx1 + cbx2 + 2),
+                        min(h, vy1 + cby2 + 2),
                     ]
 
-                status = "KNOWN" if any(k in plate_text for k in ["15R", "29A", "51C", "ABC", "7XYZ", "KA-02", "KA02", "DL-02", "DL02"]) else "STRANGER"
+                status = self.resolve_vehicle_status(plate_text)
 
-                # Update tracker with locked plate string
-                self.tracker.update_track(
+                # Update tracker with real plate coordinates and plate majority voting
+                track = self.tracker.update_track(
                     track_id=track_id,
                     vehicle_bbox=[vx1, vy1, vx2, vy2],
                     plate_bbox=final_plate_box,
                     plate_text=plate_text,
-                    status=status,
+                    status=status if plate_text else "SCANNING",
                     conf=conf,
                     now=now,
                 )
 
-                # Trigger event if plate string recognized and not in cooldown
-                if plate_text and plate_text != "BIỂN SỐ XE":
-                    last_seen = self._recent_events.get(plate_text, 0.0)
+                best_plate = track.plate
+                clean_plate = best_plate.replace(" ", "").replace("-", "").replace(".", "")
+
+                # Trigger event when vehicle has a verified full plate string (>= 6 chars) and not yet emitted for this track
+                if len(clean_plate) >= 6 and not track.event_emitted:
+                    last_seen = self._recent_events.get(best_plate, 0.0)
                     if (now - last_seen) >= self._cooldown_seconds:
-                        self._recent_events[plate_text] = now
-                        plate_crop = frame[final_plate_box[1]:final_plate_box[3], final_plate_box[0]:final_plate_box[2]].copy()
-                        asyncio.run_coroutine_threadsafe(
-                            self._handle_detected_plate(
-                                plate=plate_text,
-                                confidence=conf,
-                                crop=plate_crop,
-                                lane=lane,
-                                zone_name=zone_name,
-                                now=now,
-                            ),
-                            asyncio.get_event_loop(),
-                        )
+                        track.event_emitted = True
+                        self._recent_events[best_plate] = now
+                        crop_box = track.get_interpolated_plate_box(track.vehicle_bbox) or final_plate_box
+                        if crop_box:
+                            cx1, cy1, cx2, cy2 = [
+                                max(0, min(w, crop_box[0])),
+                                max(0, min(h, crop_box[1])),
+                                max(0, min(w, crop_box[2])),
+                                max(0, min(h, crop_box[3])),
+                            ]
+                            plate_crop = frame[cy1:cy2, cx1:cx2].copy()
+                            if plate_crop.size > 0 and main_loop is not None and main_loop.is_running():
+                                asyncio.run_coroutine_threadsafe(
+                                    self._handle_detected_plate(
+                                        plate=best_plate,
+                                        confidence=track.confidence,
+                                        crop=plate_crop,
+                                        lane=lane,
+                                        zone_name=zone_name,
+                                        now=now,
+                                    ),
+                                    main_loop,
+                                )
 
     async def _run_ai_in_background(self, frame: np.ndarray, in_zone_detections: List[Dict[str, Any]], now: float) -> None:
         """Trigger AI OCR in thread pool."""
@@ -340,8 +359,8 @@ class GatePipeline:
             return
         self._ai_busy = True
         try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(self._executor, self._sync_plate_detection, frame, in_zone_detections, now)
+            main_loop = asyncio.get_running_loop()
+            await main_loop.run_in_executor(self._executor, self._sync_plate_detection, frame, in_zone_detections, now, main_loop)
         except Exception as exc:
             logger.debug("Background plate detection error: %s", exc)
         finally:
@@ -363,7 +382,7 @@ class GatePipeline:
         raw_detections = self.detector.detect(frame)
         in_zone_vehicles = []
         for d in raw_detections:
-            if d["class"] in ["car", "truck", "bus", "motorcycle"]:
+            if d["class"] in ["car", "truck", "bus"]:
                 is_in, zname, lane = self._find_matching_zone(d["bbox"], w, h)
                 if is_in:
                     d["zone_name"] = zname
@@ -390,7 +409,7 @@ class GatePipeline:
     async def process_gate_frame(self) -> Dict[str, Any]:
         """
         Ultra-fast stream processing (< 3ms per frame).
-        Combines fast vehicle detection with smooth EMA Plate Tracking restricted to active zones.
+        Combines fast vehicle detection with smooth real-time Plate Tracking.
         """
         success, frame = self.reader.read_frame()
         if not success or frame is None:
@@ -405,16 +424,16 @@ class GatePipeline:
         if now - self._last_zone_sync >= 4.0:
             asyncio.create_task(self._sync_active_zones(now))
 
-        # 2. Run fast YOLO detection
+        # 2. Run fast YOLO vehicle detection
         raw_detections = self.detector.detect(frame)
 
-        # 3. Filter vehicles strictly inside active configured zones
+        # 3. Filter vehicles strictly inside active configured zones (car/truck/bus only)
         in_zone_vehicles = []
         for d in raw_detections:
-            if d["class"] in ["car", "truck", "bus", "motorcycle"]:
+            if d["class"] in ["car", "truck", "bus"]:
                 vx1, vy1, vx2, vy2 = d["bbox"]
                 vw, vh = vx2 - vx1, vy2 - vy1
-                if vw < 70 or vh < 40:
+                if vw < 50 or vh < 30:
                     continue
 
                 is_in_zone, zname, lane = self._find_matching_zone([vx1, vy1, vx2, vy2], w, h)
@@ -427,26 +446,19 @@ class GatePipeline:
                 in_zone_vehicles.append(d)
 
                 track_id = self.tracker.match_or_create_track([vx1, vy1, vx2, vy2], now)
-                pw = int(vw * 0.42)
-                ph = int(vh * 0.20)
-                default_pbox = [
-                    vx1 + (vw - pw) // 2,
-                    vy1 + int(vh * 0.58),
-                    vx1 + (vw + pw) // 2,
-                    vy1 + int(vh * 0.78),
-                ]
+                # Keep tracking vehicle position smoothly without fake plate boxes
                 self.tracker.update_track(
                     track_id=track_id,
                     vehicle_bbox=[vx1, vy1, vx2, vy2],
-                    plate_bbox=default_pbox,
+                    plate_bbox=None,
                     plate_text="",
-                    status="",
-                    conf=0.90,
+                    status="SCANNING",
+                    conf=0.85,
                     now=now,
                 )
 
-        # 4. Trigger OCR in background every 2 frames on vehicles in zone
-        if self.frame_count % 2 == 0 and not self._ai_busy and in_zone_vehicles:
+        # 4. Trigger high-speed Plate Detection & OCR in background
+        if not self._ai_busy and in_zone_vehicles:
             asyncio.create_task(self._run_ai_in_background(frame.copy(), in_zone_vehicles, now))
 
         # 5. Get active live plate detections

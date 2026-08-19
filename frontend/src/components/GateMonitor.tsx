@@ -453,7 +453,7 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
                     zIndex: 15,
                   }}
                 >
-                  {plateText && (
+                  {plateText ? (
                     <div
                       style={{
                         position: 'absolute',
@@ -487,6 +487,29 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
                       >
                         {isStranger ? 'Xe lạ' : 'Xe quen'}
                       </span>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: '50%',
+                        top: '-24px',
+                        transform: 'translateX(-50%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        backgroundColor: 'rgba(14, 23, 38, 0.92)',
+                        color: 'var(--cyan)',
+                        border: '1px solid var(--cyan)',
+                        fontSize: '10px',
+                        fontWeight: 600,
+                        padding: '1px 7px',
+                        borderRadius: '4px',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--cyan)' }} />
+                      <span>Đang quét biển số...</span>
                     </div>
                   )}
                 </div>
