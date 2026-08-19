@@ -12,6 +12,7 @@ from db.connection import (
     init_db_pool,
 )
 from db.repositories import (
+    close_stale_open_violations,
     close_zone_violation,
     count_stranger_vehicles,
     create_gate_event,
@@ -28,6 +29,7 @@ from db.repositories import (
     get_recent_zone_violations,
     get_vehicle_status_by_plate,
     register_vehicle,
+    update_violation_clip_path,
 )
 
 __all__ = [
@@ -56,6 +58,8 @@ __all__ = [
     "close_zone_violation",
     "get_open_violations",
     "get_recent_zone_violations",
+    "update_violation_clip_path",
+    "close_stale_open_violations",
     # Object Labels
     "get_all_object_labels",
     "create_object_label",

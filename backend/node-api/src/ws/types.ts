@@ -13,12 +13,29 @@ export type ChannelName =
   | 'alerts'
   | string;
 
+export interface AreaZoneMatch {
+  zoneId: string;
+  zoneName: string;
+  status: 'VIOLATION' | 'ALLOWED' | string;
+}
+
+export interface AreaZoneFeedDto {
+  id: string;
+  name: string;
+  polygon: Array<{ x: number; y: number }> | Array<[number, number]>;
+  ruleType: 'PROHIBIT_SPECIFIED' | 'ALLOW_SPECIFIED' | string;
+  targetLabels: string[];
+}
+
 export interface DetectionBox {
   bbox: [number, number, number, number]; // [x1, y1, x2, y2]
+  normalized_bbox?: [number, number, number, number];
   class: string;
   confidence: number;
   label?: string;
-  status?: 'KNOWN' | 'STRANGER' | 'VIOLATION' | 'NORMAL' | string;
+  trackId?: number | null;
+  status?: 'KNOWN' | 'STRANGER' | 'VIOLATION' | 'ALLOWED' | 'NORMAL' | string;
+  zoneMatches?: AreaZoneMatch[];
 }
 
 export interface FrameMessage {
@@ -28,6 +45,7 @@ export interface FrameMessage {
   image: string; // Base64 JPEG or data URL
   fps?: number;
   detections?: DetectionBox[];
+  zones?: AreaZoneFeedDto[];
 }
 
 export interface GateEventMessage {
@@ -45,6 +63,7 @@ export interface GateEventMessage {
 
 export interface AreaEventMessage {
   type: 'zone_violation';
+  action?: 'STARTED' | 'ENDED';
   id: string;
   cameraId: CameraId;
   zoneId: string;

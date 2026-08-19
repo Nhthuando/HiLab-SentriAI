@@ -62,12 +62,14 @@ class StreamEmitter:
         image_base64: str,
         detections: List[Dict[str, Any]],
         fps: float = 10.0,
+        zones: Optional[List[Dict[str, Any]]] = None,
     ) -> bool:
         """
         Send a video frame with bounding box detections to Node.js feed channel.
+        Optionally includes active zone polygon metadata.
         """
         path = f"/ws/publish/feed/{camera_id}"
-        payload = {
+        payload: Dict[str, Any] = {
             "type": "frame",
             "cameraId": camera_id,
             "timestamp": int(time.time() * 1000),
@@ -75,6 +77,8 @@ class StreamEmitter:
             "fps": round(fps, 1),
             "detections": detections,
         }
+        if zones is not None:
+            payload["zones"] = zones
         return await self._send_json(path, payload)
 
     async def emit_gate_event(self, event_data: Dict[str, Any]) -> bool:
@@ -92,6 +96,15 @@ class StreamEmitter:
         payload = {
             "type": "zone_violation",
             **event_data,
+        }
+        return await self._send_json(path, payload)
+
+    async def emit_alert(self, alert_data: Dict[str, Any]) -> bool:
+        """Publish an urgent cross-tab alert to Node.js proxy."""
+        path = "/ws/publish/alerts"
+        payload = {
+            "type": "alert",
+            **alert_data,
         }
         return await self._send_json(path, payload)
 

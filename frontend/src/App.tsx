@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type {
   TabId,
   SettingsSubTab,
@@ -15,7 +15,6 @@ import {
   INITIAL_VEHICLES,
   INITIAL_LABELS,
   INITIAL_GATE_EVENTS,
-  INITIAL_AREA_EVENTS,
   INITIAL_ZONES,
   INITIAL_OBJ_LABELS,
   INITIAL_ANN_SOURCES,
@@ -34,6 +33,16 @@ import { ObjectLabelTab } from './components/Settings/ObjectLabelTab';
 import { ThemeSettingsTab } from './components/Settings/ThemeSettingsTab';
 import { AIQAChat } from './components/AIQAChat';
 import { FloatingAlert } from './components/FloatingAlert';
+import { useBroadcastChannel, useWebSocket } from './hooks';
+import {
+  createZone as createZoneRequest,
+  deleteZone as deleteZoneRequest,
+  getCameraSnapshot,
+  getZones,
+  updateZone as updateZoneRequest,
+  zoneRecordToView,
+  zoneViewToWrite,
+} from './api/zones';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('mon');
@@ -58,8 +67,13 @@ export const App: React.FC = () => {
   const [vehicles] = useState(INITIAL_VEHICLES);
   const [labels, setLabels] = useState<Record<string, 'quen' | 'la'>>(INITIAL_LABELS);
   const [gateEvents] = useState(INITIAL_GATE_EVENTS);
-  const [areaEvents] = useState(INITIAL_AREA_EVENTS);
-  const [zonesByCam, setZonesByCam] = useState<Record<string, PolygonZone[]>>(INITIAL_ZONES);
+  const [zonesByCam, setZonesByCam] = useState<Record<string, PolygonZone[]>>(() => ({
+    'GATE-01': INITIAL_ZONES['GATE-01'] || [],
+    'BAI-KIEM': [],
+  }));
+  const [zoneEditorLoading, setZoneEditorLoading] = useState(true);
+  const [zoneEditorError, setZoneEditorError] = useState<string | null>(null);
+  const [areaSnapshotImage, setAreaSnapshotImage] = useState<string | null>(null);
   const [objLabels, setObjLabels] = useState<ObjectLabel[]>(INITIAL_OBJ_LABELS);
   const [annSources] = useState<AnnotationSource[]>(INITIAL_ANN_SOURCES);
   const [annSamples, setAnnSamples] = useState<AnnotationSample[]>(INITIAL_ANN_SAMPLES);
@@ -67,6 +81,8 @@ export const App: React.FC = () => {
 
   // Floating cross-tab notification
   const [floatingAlert, setFloatingAlert] = useState<FloatingNotification | null>(null);
+  const seenAreaAlertIdsRef = useRef(new Set<string>());
+  const pendingHiddenAlertRef = useRef<FloatingNotification | null>(null);
 
   // Synchronize Theme & Preferences to DOM and LocalStorage
   useEffect(() => {
@@ -145,27 +161,120 @@ export const App: React.FC = () => {
     }));
   };
 
-  // Zone handlers
-  const handleUpdateZone = (camId: string, zoneId: string, patch: Partial<PolygonZone>) => {
-    setZonesByCam((prev) => {
-      const list = prev[camId] || [];
-      const updated = list.map((z) => (z.id === zoneId ? { ...z, ...patch } : z));
-      return { ...prev, [camId]: updated };
-    });
-  };
+  const [snapshotImageByCam, setSnapshotImageByCam] = useState<Record<string, string | null>>({
+    'BAI-KIEM': null,
+    'GATE-01': null,
+  });
 
-  const handleAddZone = (camId: string, newZone: PolygonZone) => {
+  const allObjLabelNames = useMemo(
+    () => objLabels.map((label) => label.name),
+    [objLabels],
+  );
+
+  const loadZoneEditorData = useCallback(async () => {
+    setZoneEditorLoading(true);
+    setZoneEditorError(null);
+
+    try {
+      const [baikiemRecords, gateRecords] = await Promise.all([
+        getZones('BAI-KIEM').catch(() => []),
+        getZones('GATE-01').catch(() => []),
+      ]);
+
+      setZonesByCam((prev) => ({
+        ...prev,
+        'BAI-KIEM': baikiemRecords.map((record) => zoneRecordToView(record, allObjLabelNames)),
+        'GATE-01': gateRecords.map((record) => zoneRecordToView(record, allObjLabelNames)),
+      }));
+    } catch {
+      setZoneEditorError('Không thể tải dữ liệu zone. Nhấn để thử lại.');
+    } finally {
+      setZoneEditorLoading(false);
+    }
+
+    try {
+      const [baikiemSnap, gateSnap] = await Promise.all([
+        getCameraSnapshot('BAI-KIEM').catch(() => null),
+        getCameraSnapshot('GATE-01').catch(() => null),
+      ]);
+      setSnapshotImageByCam({
+        'BAI-KIEM': baikiemSnap,
+        'GATE-01': gateSnap,
+      });
+      setAreaSnapshotImage(baikiemSnap);
+    } catch {
+      setAreaSnapshotImage(null);
+    }
+  }, [allObjLabelNames]);
+
+  useEffect(() => {
+    void loadZoneEditorData();
+  }, [loadZoneEditorData]);
+
+  // Zone handlers: persists through VS-SETTINGS-ZONE API for both BAI-KIEM and GATE-01.
+  const handleUpdateZone = (camId: string, zoneId: string, patch: Partial<PolygonZone>) => {
+    const previousZones = zonesByCam[camId] || [];
+    const updatedZones = previousZones.map((zone) => (
+      zone.id === zoneId ? { ...zone, ...patch } : zone
+    ));
+
     setZonesByCam((prev) => ({
       ...prev,
-      [camId]: [...(prev[camId] || []), newZone]
+      [camId]: updatedZones,
     }));
+
+    const updatedZone = updatedZones.find((zone) => zone.id === zoneId);
+    if (!updatedZone) return;
+
+    void updateZoneRequest(zoneId, zoneViewToWrite(updatedZone, allObjLabelNames, camId))
+      .then((record) => {
+        const persisted = zoneRecordToView(record, allObjLabelNames);
+        setZonesByCam((prev) => ({
+          ...prev,
+          [camId]: (prev[camId] || []).map((zone) => (
+            zone.id === zoneId ? { ...persisted, color: zone.color } : zone
+          )),
+        }));
+      })
+      .catch(() => {
+        setZonesByCam((prev) => ({ ...prev, [camId]: previousZones }));
+        setZoneEditorError(`Không thể lưu thay đổi zone ${camId}. Thay đổi đã được hoàn tác.`);
+      });
+  };
+
+  const handleAddZone = async (camId: string, newZone: PolygonZone): Promise<PolygonZone> => {
+    try {
+      const record = await createZoneRequest(zoneViewToWrite(newZone, allObjLabelNames, camId));
+      const persisted = {
+        ...zoneRecordToView(record, allObjLabelNames),
+        color: newZone.color,
+      };
+      setZonesByCam((prev) => ({
+        ...prev,
+        [camId]: [...(prev[camId] || []), persisted],
+      }));
+      return persisted;
+    } catch (err) {
+      console.error(`Failed to create zone for ${camId}:`, err);
+      setZonesByCam((prev) => ({
+        ...prev,
+        [camId]: [...(prev[camId] || []), newZone],
+      }));
+      return newZone;
+    }
   };
 
   const handleDeleteZone = (camId: string, zoneId: string) => {
+    const previousZones = zonesByCam[camId] || [];
     setZonesByCam((prev) => ({
       ...prev,
       [camId]: (prev[camId] || []).filter((z) => z.id !== zoneId)
     }));
+
+    void deleteZoneRequest(zoneId).catch(() => {
+      setZonesByCam((prev) => ({ ...prev, [camId]: previousZones }));
+      setZoneEditorError('Không thể xóa zone. Zone đã được khôi phục.');
+    });
   };
 
   // Fetch labels from API on mount
@@ -306,24 +415,101 @@ export const App: React.FC = () => {
     setChatMessages((prev) => [...prev, userMsg, aiMsg]);
   };
 
-  // Simulate cross-tab floating alert if user is in Settings or QA
-  useEffect(() => {
-    if (activeTab === 'set' || activeTab === 'qa') {
-      const timer = setTimeout(() => {
-        setFloatingAlert({
-          id: 'alert-' + Date.now(),
-          title: 'CẢNH BÁO VI PHẠM ZONE',
-          message: 'Phát hiện Xe máy lạ vừa đi vào Zone cấm phương tiện cá nhân!',
-          zone: 'BAI-KIEM · Zone cấm PT cá nhân',
-          time: clockStr,
-          camId: 'BAI-KIEM'
-        });
-      }, 7000);
-      return () => clearTimeout(timer);
-    } else {
-      setFloatingAlert(null);
+  const acceptAreaAlert = (notification: FloatingNotification): boolean => {
+    if (seenAreaAlertIdsRef.current.has(notification.id)) return false;
+
+    seenAreaAlertIdsRef.current.add(notification.id);
+    if (seenAreaAlertIdsRef.current.size > 200) {
+      seenAreaAlertIdsRef.current.clear();
+      seenAreaAlertIdsRef.current.add(notification.id);
     }
-  }, [activeTab, clockStr]);
+
+    if (document.hidden && activeTab !== 'area') {
+      pendingHiddenAlertRef.current = notification;
+    } else if (activeTab !== 'area') {
+      setFloatingAlert(notification);
+    }
+    return true;
+  };
+
+  // Cross-tab BroadcastChannel for alert synchronization (BR-08)
+  const { postMessage: broadcastAlert } = useBroadcastChannel<FloatingNotification>(
+    'sentriai-alerts',
+    (incomingAlert) => {
+      if (
+        incomingAlert &&
+        typeof incomingAlert.id === 'string' &&
+        incomingAlert.camId === 'BAI-KIEM'
+      ) {
+        acceptAreaAlert(incomingAlert);
+      }
+    }
+  );
+
+  // Real-time WebSocket /ws/alerts subscription for urgent area violations
+  useWebSocket<{
+    type: string;
+    level: string;
+    title: string;
+    message: string;
+    cameraId?: string;
+    timestamp: string;
+    data?: Record<string, unknown>;
+  }>({
+    path: '/ws/alerts',
+    onMessage: (msg) => {
+      const alertData = msg?.data;
+      if (
+        !msg ||
+        msg.type !== 'alert' ||
+        msg.level !== 'critical' ||
+        msg.cameraId !== 'BAI-KIEM' ||
+        !alertData ||
+        typeof alertData.violationId !== 'string' ||
+        typeof alertData.zoneName !== 'string' ||
+        typeof msg.title !== 'string' ||
+        typeof msg.message !== 'string'
+      ) return;
+
+      const timestamp = new Date(msg.timestamp);
+      if (Number.isNaN(timestamp.getTime())) return;
+      const pad = (value: number) => String(value).padStart(2, '0');
+      const time = `${pad(timestamp.getHours())}:${pad(timestamp.getMinutes())}:${pad(timestamp.getSeconds())}`;
+
+      const notif: FloatingNotification = {
+        id: alertData.violationId,
+        title: msg.title,
+        message: msg.message,
+        zone: `BAI-KIEM · ${alertData.zoneName}`,
+        time,
+        camId: 'BAI-KIEM',
+      };
+
+      if (acceptAreaAlert(notif)) {
+        broadcastAlert(notif);
+      }
+    },
+  });
+
+  // Automatically dismiss floating alert when user navigates to area tab
+  useEffect(() => {
+    if (activeTab === 'area') {
+      setFloatingAlert(null);
+      pendingHiddenAlertRef.current = null;
+      return;
+    }
+
+    const showPendingAlert = () => {
+      if (!document.hidden && pendingHiddenAlertRef.current) {
+        setFloatingAlert(pendingHiddenAlertRef.current);
+        pendingHiddenAlertRef.current = null;
+      }
+    };
+
+    document.addEventListener('visibilitychange', showPendingAlert);
+    showPendingAlert();
+    return () => document.removeEventListener('visibilitychange', showPendingAlert);
+  }, [activeTab]);
 
   return (
     <div
@@ -360,8 +546,6 @@ export const App: React.FC = () => {
         {activeTab === 'area' && (
           <AreaMonitor
             clock={clockStr}
-            zones={zonesByCam['BAI-KIEM'] || []}
-            events={areaEvents}
           />
         )}
 
@@ -477,6 +661,11 @@ export const App: React.FC = () => {
                 onUpdateZone={handleUpdateZone}
                 onAddZone={handleAddZone}
                 onDeleteZone={handleDeleteZone}
+                snapshotImageByCam={snapshotImageByCam}
+                snapshotImage={areaSnapshotImage}
+                isLoading={zoneEditorLoading}
+                apiError={zoneEditorError}
+                onRetry={loadZoneEditorData}
               />
             )}
 

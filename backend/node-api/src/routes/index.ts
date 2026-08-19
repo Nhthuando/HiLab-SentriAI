@@ -5,21 +5,23 @@
  * - /api/v1/health
  * - /api/v1/vehicles      (VS-SETTINGS-VEHICLE)
  * - /api/v1/zones         (VS-SETTINGS-ZONE)
+ * - /api/v1/cameras       (VS-SETTINGS-ZONE)
  * - /api/v1/labels        (VS-SETTINGS-LABEL)
+ * - /api/v1/samples       (VS-SETTINGS-LABEL)
+ * - /api/v1/upload        (VS-SETTINGS-LABEL)
  * - /api/v1/events/gate   (VS-GATE-LIVE)
  * - /api/v1/events/area   (VS-AREA-VIOLATION)
- * - /api/v1/qa            (VS-QA-CHAT)
- * - /api/v1/analytics     (VS-KPI-ANALYTICS)
- * - /api/v1/clips         (VS-QA-CHAT / Media stream)
  */
 import { Router } from 'express';
+import { camerasRouter } from './cameras';
+import { eventsRouter } from './events';
 import { healthRouter } from './health';
-import { testErrorRouter } from './testError';
-import { vehiclesRouter } from './vehicles';
 import { labelsRouter } from './labels';
 import { samplesRouter } from './samples';
+import { testErrorRouter } from './testError';
 import { uploadRouter } from './upload';
-import { eventsRouter } from './events';
+import { vehiclesRouter } from './vehicles';
+import { zonesRouter } from './zones';
 
 const apiRouter = Router();
 
@@ -31,6 +33,10 @@ apiRouter.use('/test-error', testErrorRouter);
 
 // Mount Registered Vehicles CRUD (VS-SETTINGS-VEHICLE)
 apiRouter.use('/vehicles', vehiclesRouter);
+
+// Mount Zones & Cameras (VS-SETTINGS-ZONE)
+apiRouter.use('/zones', zonesRouter);
+apiRouter.use('/cameras', camerasRouter);
 
 // Mount Object Labels & Annotation Samples (VS-SETTINGS-LABEL)
 apiRouter.use('/labels', labelsRouter);

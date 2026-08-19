@@ -7,6 +7,7 @@ and extracts MP4 video clips when gate / zone violation events are triggered (BR
 import collections
 import logging
 import os
+import threading
 import time
 from typing import Deque, Optional, Tuple
 
@@ -22,50 +23,62 @@ class CircularBuffer:
         self.target_fps = max(1.0, target_fps)
         self.maxlen = int(self.max_seconds * self.target_fps) + 5
         self.buffer: Deque[Tuple[float, np.ndarray]] = collections.deque(maxlen=self.maxlen)
+        self._lock = threading.Lock()
 
     def append(self, frame: np.ndarray, timestamp: Optional[float] = None) -> None:
         """Store a frame with its timestamp in the circular buffer."""
         if frame is None:
             return
         ts = timestamp or time.time()
-        self.buffer.append((ts, frame))
+        with self._lock:
+            self.buffer.append((ts, frame))
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
         """Return the most recent frame in the buffer."""
-        if not self.buffer:
-            return None
-        return self.buffer[-1][1].copy()
+        with self._lock:
+            if not self.buffer:
+                return None
+            return self.buffer[-1][1].copy()
 
     def get_frame_count(self) -> int:
         """Return current number of frames stored in buffer."""
-        return len(self.buffer)
+        with self._lock:
+            return len(self.buffer)
 
     def save_clip(
         self,
         output_path: str,
         duration_seconds: float = 10.0,
         fps: Optional[float] = None,
+        end_time: Optional[float] = None,
     ) -> Optional[str]:
         """
         Extract up to duration_seconds of buffered frames and write to an MP4 video file.
         Returns output_path on success, or None on failure (fulfills BR-05).
         """
-        if not self.buffer:
-            logger.warning("Circular buffer is empty. Cannot save clip to %s", output_path)
-            return None
-
         out_fps = fps or self.target_fps
-        now = time.time()
-        cutoff_time = now - duration_seconds
+        end_ts = end_time if end_time is not None else time.time()
+        start_ts = end_ts - duration_seconds
 
-        # Filter frames within time window
-        frames = [f for ts, f in self.buffer if ts >= cutoff_time]
-        if not frames:
-            # Fallback to all available frames in buffer
-            frames = [f for _, f in self.buffer]
+        with self._lock:
+            if not self.buffer:
+                logger.warning("Circular buffer is empty. Cannot save clip to %s", output_path)
+                return None
 
-        if not frames:
+            # Snapshot the deque before writing on a background thread.
+            captured = [(ts, f) for ts, f in self.buffer if start_ts <= ts <= (end_ts + 0.5)]
+
+        if not captured:
+            logger.warning("Circular buffer has no frames for the requested clip window: %s", output_path)
             return None
+
+        frames = [frame for _, frame in captured]
+        if len(captured) > 1:
+            captured_duration = captured[-1][0] - captured[0][0]
+            if captured_duration > 0:
+                # Match playback to the real sampling rate. Inference may run well below
+                # target FPS, and writing those frames at target FPS shortens the clip.
+                out_fps = max(1.0, len(frames) / captured_duration)
 
         try:
             # Ensure output directory exists
@@ -100,4 +113,5 @@ class CircularBuffer:
 
     def clear(self) -> None:
         """Empty the buffer."""
-        self.buffer.clear()
+        with self._lock:
+            self.buffer.clear()

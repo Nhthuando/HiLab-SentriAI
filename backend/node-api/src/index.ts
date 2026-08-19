@@ -41,8 +41,15 @@ app.use(express.urlencoded({ extended: true }));
 
 // --- Static Media Storage (Crops & Clips) ---
 function resolveMediaDir(subDir: string): string {
+  const configuredDir = process.env[subDir.toUpperCase() + '_DIR'];
+  const backendDir = path.resolve(__dirname, '../..');
+  const configuredMediaDir = configuredDir
+    ? path.isAbsolute(configuredDir)
+      ? configuredDir
+      : path.resolve(backendDir, configuredDir)
+    : undefined;
   const candidates = [
-    process.env[subDir.toUpperCase() + '_DIR'],
+    configuredMediaDir,
     path.resolve(__dirname, '../../data', subDir),
     path.resolve(__dirname, '../data', subDir),
     path.resolve(process.cwd(), '../data', subDir),

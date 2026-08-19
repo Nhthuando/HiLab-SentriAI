@@ -283,6 +283,7 @@ async def create_zone_violation(
     object_label: str,
     entered_at: Optional[datetime] = None,
     clip_path: Optional[str] = None,
+    violation_id: Optional[Union[str, uuid.UUID]] = None,
     conn_or_pool: Optional[DbExecutor] = None,
 ) -> Dict[str, Any]:
     """
@@ -291,7 +292,11 @@ async def create_zone_violation(
     executor = _get_executor(conn_or_pool)
     now = datetime.now(timezone.utc)
     ts = entered_at or now
-    rec_id = uuid.uuid4()
+    rec_id = (
+        uuid.UUID(violation_id)
+        if isinstance(violation_id, str)
+        else violation_id or uuid.uuid4()
+    )
     zid = uuid.UUID(zone_id) if isinstance(zone_id, str) else zone_id
     query = """
         INSERT INTO zone_violations (
@@ -422,3 +427,49 @@ async def create_object_label(
     """
     row = await executor.fetchrow(query, rec_id, vietnamese_name.strip(), base_class.strip(), now, now)
     return _record_to_dict(row)  # type: ignore
+
+
+async def update_violation_clip_path(
+    violation_id: Union[str, uuid.UUID],
+    clip_path: str,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Update clip_path on a zone violation after 10s clip generation completes.
+    """
+    executor = _get_executor(conn_or_pool)
+    vid = uuid.UUID(violation_id) if isinstance(violation_id, str) else violation_id
+    query = """
+        UPDATE zone_violations
+        SET clip_path = $2
+        WHERE id = $1
+        RETURNING *
+    """
+    row = await executor.fetchrow(query, vid, clip_path)
+    return _record_to_dict(row)
+
+
+async def close_stale_open_violations(
+    camera_id: str = "BAI-KIEM",
+    exit_timestamp: Optional[datetime] = None,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> int:
+    """
+    Close orphan OPEN violations on worker startup to prevent stale tracking rows.
+    Preserves existing clip_path and sets status='CLOSED'.
+    """
+    executor = _get_executor(conn_or_pool)
+    now = exit_timestamp or datetime.now(timezone.utc)
+    query = """
+        UPDATE zone_violations
+        SET status = 'CLOSED',
+            exited_at = COALESCE(exited_at, $2),
+            duration_seconds = COALESCE(duration_seconds, GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ($2 - entered_at)))::int))
+        WHERE camera_id = $1 AND status = 'OPEN'
+    """
+    res = await executor.execute(query, camera_id, now)
+    try:
+        count = int(res.split()[-1])
+        return count
+    except Exception:
+        return 0

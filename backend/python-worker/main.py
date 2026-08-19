@@ -14,9 +14,8 @@ from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDiscon
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from db import check_db_health, close_db_pool, init_db_pool
-from detection.gate_pipeline import GatePipeline
-from stream import CameraPipeline
+from db import check_db_health, close_db_pool, close_stale_open_violations, init_db_pool
+from detection import AreaPipeline, GatePipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,10 +36,14 @@ async def lifespan(app: FastAPI):
     try:
         await init_db_pool()
         logger.info("Database pool initialized.")
+        # Clean up any stale OPEN violations for BAI-KIEM from previous crash/restart
+        stale_count = await close_stale_open_violations("BAI-KIEM")
+        if stale_count > 0:
+            logger.info("Cleaned up %d stale OPEN violation(s) on startup.", stale_count)
     except Exception as exc:
         logger.warning("Could not connect to Database on startup (%s). Will retry on demand.", exc)
 
-    # 2. Initialize Camera Pipelines (GATE-01 with LPR and BAI-KIEM)
+    # 2. Initialize Camera Pipelines (GATE-01 with LPR and BAI-KIEM with Area Violation)
     gate_source = os.getenv("GATE_CAMERA_URL") or os.getenv("VIDEO_GATE_PATH") or "./data/samples/gate_sample.mp4"
     area_source = os.getenv("AREA_CAMERA_URL") or os.getenv("VIDEO_AREA_PATH") or "./data/samples/area_sample.mp4"
 
@@ -50,7 +53,7 @@ async def lifespan(app: FastAPI):
         target_fps=15.0,
         resolution=(1280, 720),
     )
-    area_pipeline = CameraPipeline(
+    area_pipeline = AreaPipeline(
         camera_id="BAI-KIEM",
         source=area_source,
         target_fps=15.0,
@@ -63,7 +66,7 @@ async def lifespan(app: FastAPI):
     # Start stream loops in background
     gate_pipeline.start()
     area_pipeline.start()
-    logger.info("Camera pipelines started (GATE-01 and BAI-KIEM).")
+    logger.info("Camera pipelines started (GATE-01: GatePipeline, BAI-KIEM: AreaPipeline).")
 
     yield
 

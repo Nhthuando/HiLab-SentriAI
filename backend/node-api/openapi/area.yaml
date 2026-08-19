@@ -1,0 +1,426 @@
+openapi: 3.0.3
+info:
+  title: SentriAI Area Violation Monitoring API
+  version: 1.0.0
+  description: REST and WebSocket contracts for VS-AREA-VIOLATION (camera BAI-KIEM).
+servers:
+  - url: http://localhost:3001/api/v1
+    description: Local Node.js REST API
+  - url: ws://localhost:3001
+    description: Local WebSocket Proxy
+
+paths:
+  /events/area:
+    get:
+      summary: Query area zone violations
+      description: Returns a paginated list of zone violations for camera BAI-KIEM sorted by enteredAt DESC.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          description: Maximum number of records to return.
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Number of records to skip.
+        - name: zone_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Filter violations by zone UUID.
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [OPEN, CLOSED]
+          description: Filter violations by status.
+      responses:
+        '200':
+          description: Paginated violation records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AreaEventsEnvelope'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+
+# WebSocket Channels specification
+x-websocket-channels:
+  /ws/feed/area:
+    summary: BAI-KIEM Camera live stream with detections and zone overlays
+    message:
+      schema:
+        $ref: '#/components/schemas/AreaFeedFramePacket'
+  /ws/events/area:
+    summary: Real-time zone violation events push
+    message:
+      schema:
+        $ref: '#/components/schemas/AreaEventMessage'
+  /ws/alerts:
+    summary: Cross-tab floating alerts stream
+    message:
+      schema:
+        $ref: '#/components/schemas/AlertMessage'
+
+components:
+  schemas:
+    AreaViolationDto:
+      type: object
+      required:
+        - id
+        - cameraId
+        - zoneId
+        - zoneName
+        - objectLabel
+        - status
+        - enteredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        cameraId:
+          type: string
+          example: 'BAI-KIEM'
+        zoneId:
+          type: string
+          format: uuid
+        zoneName:
+          type: string
+          example: 'Khu vực cấm xe máy'
+        objectLabel:
+          type: string
+          example: 'Xe máy'
+        status:
+          type: string
+          enum: [OPEN, CLOSED]
+        enteredAt:
+          type: string
+          format: date-time
+        exitedAt:
+          type: string
+          format: date-time
+          nullable: true
+        durationSeconds:
+          type: integer
+          nullable: true
+          example: 15
+        clipUrl:
+          type: string
+          nullable: true
+          example: '/data/clips/area_123e4567-e89b-12d3-a456-426614174000.mp4'
+
+    AreaEventsPage:
+      type: object
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AreaViolationDto'
+        total:
+          type: integer
+          example: 42
+        limit:
+          type: integer
+          example: 50
+        offset:
+          type: integer
+          example: 0
+
+    AreaEventsEnvelope:
+      type: object
+      required:
+        - success
+        - data
+        - timestamp
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/AreaEventsPage'
+        timestamp:
+          type: string
+          format: date-time
+
+    ApiErrorEnvelope:
+      type: object
+      required:
+        - success
+        - error
+        - timestamp
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              example: 'VALIDATION_ERROR'
+            message:
+              type: string
+              example: 'Limit must be an integer between 1 and 100'
+            details:
+              type: object
+        timestamp:
+          type: string
+          format: date-time
+
+    AreaZoneFeedDto:
+      type: object
+      required:
+        - id
+        - name
+        - polygon
+        - ruleType
+        - targetLabels
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: 'Khu vực cấm xe máy'
+        polygon:
+          type: array
+          items:
+            type: object
+            required: [x, y]
+            properties:
+              x:
+                type: number
+                minimum: 0
+                maximum: 1
+              y:
+                type: number
+                minimum: 0
+                maximum: 1
+        ruleType:
+          type: string
+          enum: [PROHIBIT_SPECIFIED, ALLOW_SPECIFIED]
+        targetLabels:
+          type: array
+          items:
+            type: string
+          example: ['Xe máy', 'Xe đạp']
+
+    AreaZoneMatchDto:
+      type: object
+      required:
+        - zoneId
+        - zoneName
+        - status
+      properties:
+        zoneId:
+          type: string
+          format: uuid
+        zoneName:
+          type: string
+        status:
+          type: string
+          enum: [VIOLATION, ALLOWED]
+
+    AreaDetectionDto:
+      type: object
+      required:
+        - bbox
+        - class
+        - label
+        - confidence
+        - status
+      properties:
+        trackId:
+          type: integer
+          nullable: true
+          example: 17
+        bbox:
+          type: array
+          items:
+            type: number
+          minItems: 4
+          maxItems: 4
+          example: [120, 80, 220, 300]
+        normalized_bbox:
+          type: array
+          items:
+            type: number
+          minItems: 4
+          maxItems: 4
+          example: [0.1875, 0.1667, 0.3438, 0.625]
+        class:
+          type: string
+          example: 'motorcycle'
+        label:
+          type: string
+          example: 'Xe máy'
+        confidence:
+          type: number
+          example: 0.91
+        status:
+          type: string
+          enum: [VIOLATION, ALLOWED]
+        zoneMatches:
+          type: array
+          items:
+            $ref: '#/components/schemas/AreaZoneMatchDto'
+
+    AreaFeedFramePacket:
+      type: object
+      required:
+        - type
+        - cameraId
+        - timestamp
+        - image
+        - fps
+        - detections
+      properties:
+        type:
+          type: string
+          example: 'frame'
+        cameraId:
+          type: string
+          example: 'BAI-KIEM'
+        timestamp:
+          type: integer
+          example: 1787018400000
+        image:
+          type: string
+          example: 'data:image/jpeg;base64,...'
+        fps:
+          type: number
+          example: 10.0
+        detections:
+          type: array
+          items:
+            $ref: '#/components/schemas/AreaDetectionDto'
+        zones:
+          type: array
+          items:
+            $ref: '#/components/schemas/AreaZoneFeedDto'
+
+    AreaEventMessage:
+      type: object
+      required:
+        - type
+        - action
+        - id
+        - cameraId
+        - zoneId
+        - zoneName
+        - objectLabel
+        - status
+        - enteredAt
+      properties:
+        type:
+          type: string
+          example: 'zone_violation'
+        action:
+          type: string
+          enum: [STARTED, ENDED]
+        id:
+          type: string
+          format: uuid
+        cameraId:
+          type: string
+          example: 'BAI-KIEM'
+        zoneId:
+          type: string
+          format: uuid
+        zoneName:
+          type: string
+          example: 'Khu vực cấm xe máy'
+        objectLabel:
+          type: string
+          example: 'Xe máy'
+        status:
+          type: string
+          enum: [OPEN, CLOSED]
+        enteredAt:
+          type: string
+          format: date-time
+        exitedAt:
+          type: string
+          format: date-time
+          nullable: true
+        durationSeconds:
+          type: integer
+          nullable: true
+          example: 12
+        clipUrl:
+          type: string
+          nullable: true
+
+    AlertMessage:
+      type: object
+      required:
+        - type
+        - level
+        - title
+        - message
+        - cameraId
+        - timestamp
+        - data
+      properties:
+        type:
+          type: string
+          example: 'alert'
+        level:
+          type: string
+          enum: [info, warning, critical]
+          example: 'critical'
+        title:
+          type: string
+          example: 'CẢNH BÁO VI PHẠM ZONE'
+        message:
+          type: string
+          example: 'Phát hiện Xe máy trong Khu vực cấm xe máy'
+        cameraId:
+          type: string
+          example: 'BAI-KIEM'
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          properties:
+            violationId:
+              type: string
+              format: uuid
+            zoneId:
+              type: string
+              format: uuid
+            zoneName:
+              type: string
+            objectLabel:
+              type: string
