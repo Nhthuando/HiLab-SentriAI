@@ -37,7 +37,7 @@ import { useBroadcastChannel, useWebSocket } from './hooks';
 import {
   createZone as createZoneRequest,
   deleteZone as deleteZoneRequest,
-  getAreaCameraSnapshot,
+  getCameraSnapshot,
   getZones,
   updateZone as updateZoneRequest,
   zoneRecordToView,
@@ -161,13 +161,14 @@ export const App: React.FC = () => {
     }));
   };
 
-  const areaZoneLabels = useMemo(
-    () => objLabels.filter((label) => label.name === 'Người' || label.name === 'Container'),
+  const [snapshotImageByCam, setSnapshotImageByCam] = useState<Record<string, string | null>>({
+    'BAI-KIEM': null,
+    'GATE-01': null,
+  });
+
+  const allObjLabelNames = useMemo(
+    () => objLabels.map((label) => label.name),
     [objLabels],
-  );
-  const areaZoneLabelNames = useMemo(
-    () => areaZoneLabels.map((label) => label.name),
-    [areaZoneLabels],
   );
 
   const loadZoneEditorData = useCallback(async () => {
@@ -175,80 +176,92 @@ export const App: React.FC = () => {
     setZoneEditorError(null);
 
     try {
-      const records = await getZones();
+      const [baikiemRecords, gateRecords] = await Promise.all([
+        getZones('BAI-KIEM').catch(() => []),
+        getZones('GATE-01').catch(() => []),
+      ]);
+
       setZonesByCam((prev) => ({
         ...prev,
-        'BAI-KIEM': records.map((record) => zoneRecordToView(record, areaZoneLabelNames)),
+        'BAI-KIEM': baikiemRecords.map((record) => zoneRecordToView(record, allObjLabelNames)),
+        'GATE-01': gateRecords.map((record) => zoneRecordToView(record, allObjLabelNames)),
       }));
     } catch {
-      setZoneEditorError('Không thể tải zone Bãi Kiểm. Nhấn để thử lại.');
+      setZoneEditorError('Không thể tải dữ liệu zone. Nhấn để thử lại.');
     } finally {
       setZoneEditorLoading(false);
     }
 
     try {
-      setAreaSnapshotImage(await getAreaCameraSnapshot());
+      const [baikiemSnap, gateSnap] = await Promise.all([
+        getCameraSnapshot('BAI-KIEM').catch(() => null),
+        getCameraSnapshot('GATE-01').catch(() => null),
+      ]);
+      setSnapshotImageByCam({
+        'BAI-KIEM': baikiemSnap,
+        'GATE-01': gateSnap,
+      });
+      setAreaSnapshotImage(baikiemSnap);
     } catch {
       setAreaSnapshotImage(null);
-      setZoneEditorError((current) => current || 'Không thể tải ảnh camera Bãi Kiểm.');
     }
-  }, [areaZoneLabelNames]);
+  }, [allObjLabelNames]);
 
   useEffect(() => {
     void loadZoneEditorData();
   }, [loadZoneEditorData]);
 
-  // Zone handlers: BAI-KIEM is persisted through VS-SETTINGS-ZONE API.
+  // Zone handlers: persists through VS-SETTINGS-ZONE API for both BAI-KIEM and GATE-01.
   const handleUpdateZone = (camId: string, zoneId: string, patch: Partial<PolygonZone>) => {
     const previousZones = zonesByCam[camId] || [];
     const updatedZones = previousZones.map((zone) => (
       zone.id === zoneId ? { ...zone, ...patch } : zone
     ));
 
-    setZonesByCam((prev) => {
-      return { ...prev, [camId]: updatedZones };
-    });
-
-    if (camId !== 'BAI-KIEM') return;
+    setZonesByCam((prev) => ({
+      ...prev,
+      [camId]: updatedZones,
+    }));
 
     const updatedZone = updatedZones.find((zone) => zone.id === zoneId);
     if (!updatedZone) return;
 
-    void updateZoneRequest(zoneId, zoneViewToWrite(updatedZone, areaZoneLabelNames))
+    void updateZoneRequest(zoneId, zoneViewToWrite(updatedZone, allObjLabelNames, camId))
       .then((record) => {
-        const persisted = zoneRecordToView(record, areaZoneLabelNames);
+        const persisted = zoneRecordToView(record, allObjLabelNames);
         setZonesByCam((prev) => ({
           ...prev,
-          'BAI-KIEM': (prev['BAI-KIEM'] || []).map((zone) => (
+          [camId]: (prev[camId] || []).map((zone) => (
             zone.id === zoneId ? { ...persisted, color: zone.color } : zone
           )),
         }));
       })
       .catch(() => {
-        setZonesByCam((prev) => ({ ...prev, 'BAI-KIEM': previousZones }));
-        setZoneEditorError('Không thể lưu thay đổi zone. Thay đổi đã được hoàn tác.');
+        setZonesByCam((prev) => ({ ...prev, [camId]: previousZones }));
+        setZoneEditorError(`Không thể lưu thay đổi zone ${camId}. Thay đổi đã được hoàn tác.`);
       });
   };
 
   const handleAddZone = async (camId: string, newZone: PolygonZone): Promise<PolygonZone> => {
-    if (camId === 'BAI-KIEM') {
-      const record = await createZoneRequest(zoneViewToWrite(newZone, areaZoneLabelNames));
+    try {
+      const record = await createZoneRequest(zoneViewToWrite(newZone, allObjLabelNames, camId));
       const persisted = {
-        ...zoneRecordToView(record, areaZoneLabelNames),
+        ...zoneRecordToView(record, allObjLabelNames),
         color: newZone.color,
       };
       setZonesByCam((prev) => ({
         ...prev,
-        'BAI-KIEM': [...(prev['BAI-KIEM'] || []), persisted],
+        [camId]: [...(prev[camId] || []), persisted],
       }));
       return persisted;
+    } catch (err) {
+      console.error(`Failed to create zone for ${camId}:`, err);
+      setZonesByCam((prev) => ({
+        ...prev,
+        [camId]: [...(prev[camId] || []), newZone],
+      }));
+      return newZone;
     }
-
-    setZonesByCam((prev) => ({
-      ...prev,
-      [camId]: [...(prev[camId] || []), newZone]
-    }));
-    return newZone;
   };
 
   const handleDeleteZone = (camId: string, zoneId: string) => {
@@ -258,9 +271,8 @@ export const App: React.FC = () => {
       [camId]: (prev[camId] || []).filter((z) => z.id !== zoneId)
     }));
 
-    if (camId !== 'BAI-KIEM') return;
     void deleteZoneRequest(zoneId).catch(() => {
-      setZonesByCam((prev) => ({ ...prev, 'BAI-KIEM': previousZones }));
+      setZonesByCam((prev) => ({ ...prev, [camId]: previousZones }));
       setZoneEditorError('Không thể xóa zone. Zone đã được khôi phục.');
     });
   };
@@ -597,10 +609,11 @@ export const App: React.FC = () => {
               <ZoneEditorTab
                 clock={clockStr}
                 zonesByCam={zonesByCam}
-                objLabels={areaZoneLabels}
+                objLabels={objLabels}
                 onUpdateZone={handleUpdateZone}
                 onAddZone={handleAddZone}
                 onDeleteZone={handleDeleteZone}
+                snapshotImageByCam={snapshotImageByCam}
                 snapshotImage={areaSnapshotImage}
                 isLoading={zoneEditorLoading}
                 apiError={zoneEditorError}

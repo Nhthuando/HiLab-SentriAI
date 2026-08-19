@@ -5,6 +5,8 @@ import { sendCreated, sendError, sendNoContent, sendSuccess } from '../utils/res
 
 const zonesRouter = Router();
 const AREA_CAMERA_ID = 'BAI-KIEM';
+const GATE_CAMERA_ID = 'GATE-01';
+const SUPPORTED_CAMERA_IDS = new Set(['BAI-KIEM', 'GATE-01']);
 const RULE_TYPES = new Set(['PROHIBIT_SPECIFIED', 'ALLOW_SPECIFIED']);
 
 interface PolygonPoint {
@@ -14,7 +16,7 @@ interface PolygonPoint {
 
 export interface ZoneDto {
   id: string;
-  cameraId: 'BAI-KIEM';
+  cameraId: string;
   name: string;
   polygonPoints: PolygonPoint[];
   ruleType: 'PROHIBIT_SPECIFIED' | 'ALLOW_SPECIFIED';
@@ -32,7 +34,9 @@ interface ZoneWriteInput {
   isActive?: boolean;
 }
 
-type ZoneCreateInput = Omit<ZoneWriteInput, 'cameraId'>;
+interface ZoneCreateInput extends ZoneWriteInput {
+  cameraId?: string;
+}
 
 export class ZoneValidationError extends Error {}
 
@@ -44,12 +48,27 @@ function isSingleQueryValue(value: unknown): boolean {
   return value === undefined || typeof value === 'string';
 }
 
-function requireAreaCameraId(value: unknown, required: boolean): 'BAI-KIEM' | undefined {
-  if (value === undefined && !required) return undefined;
-  if (value !== AREA_CAMERA_ID) {
-    throw new ZoneValidationError('Only camera_id BAI-KIEM is supported for zone editing');
+function normalizeCameraId(raw?: string): string {
+  if (!raw) return AREA_CAMERA_ID;
+  const upper = raw.trim().toUpperCase();
+  if (['GATE', 'GATE1', 'GATE_01', 'GATE-01'].includes(upper)) return 'GATE-01';
+  if (['AREA', 'BAIKIEM', 'BAI_KIEM', 'BAI-KIEM'].includes(upper)) return 'BAI-KIEM';
+  return upper;
+}
+
+function parseCameraId(value: unknown, required: boolean): string {
+  if (value === undefined || value === null || value === '') {
+    if (required) return AREA_CAMERA_ID;
+    return '';
   }
-  return AREA_CAMERA_ID;
+  if (typeof value !== 'string') {
+    throw new ZoneValidationError('cameraId must be a string');
+  }
+  const norm = normalizeCameraId(value);
+  if (!SUPPORTED_CAMERA_IDS.has(norm)) {
+    throw new ZoneValidationError(`Camera '${value}' is not supported. Valid: BAI-KIEM, GATE-01`);
+  }
+  return norm;
 }
 
 function parseName(value: unknown): string {
@@ -127,8 +146,9 @@ export function parseCreateZoneInput(body: unknown): Required<ZoneCreateInput> {
     throw new ZoneValidationError('Request body must be an object');
   }
   const input = body as Record<string, unknown>;
-  requireAreaCameraId(input.cameraId, true);
+  const cameraId = parseCameraId(input.cameraId, true);
   return {
+    cameraId,
     name: parseName(input.name),
     polygonPoints: parsePolygonPoints(input.polygonPoints),
     ruleType: input.ruleType === undefined
@@ -183,7 +203,7 @@ function toZoneDto(zone: {
 }): ZoneDto {
   return {
     id: zone.id,
-    cameraId: AREA_CAMERA_ID,
+    cameraId: zone.cameraId,
     name: zone.name,
     polygonPoints: parsePolygonPoints(zone.polygonPoints),
     ruleType: parseRuleType(zone.ruleType),
@@ -201,9 +221,9 @@ function isPrismaError(error: unknown, code: string): boolean {
     && (error as { code?: unknown }).code === code;
 }
 
-async function getAreaZoneOrNull(id: string) {
-  return prisma.zone.findFirst({
-    where: { id, cameraId: AREA_CAMERA_ID },
+async function getZoneOrNull(id: string) {
+  return prisma.zone.findUnique({
+    where: { id },
   });
 }
 
@@ -212,10 +232,11 @@ zonesRouter.get('/', async (req: Request, res: Response) => {
     if (!isSingleQueryValue(req.query.camera_id)) {
       return sendError(res, 400, 'VALIDATION_ERROR', 'camera_id must be a single string value');
     }
-    requireAreaCameraId(getSingleString(req.query.camera_id), false);
+    const rawCamId = getSingleString(req.query.camera_id);
+    const filterCamId = rawCamId ? parseCameraId(rawCamId, false) : undefined;
 
     const zones = await prisma.zone.findMany({
-      where: { cameraId: AREA_CAMERA_ID },
+      where: filterCamId ? { cameraId: filterCamId } : undefined,
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
     });
     return sendSuccess(res, zones.map(toZoneDto));
@@ -223,7 +244,7 @@ zonesRouter.get('/', async (req: Request, res: Response) => {
     if (error instanceof ZoneValidationError) {
       return sendError(res, 400, 'VALIDATION_ERROR', error.message);
     }
-    console.error('[zonesRouter] Failed to list BAI-KIEM zones:', error);
+    console.error('[zonesRouter] Failed to list zones:', error);
     return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Failed to retrieve zones');
   }
 });
@@ -233,7 +254,7 @@ zonesRouter.post('/', async (req: Request, res: Response) => {
     const input = parseCreateZoneInput(req.body);
     const zone = await prisma.zone.create({
       data: {
-        cameraId: AREA_CAMERA_ID,
+        cameraId: input.cameraId,
         name: input.name,
         polygonPoints: input.polygonPoints as unknown as Prisma.InputJsonValue,
         ruleType: input.ruleType,
@@ -247,9 +268,9 @@ zonesRouter.post('/', async (req: Request, res: Response) => {
       return sendError(res, 400, 'VALIDATION_ERROR', error.message);
     }
     if (isPrismaError(error, 'P2002')) {
-      return sendError(res, 409, 'ZONE_NAME_CONFLICT', 'Zone name already exists for BAI-KIEM');
+      return sendError(res, 409, 'ZONE_NAME_CONFLICT', 'Zone name already exists for this camera');
     }
-    console.error('[zonesRouter] Failed to create BAI-KIEM zone:', error);
+    console.error('[zonesRouter] Failed to create zone:', error);
     return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Failed to create zone');
   }
 });
@@ -257,9 +278,9 @@ zonesRouter.post('/', async (req: Request, res: Response) => {
 zonesRouter.put('/:id', async (req: Request, res: Response) => {
   try {
     const input = parseUpdateZoneInput(req.body);
-    const existing = await getAreaZoneOrNull(req.params.id);
+    const existing = await getZoneOrNull(req.params.id);
     if (!existing) {
-      return sendError(res, 404, 'ZONE_NOT_FOUND', 'Zone was not found for BAI-KIEM');
+      return sendError(res, 404, 'ZONE_NOT_FOUND', 'Zone was not found');
     }
 
     const zone = await prisma.zone.update({
@@ -282,26 +303,26 @@ zonesRouter.put('/:id', async (req: Request, res: Response) => {
       return sendError(res, 400, 'VALIDATION_ERROR', error.message);
     }
     if (isPrismaError(error, 'P2002')) {
-      return sendError(res, 409, 'ZONE_NAME_CONFLICT', 'Zone name already exists for BAI-KIEM');
+      return sendError(res, 409, 'ZONE_NAME_CONFLICT', 'Zone name already exists for this camera');
     }
-    console.error('[zonesRouter] Failed to update BAI-KIEM zone:', error);
+    console.error('[zonesRouter] Failed to update zone:', error);
     return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Failed to update zone');
   }
 });
 
 zonesRouter.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const existing = await getAreaZoneOrNull(req.params.id);
+    const existing = await getZoneOrNull(req.params.id);
     if (!existing) {
-      return sendError(res, 404, 'ZONE_NOT_FOUND', 'Zone was not found for BAI-KIEM');
+      return sendError(res, 404, 'ZONE_NOT_FOUND', 'Zone was not found');
     }
 
     await prisma.zone.delete({ where: { id: existing.id } });
     return sendNoContent(res);
   } catch (error) {
-    console.error('[zonesRouter] Failed to delete BAI-KIEM zone:', error);
+    console.error('[zonesRouter] Failed to delete zone:', error);
     return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Failed to delete zone');
   }
 });
 
-export { zonesRouter, AREA_CAMERA_ID };
+export { zonesRouter, AREA_CAMERA_ID, GATE_CAMERA_ID, SUPPORTED_CAMERA_IDS };
