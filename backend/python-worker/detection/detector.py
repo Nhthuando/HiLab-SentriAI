@@ -73,11 +73,18 @@ class YoloDetector:
         return model_path
 
     def _load_model(self) -> None:
-        """Load YOLO model."""
+        """Load YOLO model and assign GPU device."""
         try:
-            logger.info("Loading YOLO model from %s...", self.model_path)
+            import torch
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            self.device = "cpu"
+
+        try:
+            logger.info("Loading YOLO model from %s on %s...", self.model_path, self.device)
             self.model = YOLO(self.model_path)
-            logger.info("YOLO model loaded successfully.")
+            self.model.to(self.device)
+            logger.info("YOLO model loaded successfully on %s.", self.device)
         except Exception as exc:
             logger.error("Failed to load YOLO model: %s", exc)
             raise
@@ -99,7 +106,7 @@ class YoloDetector:
 
         try:
             # Run inference (verbose=False to avoid console spam)
-            results = self.model(frame, conf=threshold, verbose=False)
+            results = self.model(frame, conf=threshold, device=self.device, verbose=False)
             detections: List[Dict[str, Any]] = []
 
             for r in results:

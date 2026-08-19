@@ -420,11 +420,14 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
             {/* Dynamic Real-Time YOLO & Universal LPR Bounding Boxes */}
             {detections.map((det, idx) => {
               const [x1, y1, x2, y2] = det.bbox;
-              const leftPct = (x1 / 1280) * 100;
-              const topPct = (y1 / 720) * 100;
-              const widthPct = ((x2 - x1) / 1280) * 100;
-              const heightPct = ((y2 - y1) / 720) * 100;
-              const plateText = (det as any).plate || (det.status === 'KNOWN' ? '15R-158.45' : '');
+              const isNorm = x2 <= 1.0 && y2 <= 1.0;
+              const isPct = !isNorm && x2 <= 100.0 && y2 <= 100.0;
+              const leftPct = isNorm ? x1 * 100 : isPct ? x1 : (x1 / 1280) * 100;
+              const topPct = isNorm ? y1 * 100 : isPct ? y1 : (y1 / 720) * 100;
+              const widthPct = isNorm ? (x2 - x1) * 100 : isPct ? (x2 - x1) : ((x2 - x1) / 1280) * 100;
+              const heightPct = isNorm ? (y2 - y1) * 100 : isPct ? (y2 - y1) : ((y2 - y1) / 720) * 100;
+
+              const plateText = (det as any).plate || '';
               const isStranger = (det as any).lpr_status === 'STRANGER';
               const isBoxHovered = plateText && (hoveredPlate === plateText || hoveredEventId === plateText);
 

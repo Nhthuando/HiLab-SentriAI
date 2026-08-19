@@ -41,8 +41,8 @@ async def lifespan(app: FastAPI):
         logger.warning("Could not connect to Database on startup (%s). Will retry on demand.", exc)
 
     # 2. Initialize Camera Pipelines (GATE-01 with LPR and BAI-KIEM)
-    gate_source = os.getenv("GATE_CAMERA_URL") or "./data/samples/gate_sample.mp4"
-    area_source = os.getenv("AREA_CAMERA_URL") or "./data/samples/area_sample.mp4"
+    gate_source = os.getenv("GATE_CAMERA_URL") or os.getenv("VIDEO_GATE_PATH") or "./data/samples/gate_sample.mp4"
+    area_source = os.getenv("AREA_CAMERA_URL") or os.getenv("VIDEO_AREA_PATH") or "./data/samples/area_sample.mp4"
 
     gate_pipeline = GatePipeline(
         camera_id="GATE-01",
@@ -95,7 +95,13 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     db_ok = await check_db_health()
-    stats = {cam_id: p.get_stats() for cam_id, p in pipelines.items()}
+    stats = {}
+    for cam_id, p in pipelines.items():
+        stats[cam_id] = {
+            "fps": getattr(p, "fps_measured", 0.0) or getattr(p, "target_fps", 15.0),
+            "frame_count": getattr(p, "frame_count", 0),
+            "connected": getattr(getattr(p, "reader", None), "is_connected", True),
+        }
     return {
         "status": "ok",
         "service": "python-worker",

@@ -89,18 +89,20 @@ class LicensePlateReader:
         threading.Thread(target=self._init_reader, daemon=True).start()
 
     def _init_reader(self) -> None:
-        """Initialize EasyOCR in background."""
+        """Initialize EasyOCR with GPU acceleration if available."""
         if self._is_loading:
             return
         self._is_loading = True
         try:
             if self.ocr_engine == "easyocr":
                 import easyocr
-                logger.info("Initializing EasyOCR reader...")
-                self._reader = easyocr.Reader(["en"], gpu=False, verbose=False)
-                logger.info("EasyOCR initialized successfully.")
+                import torch
+                use_gpu = bool(torch.cuda.is_available())
+                logger.info("Initializing EasyOCR reader (GPU: %s)...", use_gpu)
+                self._reader = easyocr.Reader(["en"], gpu=use_gpu, verbose=False)
+                logger.info("EasyOCR initialized successfully on %s.", "CUDA GPU" if use_gpu else "CPU")
         except Exception as exc:
-            logger.debug("EasyOCR load error: %s", exc)
+            logger.error("EasyOCR load error: %s", exc)
             self._reader = None
         finally:
             self._is_loading = False
@@ -123,12 +125,12 @@ class LicensePlateReader:
             # Preprocessing: upscale if small
             scale = 1.0
             proc = vehicle_crop
-            if vw < 300 or vh < 150:
-                scale = max(2.0, 300.0 / max(1, vw))
+            if vw < 320 or vh < 160:
+                scale = max(2.0, 320.0 / max(1, vw))
                 proc = cv2.resize(vehicle_crop, (int(vw * scale), int(vh * scale)), interpolation=cv2.INTER_CUBIC)
 
             gray = cv2.cvtColor(proc, cv2.COLOR_BGR2GRAY)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
             enhanced = cv2.cvtColor(clahe.apply(gray), cv2.COLOR_GRAY2BGR)
 
             results = self._reader.readtext(enhanced, contrast_ths=0.1, text_ths=0.15, low_text=0.15)
@@ -147,16 +149,16 @@ class LicensePlateReader:
                 aspect_ratio = bw / max(1, bh)
                 rel_y = cby1 / vh
 
-                # Reject text in top 20% (roof/watermarks)
-                if rel_y < 0.20:
+                # Reject text in top 15% (roof/windshield reflections)
+                if rel_y < 0.15:
                     continue
 
-                # Reject tall square blocks (logos)
-                if aspect_ratio < 1.4 or aspect_ratio > 8.0:
+                # Reject extremely thin or extremely square blocks
+                if aspect_ratio < 1.3 or aspect_ratio > 8.5:
                     continue
 
-                # Reject full vehicle boxes
-                if bh > (vh * 0.35) or bw < 20:
+                # Reject full vehicle oversized boxes
+                if bh > (vh * 0.40) or bw < 18:
                     continue
 
                 is_valid, norm_plate = validate_and_normalize_plate(text)
