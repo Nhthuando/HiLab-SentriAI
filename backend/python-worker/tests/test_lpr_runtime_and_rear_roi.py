@@ -1,0 +1,826 @@
+import os
+import sys
+import asyncio
+from types import SimpleNamespace
+
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from detection.lpr import LicensePlateReader, validate_and_normalize_plate
+from detection.plate_tracker import PlateTracker
+
+
+class FakeALPR:
+    def predict(self, image):
+        h, w = image.shape[:2]
+        if w < 350:
+            return []
+        return [
+            SimpleNamespace(
+                ocr=SimpleNamespace(text="15R00517", confidence=[0.72] * 8),
+                detection=SimpleNamespace(
+                    bounding_box=SimpleNamespace(
+                        x1=int(w * 0.60),
+                        y1=int(h * 0.58),
+                        x2=int(w * 0.82),
+                        y2=int(h * 0.66),
+                    )
+                ),
+            )
+        ]
+
+
+class ClearPlateALPR:
+    def __init__(self):
+        self.calls = 0
+
+    def predict(self, image):
+        self.calls += 1
+        h, w = image.shape[:2]
+        return [
+            SimpleNamespace(
+                ocr=SimpleNamespace(text="15R10517", confidence=[1.0] * 8),
+                detection=SimpleNamespace(
+                    bounding_box=SimpleNamespace(
+                        x1=int(w * 0.72),
+                        y1=int(h * 0.74),
+                        x2=int(w * 0.88),
+                        y2=int(h * 0.82),
+                    )
+                ),
+            )
+        ]
+
+
+class RecessedPlateALPR:
+    def __init__(self):
+        self.calls = 0
+
+    def predict(self, image):
+        self.calls += 1
+        if self.calls == 1:
+            return []
+        h, w = image.shape[:2]
+        return [
+            SimpleNamespace(
+                ocr=SimpleNamespace(text="15H03203", confidence=[0.81] * 8),
+                detection=SimpleNamespace(
+                    bounding_box=SimpleNamespace(
+                        x1=int(w * 0.78),
+                        y1=int(h * 0.65),
+                        x2=int(w * 0.96),
+                        y2=int(h * 0.75),
+                    )
+                ),
+            )
+        ]
+
+
+class TightCropOCR:
+    def predict(self, image):
+        return SimpleNamespace(text="15R10253", confidence=[0.90] * 8)
+
+
+class AmbiguousGreenPlateALPR:
+    def __init__(self):
+        self.ocr = TightCropOCR()
+
+    def predict(self, image):
+        h, w = image.shape[:2]
+        return [
+            SimpleNamespace(
+                ocr=SimpleNamespace(text="16R10253", confidence=[0.99] * 8),
+                detection=SimpleNamespace(
+                    bounding_box=SimpleNamespace(
+                        x1=int(w * 0.70),
+                        y1=int(h * 0.76),
+                        x2=int(w * 0.78),
+                        y2=int(h * 0.82),
+                    )
+                ),
+            )
+        ]
+
+
+class StationaryOnlyPlateALPR:
+    def predict(self, image):
+        h, w = image.shape[:2]
+        if w < 1000:
+            return []
+        return [
+            SimpleNamespace(
+                ocr=SimpleNamespace(text="15RM07197", confidence=[0.91] * 9),
+                detection=SimpleNamespace(
+                    bounding_box=SimpleNamespace(
+                        x1=int(w * 0.52),
+                        y1=int(h * 0.58),
+                        x2=int(w * 0.68),
+                        y2=int(h * 0.73),
+                    )
+                ),
+            )
+        ]
+
+
+def test_rear_roi_plate_detection_maps_tight_bbox_to_vehicle_crop():
+    reader = LicensePlateReader.__new__(LicensePlateReader)
+    reader._alpr = FakeALPR()
+
+    vehicle_crop = np.zeros((420, 520, 3), dtype=np.uint8)
+    full_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    candidates = reader.scan_plate_from_frame_or_vehicle(full_frame, vehicle_crop, [700, 120, 1220, 540])
+
+    assert candidates
+    best = candidates[0]
+    assert best["plate"] == "15R-005.17"
+    assert best["confidence"] == 0.72
+    x1, y1, x2, y2 = best["bbox_in_crop"]
+    assert 0 <= x1 < x2 <= 520
+    assert 0 <= y1 < y2 <= 420
+    assert (x2 - x1) < 160
+    assert best["source"] in {"vehicle_full_raw", "vehicle_lower_raw", "tractor_wheel_side_raw"}
+
+
+def test_clear_plate_uses_raw_full_vehicle_without_enhanced_fallback():
+    reader = LicensePlateReader.__new__(LicensePlateReader)
+    reader._alpr = ClearPlateALPR()
+
+    vehicle_crop = np.zeros((420, 520, 3), dtype=np.uint8)
+    candidates = reader.scan_plate_from_frame_or_vehicle(
+        np.zeros((720, 1280, 3), dtype=np.uint8),
+        vehicle_crop,
+        [700, 120, 1220, 540],
+    )
+
+    assert reader._alpr.calls == 1
+    assert candidates[0]["plate"] == "15R-105.17"
+    assert candidates[0]["confidence"] == 1.0
+    assert candidates[0]["source"] == "vehicle_full_raw"
+    assert not candidates[0]["enhanced"]
+
+
+def test_recessed_rear_plate_uses_raw_roi_fallback_and_maps_inside_vehicle():
+    reader = LicensePlateReader.__new__(LicensePlateReader)
+    reader._alpr = RecessedPlateALPR()
+
+    vehicle_crop = np.zeros((420, 520, 3), dtype=np.uint8)
+    candidates = reader.scan_plate_from_frame_or_vehicle(
+        np.zeros((720, 1280, 3), dtype=np.uint8),
+        vehicle_crop,
+        [700, 120, 1220, 540],
+    )
+
+    assert reader._alpr.calls > 1
+    assert candidates[0]["plate"] == "15H-032.03"
+    assert candidates[0]["source"] != "vehicle_full_raw"
+    x1, y1, x2, y2 = candidates[0]["bbox_in_crop"]
+    assert 0 <= x1 < x2 <= 520
+    assert 0 <= y1 < y2 <= 420
+
+
+def test_tight_crop_refinement_preserves_15_prefix_as_temporal_evidence():
+    reader = LicensePlateReader.__new__(LicensePlateReader)
+    reader._alpr = AmbiguousGreenPlateALPR()
+    reader._alternate_ocr = None
+
+    candidates = reader.scan_plate_from_frame_or_vehicle(
+        np.zeros((720, 1280, 3), dtype=np.uint8),
+        np.zeros((420, 520, 3), dtype=np.uint8),
+        [700, 120, 1220, 540],
+    )
+
+    assert any(c["plate"] == "15R-102.53" and c["source"] == "plate_tight_raw" for c in candidates)
+
+
+def test_stationary_vehicle_uses_extra_rear_scan_without_changing_moving_path():
+    reader = LicensePlateReader.__new__(LicensePlateReader)
+    reader._alpr = StationaryOnlyPlateALPR()
+    reader._alternate_ocr = None
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    crop = np.zeros((420, 520, 3), dtype=np.uint8)
+
+    moving = reader.scan_plate_from_frame_or_vehicle(frame, crop, [700, 120, 1220, 540])
+    stationary = reader.scan_plate_from_frame_or_vehicle(
+        frame,
+        crop,
+        [700, 120, 1220, 540],
+        stationary=True,
+    )
+
+    assert moving == []
+    assert stationary[0]["plate"] == "15RM-071.97"
+    assert stationary[0]["source"].startswith("stationary_rear_")
+
+
+def test_gate_ocr_is_not_starved_when_measured_fps_is_below_fourteen():
+    from detection.gate_pipeline import GatePipeline
+
+    class FakeReader:
+        def read_frame(self):
+            return True, np.zeros((720, 1280, 3), dtype=np.uint8)
+
+        def get_timecode(self):
+            return "00:01"
+
+    class FakeBuffer:
+        def append(self, frame, now):
+            return None
+
+    class FakeDetector:
+        def detect(self, frame):
+            return [{"class": "truck", "bbox": [600, 150, 1100, 680]}]
+
+    class FakeTracker:
+        def __init__(self):
+            self.tracks = {}
+
+        def match_or_create_track(self, bbox, now):
+            return "V001"
+
+        def update_track(self, **kwargs):
+            self.tracks["V001"] = SimpleNamespace()
+
+        def update_related_plate_tracks(self, track_id, bbox, now):
+            return None
+
+        def get_live_detections(self, now):
+            return []
+
+    async def exercise():
+        pipeline = GatePipeline.__new__(GatePipeline)
+        pipeline.reader = FakeReader()
+        pipeline.buffer = FakeBuffer()
+        pipeline.detector = FakeDetector()
+        pipeline.tracker = FakeTracker()
+        pipeline.camera_id = "GATE-01"
+        pipeline.frame_count = 0
+        pipeline._last_zone_sync = 10**12
+        pipeline._active_zones = []
+        pipeline._ai_busy = False
+        pipeline._last_ocr_dispatch = 0.0
+        pipeline._ocr_interval_seconds = 0.35
+        pipeline._yolo_stride = 1
+        pipeline.fps_measured = 8.0
+        pipeline.target_fps = 15.0
+        pipeline._fps_counter = 0
+        pipeline._last_fps_calc = 10**12
+        pipeline._sync_calls = 0
+
+        async def fake_ocr(frame, detections, now, generation=None):
+            pipeline._sync_calls += 1
+
+        pipeline._run_ai_in_background = fake_ocr
+        await pipeline.process_gate_frame()
+        await asyncio.sleep(0)
+        assert pipeline._sync_calls == 1
+
+    asyncio.run(exercise())
+
+
+def test_delayed_ocr_bbox_is_projected_to_latest_moving_vehicle_position():
+    old_vehicle = [600, 150, 1000, 650]
+    new_vehicle = [660, 170, 1100, 690]
+    old_plate = [900, 540, 980, 580]
+
+    projected = PlateTracker.project_box_between_vehicle_boxes(old_plate, old_vehicle, new_vehicle)
+
+    assert projected[0] > old_plate[0]
+    assert projected[1] > old_plate[1]
+    assert projected[2] <= new_vehicle[2]
+    assert projected[3] <= new_vehicle[3]
+
+
+def test_runtime_provider_selection_prefers_cuda_when_available():
+    providers, reason = LicensePlateReader._select_onnx_providers(
+        ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    )
+
+    assert providers[0] == "CUDAExecutionProvider"
+    assert reason == "auto_cuda"
+
+
+def test_validate_plate_rejects_camera_overlay_words():
+    is_valid, plate = validate_and_normalize_plate("CAMERA-01")
+
+    assert not is_valid
+    assert plate == ""
+
+
+def test_plate_tracker_keeps_best_plate_and_bbox_for_one_vehicle():
+    tracker = PlateTracker(smoothing_alpha=0.8)
+    now = 100.0
+    track_id = tracker.match_or_create_track([100, 100, 500, 420], now)
+
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=[100, 100, 500, 420],
+        plate_bbox=[350, 330, 430, 365],
+        plate_text="15R-106.17",
+        status="STRANGER",
+        conf=0.96,
+        now=now,
+    )
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=[104, 100, 504, 420],
+        plate_bbox=[354, 330, 434, 365],
+        plate_text="15R-106.17",
+        status="STRANGER",
+        conf=0.95,
+        now=now + 0.05,
+    )
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=[104, 100, 504, 420],
+        plate_bbox=[120, 130, 300, 230],
+        plate_text="18R-406.17",
+        status="STRANGER",
+        conf=0.55,
+        now=now + 0.1,
+    )
+
+    detections = tracker.get_live_detections(now + 1.0)
+
+    assert len(detections) == 1
+    assert detections[0]["plate"] == "15R-106.17"
+    assert detections[0]["confidence"] == 0.96
+    x1, y1, x2, y2 = detections[0]["bbox"]
+    assert x1 > 300
+    assert y1 > 300
+    assert x2 - x1 < 120
+
+
+def test_plate_tracker_collapses_duplicate_bboxes_to_one_vehicle_result():
+    tracker = PlateTracker(smoothing_alpha=0.8)
+    now = 200.0
+    vehicle_bbox = [620, 120, 1080, 430]
+    track_id = tracker.match_or_create_track(vehicle_bbox, now)
+
+    reads = [
+        ("16R-106.17", [780, 345, 875, 382], 0.97, now),
+        ("16R-106.12", [782, 346, 877, 383], 0.94, now + 0.05),
+        ("15R-135.17", [786, 348, 880, 386], 0.97, now + 0.10),
+        ("15R-105.17", [784, 347, 878, 385], 0.96, now + 0.15),
+        ("15R-105.17", [785, 347, 879, 385], 0.95, now + 0.20),
+    ]
+
+    for plate, plate_bbox, conf, ts in reads:
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=plate_bbox,
+            plate_text=plate,
+            status="STRANGER",
+            conf=conf,
+            now=ts,
+        )
+
+    detections = tracker.get_live_detections(now + 1.10)
+    assert len(detections) == 1
+    assert detections[0]["track_id"] == track_id
+    assert detections[0]["plate"] == "15R-105.17"
+
+    track = tracker.tracks[track_id]
+    assert track.should_emit_event(now + 1.10)
+    track.event_emitted = True
+    assert not track.should_emit_event(now + 0.85)
+
+
+def test_single_late_wrong_read_cannot_emit_before_stable_green_truck_plate():
+    tracker = PlateTracker(smoothing_alpha=0.8)
+    vehicle_bbox = [680, 0, 1280, 715]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 263.0)
+
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=vehicle_bbox,
+        plate_bbox=[1150, 588, 1210, 635],
+        plate_text="76R-100.55",
+        status="STRANGER",
+        conf=0.70,
+        now=268.60,
+    )
+    track = tracker.tracks[track_id]
+    assert not track.should_emit_event(268.60)
+    assert tracker.get_live_detections(268.60) == []
+
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=vehicle_bbox,
+        plate_bbox=[1128, 576, 1175, 618],
+        plate_text="16R-102.53",
+        status="STRANGER",
+        conf=0.95,
+        now=269.00,
+    )
+    assert track.best_plate == "16R-102.53"
+    assert not track.should_emit_event(269.00)
+    assert tracker.get_live_detections(269.00) == []
+
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=vehicle_bbox,
+        plate_bbox=[1126, 575, 1174, 618],
+        plate_text="16R-102.53",
+        status="STRANGER",
+        conf=0.93,
+        now=269.40,
+    )
+    assert track.best_plate == "16R-102.53"
+    assert track.best_conf == 0.95
+    assert not track.should_emit_event(269.40)
+    assert track.should_emit_event(270.20)
+    assert tracker.get_live_detections(270.20)[0]["plate"] == "16R-102.53"
+
+
+def test_repeated_correct_plate_can_replace_an_initial_high_confidence_variant():
+    tracker = PlateTracker()
+    vehicle_bbox = [620, 120, 1080, 430]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 100.0)
+
+    for plate, conf, now in (
+        ("76R-105.17", 0.97, 100.0),
+        ("15R-105.17", 0.95, 100.4),
+        ("15R-105.17", 0.94, 100.8),
+    ):
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[900, 340, 970, 385],
+            plate_text=plate,
+            status="STRANGER",
+            conf=conf,
+            now=now,
+        )
+
+    track = tracker.tracks[track_id]
+    assert track.best_plate == "15R-105.17"
+    assert track.best_conf == 0.95
+    assert not track.should_emit_event(100.8)
+    assert track.should_emit_event(101.6)
+
+
+def test_character_consensus_resolves_16r_to_repeated_15r_without_hardcoding():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 80, 1100, 650]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 300.0)
+
+    observations = (
+        ("16R-102.53", 0.99, [{"plate": "15R-102.53", "confidence": 0.90}], 300.0),
+        ("16R-102.53", 0.98, [{"plate": "15R-102.69", "confidence": 0.90}], 300.3),
+        ("15R-102.63", 0.99, [{"plate": "15R-102.53", "confidence": 0.84}], 300.6),
+        ("15R-102.53", 0.99, [{"plate": "15R-102.53", "confidence": 0.95}], 300.9),
+    )
+    for plate, confidence, variants, now in observations:
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[880, 520, 930, 550],
+            plate_text=plate,
+            status="STRANGER",
+            conf=confidence,
+            now=now,
+            variants=variants,
+        )
+
+    track = tracker.tracks[track_id]
+    assert track.best_plate == "15R-102.53"
+    assert not track.should_emit_event(300.9)
+    assert track.should_emit_event(301.7)
+
+
+def test_character_consensus_uses_material_15_evidence_for_5_6_ambiguity():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 80, 1100, 650]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 350.0)
+
+    for index, plate in enumerate((
+        "16R-105.17",
+        "16R-105.17",
+        "16R-105.17",
+        "15R-105.17",
+        "15R-105.17",
+    )):
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[880, 520, 930, 550],
+            plate_text=plate,
+            status="STRANGER",
+            conf=0.96,
+            now=350.0 + index * 0.2,
+        )
+
+    assert tracker.tracks[track_id].best_plate == "15R-105.17"
+
+
+def test_one_clear_15_prefix_survives_repeated_interpolated_16_reads():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 80, 1100, 650]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 360.0)
+
+    observations = [("15R-102.53", 0.99), *[("16R-102.53", 0.99)] * 6]
+    for index, (plate, confidence) in enumerate(observations):
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[880, 520, 930, 550],
+            plate_text=plate,
+            status="STRANGER",
+            conf=confidence,
+            now=360.0 + index * 0.2,
+        )
+
+    assert tracker.tracks[track_id].best_plate == "15R-102.53"
+
+
+def test_one_clear_53_suffix_survives_repeated_interpolated_63_reads():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 80, 1100, 650]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 370.0)
+
+    observations = [("15R-102.53", 0.99), *[("16R-102.63", 0.99)] * 6]
+    for index, (plate, confidence) in enumerate(observations):
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[880, 520, 930, 550],
+            plate_text=plate,
+            status="STRANGER",
+            conf=confidence,
+            now=370.0 + index * 0.2,
+        )
+
+    assert tracker.tracks[track_id].best_plate == "15R-102.53"
+
+
+def test_character_consensus_resolves_106_to_105_with_repeated_five_evidence():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 80, 1100, 650]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 375.0)
+
+    for index, plate in enumerate((
+        "15R-106.17",
+        "15R-106.17",
+        "15R-106.17",
+        "15R-105.17",
+        "15R-105.17",
+    )):
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[880, 520, 930, 550],
+            plate_text=plate,
+            status="STRANGER",
+            conf=0.96,
+            now=375.0 + index * 0.2,
+        )
+
+    assert tracker.tracks[track_id].best_plate == "15R-105.17"
+
+
+def test_character_consensus_resolves_trailer_h_to_m_with_material_m_evidence():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 80, 1100, 650]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 390.0)
+
+    for index, (plate, confidence) in enumerate((
+        ("15RH-071.97", 0.99),
+        ("15RH-071.97", 0.98),
+        ("15RH-071.97", 0.97),
+        ("15RM-071.97", 0.94),
+        ("15RM-071.97", 0.95),
+    )):
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[880, 520, 930, 560],
+            plate_text=plate,
+            status="STRANGER",
+            conf=confidence,
+            now=390.0 + index * 0.2,
+        )
+
+    assert tracker.tracks[track_id].best_plate == "15RM-071.97"
+
+
+def test_verified_plate_canonicalization_only_corrects_close_variants():
+    from detection.gate_pipeline import GatePipeline
+
+    pipeline = GatePipeline.__new__(GatePipeline)
+    pipeline._verified_plates = ["15R-105.17", "15R-102.53"]
+
+    assert pipeline._canonicalize_verified_plate("16R-106.17") == "15R-105.17"
+    assert pipeline._canonicalize_verified_plate("16R-102.63") == "15R-102.53"
+    assert pipeline._canonicalize_verified_plate("29A-123.45") == "29A-123.45"
+
+
+def test_vehicle_dedupe_keeps_two_real_trucks_but_collapses_nested_boxes():
+    from detection.gate_pipeline import GatePipeline
+
+    detections = [
+        {"class": "truck", "bbox": [600, 80, 1200, 850], "zone_name": "Zone 1"},
+        {"class": "truck", "bbox": [720, 180, 1160, 810], "zone_name": "Zone 1"},
+        {"class": "truck", "bbox": [80, 220, 540, 760], "zone_name": "Zone 2"},
+    ]
+
+    deduped = GatePipeline._dedupe_vehicle_detections(detections)
+
+    assert len(deduped) == 2
+    assert [600, 80, 1200, 850] in [item["bbox"] for item in deduped]
+    assert [80, 220, 540, 760] in [item["bbox"] for item in deduped]
+
+
+def test_zone_fallback_scans_only_lane_whose_vehicle_detector_missed():
+    from detection.gate_pipeline import GatePipeline
+
+    pipeline = GatePipeline.__new__(GatePipeline)
+    pipeline._active_zones = [
+        {
+            "name": "Zone 1",
+            "polygon_points": [
+                {"x": 0.50, "y": 0.45},
+                {"x": 0.99, "y": 0.45},
+                {"x": 0.99, "y": 0.99},
+                {"x": 0.60, "y": 0.99},
+            ],
+        },
+        {
+            "name": "Zone 2",
+            "polygon_points": [
+                {"x": 0.01, "y": 0.45},
+                {"x": 0.48, "y": 0.45},
+                {"x": 0.36, "y": 0.99},
+                {"x": 0.01, "y": 0.99},
+            ],
+        },
+    ]
+
+    fallbacks = pipeline._zone_fallback_detections(1600, 900, {"IN_2"})
+
+    assert len(fallbacks) == 1
+    assert fallbacks[0]["lane"] == "IN_1"
+    assert fallbacks[0]["_zone_fallback"]
+    assert fallbacks[0]["_force_stationary"]
+
+
+def test_short_low_resolution_plate_finalizes_after_three_frames_and_leaves_view():
+    tracker = PlateTracker()
+    vehicle_bbox = [0, 250, 570, 680]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 400.0)
+
+    for plate, confidence, variants, now in (
+        ("15BM-592.99", 0.67, [{"plate": "15HM-5929", "confidence": 0.70}], 400.0),
+        ("15HM-2298", 0.73, [{"plate": "15HM-229.88", "confidence": 0.69}], 400.2),
+        ("15HM-0028", 0.75, [{"plate": "15HH-032.98", "confidence": 0.69}], 400.4),
+    ):
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[110, 560, 150, 595],
+            plate_text=plate,
+            status="STRANGER",
+            conf=confidence,
+            now=now,
+            variants=variants,
+        )
+
+    track = tracker.tracks[track_id]
+    assert not track.should_emit_event(400.4)
+    assert track.best_plate == "15HH-032.98"
+    assert track.should_emit_event(401.2)
+
+
+def test_gate_schedules_stored_crop_when_plate_leaves_ocr_view():
+    from detection.gate_pipeline import GatePipeline
+
+    async def exercise():
+        pipeline = GatePipeline.__new__(GatePipeline)
+        pipeline.camera_id = "GATE-01"
+        pipeline.tracker = PlateTracker()
+        pipeline._recent_events = {}
+        pipeline._cooldown_seconds = 20.0
+        captured = []
+
+        async def fake_handle(**kwargs):
+            captured.append(kwargs)
+
+        pipeline._handle_detected_plate = fake_handle
+        vehicle_bbox = [650, 80, 1100, 650]
+        track_id = pipeline.tracker.match_or_create_track(vehicle_bbox, 500.0)
+        for now in (500.0, 500.3):
+            track = pipeline.tracker.update_track(
+                track_id=track_id,
+                vehicle_bbox=vehicle_bbox,
+                plate_bbox=[880, 520, 930, 550],
+                plate_text="15R-102.53",
+                status="STRANGER",
+                conf=0.95,
+                now=now,
+            )
+            track.latest_plate_crop = np.zeros((24, 48, 3), dtype=np.uint8)
+            track.lane = "IN_1"
+            track.zone_name = "Zone mới 1"
+
+        pipeline._schedule_ready_track_events(501.1)
+        await asyncio.sleep(0)
+
+        assert len(captured) == 1
+        assert captured[0]["plate"] == "15R-102.53"
+        assert pipeline.tracker.tracks[track_id].event_emitted
+
+    asyncio.run(exercise())
+
+
+def test_fragmented_tracks_in_same_lane_passage_emit_only_one_event():
+    from detection.gate_pipeline import GatePipeline
+
+    async def exercise():
+        pipeline = GatePipeline.__new__(GatePipeline)
+        pipeline.camera_id = "GATE-01"
+        pipeline.tracker = PlateTracker()
+        pipeline._recent_events = {}
+        pipeline._cooldown_seconds = 20.0
+        pipeline._ai_busy = False
+        pipeline._lane_passages = {}
+        captured = []
+
+        async def fake_handle(**kwargs):
+            captured.append(kwargs)
+
+        pipeline._handle_detected_plate = fake_handle
+        for index, plate in enumerate(("15R-102.53", "16R-102.63")):
+            track_id = f"V{index + 1:03d}"
+            for now in (700.0, 700.3, 700.6):
+                track = pipeline.tracker.update_track(
+                    track_id=track_id,
+                    vehicle_bbox=[650, 80, 1100, 650],
+                    plate_bbox=[880, 520, 930, 550],
+                    plate_text=plate,
+                    status="STRANGER",
+                    conf=0.99,
+                    now=now,
+                )
+            track.latest_plate_crop = np.zeros((24, 48, 3), dtype=np.uint8)
+            track.lane = "IN_1"
+            track.zone_name = "Zone 1"
+            track.passage_id = "P00001"
+
+        aggregate = pipeline.tracker.tracks["V001"]
+        for now in (700.0, 700.3, 700.6):
+            aggregate.last_seen = now
+            aggregate.last_plate_seen = now
+            aggregate.add_plate_vote("16R-102.63", 0.99, now=now)
+        pipeline._lane_passages = {
+            "IN_1": {
+                "id": "P00001",
+                "last_seen": 700.6,
+                "event_plate": "",
+                "aggregate_track": aggregate,
+                "crop": np.zeros((24, 48, 3), dtype=np.uint8),
+                "lane": "IN_1",
+                "zone_name": "Zone 1",
+            }
+        }
+
+        pipeline._schedule_ready_passage_events(704.0)
+        await asyncio.sleep(0)
+
+        assert len(captured) == 1
+        assert sum(track.event_emitted for track in pipeline.tracker.tracks.values()) == 2
+
+    asyncio.run(exercise())
+
+
+def test_emitted_track_freezes_overlay_and_rejects_later_ocr_variants():
+    tracker = PlateTracker()
+    vehicle_bbox = [620, 120, 1080, 650]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 600.0)
+    for now in (600.0, 600.3, 600.6):
+        track = tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[880, 520, 940, 555],
+            plate_text="15R-105.17",
+            status="STRANGER",
+            conf=0.99,
+            now=now,
+        )
+
+    track.mark_event_emitted()
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=vehicle_bbox,
+        plate_bbox=[880, 520, 940, 555],
+        plate_text="16R-106.17",
+        status="STRANGER",
+        conf=1.0,
+        now=601.0,
+    )
+
+    detection = tracker.get_live_detections(601.0)[0]
+    assert track.best_plate == "15R-105.17"
+    assert detection["plate"] == "15R-105.17"
+    assert detection["confidence"] == 0.99

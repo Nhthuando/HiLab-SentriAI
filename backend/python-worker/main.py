@@ -11,6 +11,7 @@ from typing import Any, Dict
 
 import cv2
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -25,6 +26,10 @@ logger = logging.getLogger("sentriai.worker")
 
 # Global pipeline dictionary
 pipelines: Dict[str, Any] = {}
+
+
+class SeekRequest(BaseModel):
+    positionMs: int
 
 
 @asynccontextmanager
@@ -51,7 +56,7 @@ async def lifespan(app: FastAPI):
         camera_id="GATE-01",
         source=gate_source,
         target_fps=15.0,
-        resolution=(1280, 720),
+        resolution=(1600, 900),
     )
     area_pipeline = AreaPipeline(
         camera_id="BAI-KIEM",
@@ -100,10 +105,15 @@ async def health():
     db_ok = await check_db_health()
     stats = {}
     for cam_id, p in pipelines.items():
+        detector = getattr(p, "detector", None)
+        lpr_reader = getattr(p, "lpr_reader", None)
         stats[cam_id] = {
             "fps": getattr(p, "fps_measured", 0.0) or getattr(p, "target_fps", 15.0),
             "frame_count": getattr(p, "frame_count", 0),
             "connected": getattr(getattr(p, "reader", None), "is_connected", True),
+            "resolution": list(getattr(p, "resolution", (0, 0))),
+            "detector": detector.runtime_info() if hasattr(detector, "runtime_info") else None,
+            "lpr": lpr_reader.runtime_info() if hasattr(lpr_reader, "runtime_info") else None,
         }
     return {
         "status": "ok",
@@ -160,6 +170,38 @@ async def get_snapshot(camera_id: str):
         raise HTTPException(status_code=500, detail="Failed to encode snapshot image")
 
     return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
+@app.get("/cameras/{camera_id}/playback")
+async def get_playback(camera_id: str):
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    return pipeline.reader.get_playback_status()
+
+
+@app.post("/cameras/{camera_id}/seek")
+async def seek_camera(camera_id: str, body: SeekRequest):
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    if hasattr(pipeline, "reset_tracking_state"):
+        pipeline.reset_tracking_state()
+    else:
+        pipeline.tracker.tracks.clear()
+    return pipeline.reader.seek_ms(body.positionMs)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,11 @@ export interface BoundingBoxDetection {
   class: string;
   confidence: number;
   label?: string;
+  plate?: string;
+  lpr_status?: 'KNOWN' | 'STRANGER' | 'SCANNING' | string;
   trackId?: number | null;
+  track_id?: string;
+  is_locked?: boolean;
   status?: 'KNOWN' | 'STRANGER' | 'VIOLATION' | 'ALLOWED' | 'NORMAL' | string;
   zoneMatches?: Array<{
     zoneId: string;
@@ -25,6 +29,9 @@ export interface FramePacket {
   fps?: number;
   detections?: BoundingBoxDetection[];
   zones?: AreaZoneFeedDto[];
+  timecode?: string;
+  frameWidth?: number;
+  frameHeight?: number;
 }
 
 export interface StatusPacket {
@@ -45,6 +52,9 @@ export interface UseCameraFeedReturn {
   isOnline: boolean;
   statusText: string;
   lastTimestamp: number | null;
+  timecode: string | null;
+  frameWidth: number;
+  frameHeight: number;
   reconnect: () => void;
 }
 
@@ -56,6 +66,9 @@ export function useCameraFeed(cameraId: string): UseCameraFeedReturn {
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [statusText, setStatusText] = useState<string>('ONLINE');
   const [lastTimestamp, setLastTimestamp] = useState<number | null>(null);
+  const [timecode, setTimecode] = useState<string | null>(null);
+  const [frameWidth, setFrameWidth] = useState<number>(1280);
+  const [frameHeight, setFrameHeight] = useState<number>(720);
 
   const canonicalPath =
     cameraId.toUpperCase().includes('GATE')
@@ -74,6 +87,13 @@ export function useCameraFeed(cameraId: string): UseCameraFeedReturn {
       }
       if (frame.fps !== undefined) {
         setFps(frame.fps);
+      }
+      if (frame.timecode) {
+        setTimecode(frame.timecode);
+      }
+      if (frame.frameWidth && frame.frameHeight) {
+        setFrameWidth(frame.frameWidth);
+        setFrameHeight(frame.frameHeight);
       }
       setLastTimestamp(frame.timestamp);
       setIsOnline(true);
@@ -107,6 +127,9 @@ export function useCameraFeed(cameraId: string): UseCameraFeedReturn {
     isOnline: isConnected && isOnline,
     statusText: isConnected && isOnline ? statusText : 'Mất kết nối',
     lastTimestamp,
+    timecode,
+    frameWidth,
+    frameHeight,
     reconnect,
   };
 }

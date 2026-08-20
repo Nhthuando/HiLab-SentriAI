@@ -71,6 +71,7 @@ class TrackedYoloDetector(YoloDetector):
                 classes=class_ids,
                 persist=True,
                 tracker=self.tracker,
+                device=self.device,
                 verbose=False,
             )
             detections: List[Dict[str, Any]] = []

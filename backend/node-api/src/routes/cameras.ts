@@ -46,4 +46,44 @@ camerasRouter.get('/:id/snapshot', async (req: Request, res: Response) => {
   }
 });
 
+camerasRouter.get('/:id/playback', async (req: Request, res: Response) => {
+  const cameraId = normalizeCameraId(req.params.id);
+  if (!SUPPORTED_CAMERAS.has(cameraId)) {
+    return sendError(res, 400, 'VALIDATION_ERROR', `Camera '${req.params.id}' is not supported. Valid cameras: BAI-KIEM, GATE-01`);
+  }
+
+  try {
+    const upstream = await fetch(`${getPythonWorkerHttpUrl()}/cameras/${encodeURIComponent(cameraId)}/playback`);
+    if (!upstream.ok) {
+      return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' playback is unavailable`);
+    }
+    return sendSuccess(res, await upstream.json());
+  } catch (error) {
+    console.error(`[camerasRouter] Failed to load playback for ${cameraId}:`, error);
+    return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' playback is unavailable`);
+  }
+});
+
+camerasRouter.post('/:id/seek', async (req: Request, res: Response) => {
+  const cameraId = normalizeCameraId(req.params.id);
+  if (!SUPPORTED_CAMERAS.has(cameraId)) {
+    return sendError(res, 400, 'VALIDATION_ERROR', `Camera '${req.params.id}' is not supported. Valid cameras: BAI-KIEM, GATE-01`);
+  }
+
+  try {
+    const upstream = await fetch(`${getPythonWorkerHttpUrl()}/cameras/${encodeURIComponent(cameraId)}/seek`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ positionMs: Number(req.body?.positionMs || 0) }),
+    });
+    if (!upstream.ok) {
+      return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' seek is unavailable`);
+    }
+    return sendSuccess(res, await upstream.json());
+  } catch (error) {
+    console.error(`[camerasRouter] Failed to seek ${cameraId}:`, error);
+    return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' seek is unavailable`);
+  }
+});
+
 export { camerasRouter };

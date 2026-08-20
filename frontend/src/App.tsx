@@ -491,6 +491,93 @@ export const App: React.FC = () => {
     },
   });
 
+<<<<<<< Updated upstream
+=======
+  // Real-time WebSocket /ws/events/gate subscription for newly detected vehicles and gate events
+  useWebSocket<{
+    type?: string;
+    data?: any;
+    id?: string;
+    plate?: string;
+    licensePlate?: string;
+    status?: 'quen' | 'la' | 'KNOWN' | 'STRANGER';
+    lane?: string;
+    zone?: string;
+    conf?: number;
+    eventKey?: string | null;
+    time?: string;
+  }>({
+    path: '/ws/events/gate',
+    onMessage: (msg) => {
+      const eventData = msg?.data || msg;
+      const plate = eventData?.plate || eventData?.licensePlate;
+      if (!plate || plate === '—') return;
+
+      const rawStatus = eventData?.status;
+      const status: 'quen' | 'la' = (rawStatus === 'KNOWN' || rawStatus === 'quen') ? 'quen' : 'la';
+      const eventId = eventData?.id || `ge-${Date.now()}`;
+      const timeStr = eventData?.time || clockStr.slice(0, 5);
+      const confidence =
+        typeof eventData?.conf === 'number'
+          ? eventData.conf
+          : typeof eventData?.confidence === 'number'
+            ? Math.round(eventData.confidence * 100)
+            : 95;
+
+      // 1. Prepend to gateEvents
+      setGateEvents((prev) => {
+        const newEvent: GateEvent = {
+          id: eventId,
+          time: timeStr,
+          plate,
+          zone: eventData?.zone || (eventData?.lane === 'IN_2' ? 'Làn IN 2 · Làn phụ' : 'Làn IN 1 · Cổng chính'),
+          conf: confidence,
+          status,
+          eventKey: eventData?.eventKey ?? null,
+        };
+        const key = newEvent.eventKey || newEvent.id;
+        const existingIndex = prev.findIndex((e) => (e.eventKey || e.id) === key);
+        if (existingIndex !== -1) {
+          const existing = prev[existingIndex];
+          if ((newEvent.conf ?? -1) < (existing.conf ?? -1)) return prev;
+          const merged = [...prev];
+          merged[existingIndex] = { ...existing, ...newEvent, id: existing.id || newEvent.id };
+          return merged;
+        }
+        return [newEvent, ...prev.slice(0, 49)];
+      });
+
+      // 2. Auto-add to vehicles and labels if not present
+      setVehicles((prev) => {
+        const existing = prev.find((v) => v.plate === plate);
+        if (existing) {
+          return prev.map((v) =>
+            v.plate === plate
+              ? { ...v, visits: (v.visits || 1) + 1, last: 'Vừa xong' }
+              : v
+          );
+        }
+        const isContainer = plate.includes('R') || plate.includes('H');
+        const isTruck = plate.includes('C');
+        const inferredType = isContainer ? 'Container' : isTruck ? 'Xe tải' : 'Xe con';
+        const newVehicle: Vehicle = {
+          plate,
+          type: inferredType,
+          visits: 1,
+          last: 'Vừa xong',
+          tint: status === 'quen' ? '#10b981' : '#f43f5e',
+        };
+        return [newVehicle, ...prev];
+      });
+
+      setLabels((prev) => {
+        if (prev[plate]) return prev;
+        return { ...prev, [plate]: status };
+      });
+    },
+  });
+
+>>>>>>> Stashed changes
   // Automatically dismiss floating alert when user navigates to area tab
   useEffect(() => {
     if (activeTab === 'area') {

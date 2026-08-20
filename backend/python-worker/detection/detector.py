@@ -73,12 +73,8 @@ class YoloDetector:
         return model_path
 
     def _load_model(self) -> None:
-        """Load YOLO model and assign GPU device."""
-        try:
-            import torch
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            self.device = "cpu"
+        """Load YOLO model and assign the best available device."""
+        self.device, self.device_reason = self._select_device()
 
         try:
             logger.info("Loading YOLO model from %s on %s...", self.model_path, self.device)
@@ -86,8 +82,49 @@ class YoloDetector:
             self.model.to(self.device)
             logger.info("YOLO model loaded successfully on %s.", self.device)
         except Exception as exc:
+            if self.device != "cpu":
+                logger.warning("Failed to load YOLO on %s (%s). Falling back to CPU.", self.device, exc)
+                self.device = "cpu"
+                self.device_reason = "fallback_after_cuda_load_error"
+                self.model = YOLO(self.model_path)
+                self.model.to(self.device)
+                logger.info("YOLO model loaded successfully on CPU fallback.")
+                return
             logger.error("Failed to load YOLO model: %s", exc)
             raise
+
+    @staticmethod
+    def _select_device() -> Tuple[str, str]:
+        requested = (os.getenv("YOLO_DEVICE") or os.getenv("SENTRIAI_AI_DEVICE") or "auto").strip().lower()
+        try:
+            import torch
+            cuda_available = torch.cuda.is_available()
+            cuda_count = torch.cuda.device_count() if cuda_available else 0
+        except Exception as exc:
+            logger.warning("Could not inspect torch CUDA availability: %s", exc)
+            cuda_available = False
+            cuda_count = 0
+
+        if requested in {"cpu", "cuda", "0"}:
+            if requested == "cpu":
+                return "cpu", "forced_cpu"
+            if cuda_available:
+                return "cuda", f"forced_cuda:{cuda_count}_device(s)"
+            logger.warning(
+                "YOLO GPU was requested but torch cannot see CUDA. Install a CUDA-enabled torch build to use GPU."
+            )
+            return "cpu", "cuda_requested_but_unavailable"
+
+        if cuda_available:
+            return "cuda", f"auto_cuda:{cuda_count}_device(s)"
+        return "cpu", "auto_cpu_torch_cuda_unavailable"
+
+    def runtime_info(self) -> Dict[str, Any]:
+        return {
+            "model": os.path.basename(str(self.model_path)),
+            "device": self.device,
+            "deviceReason": self.device_reason,
+        }
 
     def detect(
         self,

@@ -25,6 +25,7 @@ export interface GateEvent {
   cameraId?: string;
   lane?: string;
   eventTimestamp?: string;
+  eventKey?: string | null;
 }
 
 export type ViolationStatus = 'OPEN' | 'CLOSED';

@@ -155,7 +155,7 @@ class StreamReader:
         ratio = self.source_fps / self.target_fps
         # 1 frame was already read by cap.read()
         self._frame_step_accumulator += (ratio - 1.0)
-        skip_count = int(self._frame_step_accumulator)
+        skip_count = min(3, int(self._frame_step_accumulator))
         if skip_count > 0:
             self._frame_step_accumulator -= skip_count
             for _ in range(skip_count):
@@ -233,6 +233,35 @@ class StreamReader:
             cv2.LINE_AA,
         )
         return frame
+
+    def get_timecode(self) -> str:
+        """Return current video playback timecode MM:SS (or real-time clock)."""
+        if self.is_local_file and self.cap is not None and self.cap.isOpened():
+            cur_ms = self.cap.get(cv2.CAP_PROP_POS_MSEC)
+            total_sec = max(0, int(cur_ms / 1000.0))
+            mins = total_sec // 60
+            secs = total_sec % 60
+            return f"{mins:02d}:{secs:02d}"
+        return time.strftime("%H:%M:%S")
+
+    def get_playback_status(self) -> dict:
+        if not self.is_local_file or self.cap is None or not self.cap.isOpened():
+            return {"seekable": False, "positionMs": 0, "durationMs": 0}
+        position_ms = float(self.cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
+        frame_count = float(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+        fps = self.source_fps or float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        duration_ms = (frame_count / fps * 1000.0) if fps > 0 and frame_count > 0 else 0.0
+        return {"seekable": True, "positionMs": int(position_ms), "durationMs": int(duration_ms)}
+
+    def seek_ms(self, position_ms: float) -> dict:
+        if not self.is_local_file or self.cap is None or not self.cap.isOpened():
+            return self.get_playback_status()
+        status = self.get_playback_status()
+        duration_ms = max(0, int(status.get("durationMs", 0)))
+        target_ms = max(0, min(duration_ms, int(position_ms)))
+        self.cap.set(cv2.CAP_PROP_POS_MSEC, target_ms)
+        self._frame_step_accumulator = 0.0
+        return self.get_playback_status()
 
     def release(self) -> None:
         """Release underlying OpenCV resources."""

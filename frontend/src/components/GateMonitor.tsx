@@ -3,6 +3,7 @@ import type { GateEvent, PolygonZone } from '../types';
 import { useCameraFeed } from '../hooks/useCameraFeed';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { getGateEvents } from '../api/events';
+import { getCameraPlayback, seekCamera } from '../api/zones';
 
 interface GateMonitorProps {
   clock: string;
@@ -11,12 +12,58 @@ interface GateMonitorProps {
   labels: Record<string, 'quen' | 'la'>;
 }
 
+function normalizeGateEvent(raw: any): GateEvent | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const plate = raw.plate || raw.licensePlate;
+  if (!plate || plate === '—' || plate === 'â€”') return null;
+  const rawStatus = raw.status;
+  const status: 'quen' | 'la' = rawStatus === 'KNOWN' || rawStatus === 'quen' ? 'quen' : 'la';
+  const confidence =
+    typeof raw.conf === 'number'
+      ? raw.conf
+      : typeof raw.confidence === 'number'
+        ? Math.round(raw.confidence * 100)
+        : null;
+
+  return {
+    id: raw.id || `${plate}-${raw.time || Date.now()}`,
+    time: raw.time || new Date().toTimeString().slice(0, 5),
+    plate,
+    zone: raw.zone || (raw.lane === 'IN_2' ? 'Làn IN 2 · Làn phụ' : 'Làn IN 1 · Cổng chính'),
+    conf: confidence,
+    status,
+    clipPath: raw.clipPath ?? null,
+    cropPath: raw.cropPath ?? null,
+    cameraId: raw.cameraId,
+    lane: raw.lane,
+    eventTimestamp: raw.eventTimestamp,
+    eventKey: raw.eventKey ?? null,
+  };
+}
+
+function mergeGateEvent(prev: GateEvent[], next: GateEvent): GateEvent[] {
+  const key = next.eventKey || next.id;
+  const existingIndex = prev.findIndex((event) => (event.eventKey || event.id) === key);
+  if (existingIndex === -1) return [next, ...prev].slice(0, 50);
+
+  const existing = prev[existingIndex];
+  const nextConf = next.conf ?? -1;
+  const existingConf = existing.conf ?? -1;
+  if (nextConf < existingConf) return prev;
+
+  const merged = [...prev];
+  merged[existingIndex] = { ...existing, ...next, id: existing.id || next.id };
+  return merged;
+}
+
 export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: initialEvents, labels }) => {
   const [liveEvents, setLiveEvents] = useState<GateEvent[]>(initialEvents);
   const [hoveredEventId, setHoveredEventId] = useState<string | null>(null);
   const [hoveredPlate, setHoveredPlate] = useState<string | null>(null);
   const [filterMode, setFilterMode] = useState<'all' | 'la' | 'quen'>('all');
   const [searchFilter, setSearchFilter] = useState<string>('');
+  const [playback, setPlayback] = useState({ seekable: false, positionMs: 0, durationMs: 0 });
+  const [isSeeking, setIsSeeking] = useState(false);
 
   // 1. Live Video Feed from WebSocket proxy (/ws/feed/gate)
   const {
@@ -25,6 +72,9 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
     fps,
     isOnline,
     statusText,
+    timecode,
+    frameWidth,
+    frameHeight,
     reconnect: reconnectFeed,
   } = useCameraFeed('GATE-01');
 
@@ -41,18 +91,57 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
       });
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const refreshPlayback = () => {
+      if (isSeeking) return;
+      getCameraPlayback('GATE-01')
+        .then((status) => {
+          if (active) setPlayback(status);
+        })
+        .catch(() => {});
+    };
+    refreshPlayback();
+    const timer = window.setInterval(refreshPlayback, 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [isSeeking]);
+
+  const formatDuration = (ms: number) => {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const handleSeekCommit = (value: number) => {
+    setIsSeeking(false);
+    seekCamera('GATE-01', value)
+      .then((status) => {
+        setPlayback(status);
+        setHoveredEventId(null);
+        setHoveredPlate(null);
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    setLiveEvents((prev) => {
+      const merged = new Map<string, GateEvent>();
+      [...initialEvents, ...prev].forEach((event) => merged.set(event.id, event));
+      return Array.from(merged.values()).slice(0, 50);
+    });
+  }, [initialEvents]);
+
   // 3. Real-time Event Push from WebSocket proxy (/ws/events/gate)
   useWebSocket<{ type: string; data: GateEvent }>({
     path: '/ws/events/gate',
     onMessage: (msg) => {
-      if (msg?.data) {
-        const newEv = msg.data;
-        setLiveEvents((prev) => {
-          // Avoid duplicate event IDs
-          if (prev.some((e) => e.id === newEv.id)) return prev;
-          return [newEv, ...prev];
-        });
-      }
+      const newEv = normalizeGateEvent(msg?.data || msg);
+      if (!newEv) return;
+      setLiveEvents((prev) => mergeGateEvent(prev, newEv));
     },
   });
 
@@ -350,13 +439,13 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
                     borderRadius: '4px',
                   }}
                 >
-                  1080p · {fps.toFixed(0)} FPS
+                  {frameWidth}x{frameHeight} · {fps.toFixed(0)} FPS
                 </span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink)', fontWeight: 600 }}>
-                  {clock}
+                  {timecode || clock}
                 </span>
               </div>
             </div>
@@ -422,10 +511,10 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
               const [x1, y1, x2, y2] = det.bbox;
               const isNorm = x2 <= 1.0 && y2 <= 1.0;
               const isPct = !isNorm && x2 <= 100.0 && y2 <= 100.0;
-              const leftPct = isNorm ? x1 * 100 : isPct ? x1 : (x1 / 1280) * 100;
-              const topPct = isNorm ? y1 * 100 : isPct ? y1 : (y1 / 720) * 100;
-              const widthPct = isNorm ? (x2 - x1) * 100 : isPct ? (x2 - x1) : ((x2 - x1) / 1280) * 100;
-              const heightPct = isNorm ? (y2 - y1) * 100 : isPct ? (y2 - y1) : ((y2 - y1) / 720) * 100;
+              const leftPct = isNorm ? x1 * 100 : isPct ? x1 : (x1 / frameWidth) * 100;
+              const topPct = isNorm ? y1 * 100 : isPct ? y1 : (y1 / frameHeight) * 100;
+              const widthPct = isNorm ? (x2 - x1) * 100 : isPct ? (x2 - x1) : ((x2 - x1) / frameWidth) * 100;
+              const heightPct = isNorm ? (y2 - y1) * 100 : isPct ? (y2 - y1) : ((y2 - y1) / frameHeight) * 100;
 
               const plateText = (det as any).plate || '';
               const isStranger = (det as any).lpr_status === 'STRANGER';
@@ -516,6 +605,30 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
               );
             })}
           </div>
+
+          {playback.seekable && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '12px', padding: '0 4px' }}>
+              <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--ink3)', minWidth: '42px' }}>
+                {formatDuration(playback.positionMs)}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(1, playback.durationMs)}
+                value={Math.min(playback.positionMs, Math.max(1, playback.durationMs))}
+                onChange={(event) => {
+                  setIsSeeking(true);
+                  setPlayback((prev) => ({ ...prev, positionMs: Number(event.target.value) }));
+                }}
+                onMouseUp={(event) => handleSeekCommit(Number(event.currentTarget.value))}
+                onTouchEnd={(event) => handleSeekCommit(Number(event.currentTarget.value))}
+                style={{ flex: 1, accentColor: 'var(--acc)' }}
+              />
+              <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--ink3)', minWidth: '42px', textAlign: 'right' }}>
+                {formatDuration(playback.durationMs)}
+              </span>
+            </div>
+          )}
 
           {/* Feed Legend */}
           <div
