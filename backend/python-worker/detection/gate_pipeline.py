@@ -11,6 +11,7 @@ Features:
 import asyncio
 import base64
 import concurrent.futures
+import json
 import logging
 import os
 import time
@@ -121,8 +122,15 @@ class GatePipeline:
         self._recent_events: Dict[str, float] = {}
         self._event_ids_by_key: Dict[str, str] = {}
         self._lane_passages: Dict[str, Dict[str, Any]] = {}
+        self._lane_fallback_last_ocr: Dict[str, float] = {}
         self._next_passage_id = 1
         self._cooldown_seconds = 20.0
+        self._config_path = Path(
+            os.getenv("GATE_CONFIG_PATH") or base_dir / "data" / "config" / "gate_pipeline.json"
+        )
+        self.min_confidence = self._load_min_confidence(
+            float(os.getenv("GATE_MIN_CONFIDENCE", "0.70"))
+        )
         verified_raw = os.getenv("GATE_VERIFIED_PLATES", "15R-105.17,15R-102.53")
         self._verified_plates = [
             value.strip().upper()
@@ -206,6 +214,54 @@ class GatePipeline:
                 best_plate = verified
         return best_plate if best_distance <= 2 else plate
 
+    @staticmethod
+    def _normalize_min_confidence(value: float) -> float:
+        return round(max(0.50, min(0.95, float(value))), 2)
+
+    def _load_min_confidence(self, default: float) -> float:
+        fallback = self._normalize_min_confidence(default)
+        try:
+            if self._config_path.is_file():
+                payload = json.loads(self._config_path.read_text(encoding="utf-8"))
+                return self._normalize_min_confidence(payload.get("minConfidence", fallback))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("[%s] Ignoring invalid gate config %s: %s", self.camera_id, self._config_path, exc)
+        return fallback
+
+    def update_min_confidence(self, value: float) -> float:
+        """Persist the event threshold so Settings survives worker restarts."""
+        normalized = self._normalize_min_confidence(value)
+        self._config_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self._config_path.with_suffix(f"{self._config_path.suffix}.tmp")
+        temporary_path.write_text(
+            json.dumps({"minConfidence": normalized}, indent=2),
+            encoding="utf-8",
+        )
+        temporary_path.replace(self._config_path)
+        self.min_confidence = normalized
+        return normalized
+
+    def _event_meets_confidence_threshold(self, confidence: float) -> bool:
+        return float(confidence) >= float(getattr(self, "min_confidence", 0.70))
+
+    def _resolve_plate_box(
+        self,
+        observed_plate_box: List[int],
+        observed_vehicle_box: List[int],
+        current_vehicle_box: List[int],
+        zone_fallback: bool,
+    ) -> List[int]:
+        # A lane fallback crop is already expressed in current frame coordinates.
+        # Projecting it through an unrelated YOLO vehicle box moves the overlay away
+        # from the plate even though OCR text is correct.
+        if zone_fallback:
+            return [int(value) for value in observed_plate_box]
+        return self.tracker.project_box_between_vehicle_boxes(
+            observed_plate_box,
+            observed_vehicle_box,
+            current_vehicle_box,
+        )
+
     def _dedupe_plate_candidates(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         deduped: List[Dict[str, Any]] = []
         for cand in sorted(candidates, key=lambda item: (item.get("score", 0.0), item.get("confidence", 0.0)), reverse=True):
@@ -252,6 +308,10 @@ class GatePipeline:
             area = max(1, (box[2] - box[0]) * (box[3] - box[1]))
             duplicate = False
             for existing in kept:
+                candidate_lane = candidate.get("lane")
+                existing_lane = existing.get("lane")
+                if candidate_lane and existing_lane and candidate_lane != existing_lane:
+                    continue
                 other = [int(value) for value in existing["bbox"]]
                 ix1, iy1 = max(box[0], other[0]), max(box[1], other[1])
                 ix2, iy2 = min(box[2], other[2]), min(box[3], other[3])
@@ -264,6 +324,52 @@ class GatePipeline:
             if not duplicate:
                 kept.append(candidate)
         return kept
+
+    def _prioritize_ocr_detections(
+        self,
+        detections: List[Dict[str, Any]],
+        now: float,
+        limit: int = 2,
+    ) -> List[Dict[str, Any]]:
+        """Reserve one OCR opportunity per occupied lane before filling spare slots."""
+        if limit <= 0:
+            return []
+
+        def priority(item: Dict[str, Any]) -> Tuple[float, int, int]:
+            track = self.tracker.tracks.get(item.get("_track_id"))
+            last_ocr = (
+                getattr(track, "last_ocr_at", 0.0)
+                if track is not None
+                else self._lane_fallback_last_ocr.get(item.get("lane", ""), 0.0)
+            )
+            area = (item["bbox"][2] - item["bbox"][0]) * (item["bbox"][3] - item["bbox"][1])
+            return (last_ocr, 1 if item.get("_zone_fallback") else 0, -area)
+
+        by_lane: Dict[str, List[Dict[str, Any]]] = {}
+        for item in detections:
+            by_lane.setdefault(str(item.get("lane") or "UNKNOWN"), []).append(item)
+        for lane_items in by_lane.values():
+            lane_items.sort(key=priority)
+
+        selected = sorted(
+            (lane_items[0] for lane_items in by_lane.values() if lane_items),
+            key=priority,
+        )[:limit]
+        if len(selected) < limit:
+            selected_ids = {id(item) for item in selected}
+            remaining = sorted(
+                (item for item in detections if id(item) not in selected_ids),
+                key=priority,
+            )
+            selected.extend(remaining[: limit - len(selected)])
+
+        for item in selected:
+            track = self.tracker.tracks.get(item.get("_track_id"))
+            if track is not None:
+                track.last_ocr_at = now
+            elif item.get("_zone_fallback"):
+                self._lane_fallback_last_ocr[str(item.get("lane") or "UNKNOWN")] = now
+        return selected
 
     def _zone_fallback_detections(
         self,
@@ -381,6 +487,16 @@ class GatePipeline:
         event_key: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Process event logging and clip extraction in background."""
+        if confidence < self.min_confidence:
+            logger.debug(
+                "[%s] Plate %s confidence %.2f is below threshold %.2f. Skipping right-side event logging.",
+                self.camera_id,
+                plate,
+                confidence,
+                self.min_confidence,
+            )
+            return None
+
         # 1. Database lookup: Check registered_vehicles (AP-01)
         db_status = None
         try:
@@ -517,10 +633,11 @@ class GatePipeline:
 
                     current_track = self.tracker.tracks.get(vehicle_track_id)
                     current_vehicle_box = current_track.vehicle_bbox if current_track else observed_vehicle_box
-                    plate_box = self.tracker.project_box_between_vehicle_boxes(
+                    plate_box = self._resolve_plate_box(
                         observed_plate_box,
                         observed_vehicle_box,
                         current_vehicle_box,
+                        bool(d.get("_zone_fallback")),
                     )
                     plate_box = [
                         max(0, min(w - 1, plate_box[0])),
@@ -543,6 +660,7 @@ class GatePipeline:
                         conf=conf,
                         now=update_now,
                         variants=variants,
+                        bbox_quality=float(cand.get("score", conf * 2.0)),
                     )
                     track.lane = lane
                     track.zone_name = zone_name
@@ -625,6 +743,9 @@ class GatePipeline:
                 continue
             if (now - self._recent_events.get(plate, 0.0)) < self._cooldown_seconds:
                 continue
+            if not self._event_meets_confidence_threshold(track.best_conf):
+                track.mark_event_emitted()
+                continue
 
             self._recent_events[plate] = now
             confidence = track.best_conf
@@ -648,7 +769,7 @@ class GatePipeline:
         if getattr(self, "_ai_busy", False):
             return
         for passage in list(getattr(self, "_lane_passages", {}).values()):
-            if passage.get("event_plate") or (now - float(passage["last_seen"])) < 3.0:
+            if passage.get("event_plate") or passage.get("filtered") or (now - float(passage["last_seen"])) < 3.0:
                 continue
             aggregate = passage.get("aggregate_track")
             crop = passage.get("crop")
@@ -658,6 +779,20 @@ class GatePipeline:
                 continue
             plate = aggregate.best_plate
             confidence = aggregate.best_conf
+            if not self._event_meets_confidence_threshold(confidence):
+                passage["filtered"] = True
+                aggregate.mark_event_emitted()
+                for track in self.tracker.tracks.values():
+                    if getattr(track, "passage_id", None) == passage["id"]:
+                        track.mark_event_emitted()
+                logger.info(
+                    "[%s] Filtered plate %s at %.0f%% below configured %.0f%% threshold",
+                    self.camera_id,
+                    plate,
+                    confidence * 100,
+                    self.min_confidence * 100,
+                )
+                continue
             passage["event_plate"] = plate
             aggregate.mark_event_emitted()
             for track in self.tracker.tracks.values():
@@ -811,17 +946,7 @@ class GatePipeline:
             ocr_pool = in_zone_vehicles
             if self._active_zones and (self._ocr_cycle % 3 == 0):
                 ocr_pool = self._zone_fallback_detections(w, h, set())
-            prioritized_vehicles = sorted(
-                ocr_pool,
-                key=lambda item: (
-                    getattr(self.tracker.tracks.get(item.get("_track_id")), "last_ocr_at", 0.0),
-                    -((item["bbox"][2] - item["bbox"][0]) * (item["bbox"][3] - item["bbox"][1])),
-                ),
-            )[:2]
-            for item in prioritized_vehicles:
-                track = self.tracker.tracks.get(item.get("_track_id"))
-                if track is not None:
-                    track.last_ocr_at = now
+            prioritized_vehicles = self._prioritize_ocr_detections(ocr_pool, now, limit=2)
             asyncio.create_task(
                 self._run_ai_in_background(
                     frame.copy(),
@@ -906,6 +1031,7 @@ class GatePipeline:
         self._recent_events.clear()
         self._event_ids_by_key.clear()
         self._lane_passages.clear()
+        self._lane_fallback_last_ocr.clear()
         self._tracking_generation += 1
         self._last_ocr_dispatch = 0.0
         self._ocr_cycle = 0

@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import type { Vehicle } from '../../types';
 import { getVehicles, updateVehicleStatus, registerVehicle } from '../../api/vehicles';
+import { getCameraConfig, updateCameraConfig } from '../../api/cameras';
 
 interface VehicleLabelTabProps {
   vehicles?: Vehicle[];
@@ -21,6 +22,10 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
   const [labelMap, setLabelMap] = useState<Record<string, 'quen' | 'la'>>(initialLabels || {});
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // Confidence Threshold for Gate Event Logging
+  const [minConfidence, setMinConfidence] = useState<number>(70);
+  const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
 
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -60,7 +65,31 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
 
   useEffect(() => {
     loadVehicles();
+    // Load camera GATE-01 confidence configuration
+    getCameraConfig('GATE-01')
+      .then((cfg) => {
+        if (cfg && cfg.minConfidence !== undefined) {
+          setMinConfidence(Math.round(cfg.minConfidence * 100));
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not load camera config from API:', err);
+      });
   }, [loadVehicles]);
+
+  const handleSaveConfidence = async (val?: number) => {
+    const valueToSave = val !== undefined ? val : minConfidence;
+    setIsSavingConfig(true);
+    try {
+      await updateCameraConfig('GATE-01', { minConfidence: valueToSave / 100.0 });
+      showToast(`✓ Đã lưu ngưỡng độ chính xác nhận diện: ${valueToSave}%`);
+    } catch (err) {
+      console.error('Failed to update confidence config:', err);
+      showToast('Lỗi khi lưu cấu hình độ chính xác!');
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -282,6 +311,144 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
           </svg>
           <span>Đăng ký biển số mới</span>
         </button>
+      </div>
+
+      {/* Gate Recognition Confidence Threshold Setting Card */}
+      <div
+        style={{
+          margin: '16px 22px 8px 22px',
+          padding: '16px 18px',
+          borderRadius: '12px',
+          backgroundColor: 'rgba(255, 255, 255, 0.02)',
+          border: '1px solid var(--line)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+          background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.05) 0%, rgba(0, 0, 0, 0.0) 100%)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--accq)',
+                color: 'var(--acc)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '16px',
+              }}
+            >
+              🎯
+            </div>
+            <div>
+              <div style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--ink)' }}>
+                Ngưỡng độ chính xác tối thiểu ghi nhận sự kiện (Giám sát Cổng)
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--ink2)', marginTop: '2px' }}>
+                Chỉ các biển số đạt tỉ lệ chính xác từ mức này trở lên mới được lưu vào hệ thống và hiển thị ở danh sách bên phải.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 12px',
+                borderRadius: '8px',
+                backgroundColor: minConfidence >= 85 ? 'var(--okq)' : minConfidence >= 70 ? 'var(--accq)' : 'var(--p0q)',
+                border: `1px solid ${minConfidence >= 85 ? 'var(--ok)' : minConfidence >= 70 ? 'var(--acc)' : 'var(--p0)'}`,
+                color: minConfidence >= 85 ? 'var(--ok)' : minConfidence >= 70 ? 'var(--acc)' : 'var(--p0)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '14px',
+                fontWeight: 700,
+              }}
+            >
+              <span>{minConfidence}%</span>
+              <span style={{ fontSize: '11px', fontWeight: 500, opacity: 0.85 }}>
+                {minConfidence >= 85 ? '• Khắt khe' : minConfidence >= 70 ? '• Khuyên dùng' : '• Nhạy'}
+              </span>
+            </div>
+
+            <button
+              onClick={() => handleSaveConfidence(minConfidence)}
+              disabled={isSavingConfig}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '7px',
+                border: 'none',
+                backgroundColor: 'var(--acc)',
+                color: '#ffffff',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                opacity: isSavingConfig ? 0.7 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+              }}
+            >
+              {isSavingConfig ? 'Đang lưu...' : 'Lưu cấu hình'}
+            </button>
+          </div>
+        </div>
+
+        {/* Slider & Quick Presets */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', paddingTop: '4px' }}>
+          <div style={{ flex: '1 1 280px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink3)' }}>50%</span>
+            <input
+              type="range"
+              min="50"
+              max="95"
+              step="1"
+              value={minConfidence}
+              onChange={(e) => setMinConfidence(Number(e.target.value))}
+              style={{
+                flex: 1,
+                cursor: 'pointer',
+                accentColor: minConfidence >= 85 ? 'var(--ok)' : 'var(--acc)',
+              }}
+            />
+            <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink3)' }}>95%</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '11.5px', color: 'var(--ink3)', marginRight: '4px' }}>Mức nhanh:</span>
+            {[
+              { val: 60, label: '60% (Nhạy)' },
+              { val: 70, label: '70% (Chuẩn)' },
+              { val: 80, label: '80% (Cao)' },
+              { val: 85, label: '85% (Nghiêm ngặt)' },
+            ].map((preset) => (
+              <button
+                key={preset.val}
+                onClick={() => {
+                  setMinConfidence(preset.val);
+                  handleSaveConfidence(preset.val);
+                }}
+                style={{
+                  padding: '3px 8px',
+                  borderRadius: '5px',
+                  border: `1px solid ${minConfidence === preset.val ? 'var(--acc)' : 'var(--line)'}`,
+                  backgroundColor: minConfidence === preset.val ? 'var(--accq)' : 'transparent',
+                  color: minConfidence === preset.val ? 'var(--acc)' : 'var(--ink2)',
+                  fontSize: '11px',
+                  fontWeight: minConfidence === preset.val ? 600 : 400,
+                  cursor: 'pointer',
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Filter & Search Toolbar */}

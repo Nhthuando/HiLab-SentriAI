@@ -26,6 +26,7 @@ backend/data/clips/*.mp4
 backend/data/crops/*.jpg
 backend/data/crops/*.png
 backend/data/samples/
+backend/data/config/*.json
 
 # ─── AI Models ─────────────────────────────────────────────────────────────────
 *.pt
@@ -42,4 +43,5 @@ backend/python-worker/models/*.onnx
 .DS_Store
 Thumbs.db
 .vscode/settings.json
+.tmp/
 *.swp

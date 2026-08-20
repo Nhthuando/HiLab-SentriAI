@@ -26,6 +26,8 @@
   - 2026-08-21T00:56:00+07:00 | in_progress -> backend_verified | single-point event finalization, frozen event/overlay snapshot and stationary rear-plate OCR verified | team1-backend
   - 2026-08-21T01:08:00+07:00 | backend_verified -> in_progress | deduplicating overlapping vehicle boxes and correcting temporal M/H ambiguity | team1-backend
   - 2026-08-21T01:43:00+07:00 | in_progress -> backend_verified | lane fallback, passage-level single-result aggregation, M/H consensus and verified-plate replay passed | team1-backend
+  - 2026-08-21T02:05:00+07:00 | backend_verified -> in_progress | correcting fallback bbox projection, adjacent-lane OCR fairness and configurable event threshold | team1-backend
+  - 2026-08-21T02:34:00+07:00 | in_progress -> backend_verified | five real-video bbox replays, dual-lane OCR and persisted confidence threshold verified | team1-backend
 
 ## Inputs and dependencies
 
@@ -94,6 +96,9 @@
 - [x] Fragmented tracks in one lane passage contribute to one aggregate result and emit at most one event.
 - [x] Trailer-series M/H ambiguity is resolved from multi-frame character evidence, preserving confirmed `15RM` results.
 - [x] Operator-confirmed plates may correct OCR variants within two character substitutions through `GATE_VERIFIED_PLATES`; unrelated plates remain unchanged.
+- [x] Lane-fallback plate coordinates stay absolute and moving overlays preserve plate-box dimensions instead of scaling with unstable vehicle boxes.
+- [x] Adjacent vehicles from different lanes are never deduplicated and OCR reserves at least one slot per occupied lane.
+- [x] The configured minimum confidence is persisted and checked before DB/WS event emission, so the right-side event panel only receives qualifying new events.
 
 ## Expected files and seams
 
@@ -255,6 +260,12 @@
   - Exit/result: 0 (5/5 stream checks passed; GATE-01 connected at 1600x900 and 13.8 FPS)
   - Fresh: yes
   - Summary: The broader camera pipeline remains healthy and above the required 5 FPS floor.
+  - Evidence ID: EVD-BE-GATE-LIVE-23
+  - Command/procedure: `python -m pytest backend/python-worker/tests/test_lpr_runtime_and_rear_roi.py -q`, stream suite, live WebSocket frame capture and config API restart check
+  - Context: Final fallback-coordinate, stable-bbox, per-lane OCR scheduling and minimum-confidence integration
+  - Exit/result: 0 (35/35 LPR tests; 5/5 stream checks; Node build passed; runtime 1600x900 at 13.8 FPS)
+  - Fresh: yes
+  - Summary: Real replays placed boxes on `15R-105.17`, `15R-102.53`, `15RM-071.97`, `15RM-097.87` and `15R-158.45`; the adjacent lane recorded `15RM-032.88`; a 83% setting survived worker restart and was restored to 70%.
 
 ## Execution record
 
@@ -271,6 +282,7 @@
   - `backend/node-api/src/tests/test_gate_events.ts`
   - `backend/python-worker/tests/test_lpr_runtime_and_rear_roi.py`
   - `backend/python-worker/tests/benchmark_gate_fps.py`
+  - `backend/node-api/src/routes/cameras.ts`
   - `frontend/src/components/GateMonitor.tsx`
   - `frontend/src/hooks/useCameraFeed.ts`
   - `frontend/src/App.tsx`
@@ -283,6 +295,8 @@
 - 2026-08-21 decision: Emit from the main scheduler only after the winning plate has settled, then freeze the event and overlay to one immutable track snapshot.
 - 2026-08-21 decision: Aggregate fragmented tracks by lane passage and defer persistence until the passage OCR window closes, so a vehicle contributes one best result.
 - 2026-08-21 decision: Use `GATE_VERIFIED_PLATES` (defaulting to the two user-confirmed plates) only for variants within two substitutions; this addresses repeatable camera-specific OCR confusion without rewriting unrelated plates.
+- 2026-08-21 decision: The new operator-configured threshold supersedes the former unconditional low-confidence logging rule for new gate events; historical events remain unchanged.
+- 2026-08-21 decision: Persist gate confidence locally under `backend/data/config/` without adding a database migration; Node and frontend use the existing camera API boundary.
 - Accepted limitation: Historical wrong events already stored before this fix are preserved; no existing database records were deleted or rewritten.
 - Blocker: none
 - Exact next action: User replay validation in the running frontend; retain original-resolution imports when the plate occupies fewer than roughly 20 pixels in the compressed image.

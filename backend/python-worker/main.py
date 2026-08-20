@@ -32,6 +32,10 @@ class SeekRequest(BaseModel):
     positionMs: int
 
 
+class CameraConfigUpdate(BaseModel):
+    minConfidence: float
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup ---
@@ -202,6 +206,54 @@ async def seek_camera(camera_id: str, body: SeekRequest):
     else:
         pipeline.tracker.tracks.clear()
     return pipeline.reader.seek_ms(body.positionMs)
+
+
+@app.get("/cameras/{camera_id}/config")
+async def get_camera_config(camera_id: str):
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    if not hasattr(pipeline, "min_confidence"):
+        raise HTTPException(status_code=400, detail="Confidence configuration is only supported for gate cameras")
+    return {
+        "cameraId": cid,
+        "minConfidence": getattr(pipeline, "min_confidence", 0.70),
+    }
+
+
+@app.post("/cameras/{camera_id}/config")
+async def update_camera_config(camera_id: str, body: CameraConfigUpdate):
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    if not hasattr(pipeline, "update_min_confidence"):
+        raise HTTPException(status_code=400, detail="Confidence configuration is only supported for gate cameras")
+
+    if not 0.50 <= body.minConfidence <= 0.95:
+        raise HTTPException(status_code=422, detail="minConfidence must be between 0.50 and 0.95")
+    try:
+        val = pipeline.update_min_confidence(body.minConfidence)
+    except OSError as exc:
+        logger.error("[%s] Failed to persist camera configuration: %s", cid, exc)
+        raise HTTPException(status_code=500, detail="Could not persist camera configuration") from exc
+    logger.info("[%s] Updated min_confidence threshold to %.2f (%.0f%%)", cid, val, val * 100)
+
+    return {
+        "cameraId": cid,
+        "minConfidence": getattr(pipeline, "min_confidence", 0.70),
+    }
 
 
 if __name__ == "__main__":

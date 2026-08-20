@@ -50,6 +50,7 @@ class VehicleTrack:
         self.best_plate = plate or ""
         self.best_conf = confidence or 0.0
         self.best_score = 0.0
+        self.best_bbox_quality = (confidence or 0.0) * 2.0 if plate_bbox else 0.0
         self.created_at = last_seen
         self.status = status or "SCANNING"
         self.confidence = confidence or 0.85
@@ -72,6 +73,8 @@ class VehicleTrack:
 
         # Relative coordinates inside vehicle crop [rx1, ry1, rx2, ry2] in [0..1]
         self.rel_plate_box: Optional[List[float]] = None
+        self.plate_anchor_box: Optional[List[int]] = None
+        self.plate_anchor_vehicle_box: Optional[List[int]] = None
         if plate_bbox and vehicle_bbox:
             self._update_rel_box(vehicle_bbox, plate_bbox)
 
@@ -88,6 +91,8 @@ class VehicleTrack:
 
     def _update_rel_box(self, v_box: List[int], p_box: List[int]) -> None:
         """Calculate and store plate coordinates relative to vehicle bounding box."""
+        self.plate_anchor_box = [int(value) for value in p_box]
+        self.plate_anchor_vehicle_box = [int(value) for value in v_box]
         vx1, vy1, vx2, vy2 = v_box
         vw = max(1, vx2 - vx1)
         vh = max(1, vy2 - vy1)
@@ -100,7 +105,14 @@ class VehicleTrack:
         ]
 
     def get_interpolated_plate_box(self, v_box: List[int]) -> Optional[List[int]]:
-        """Compute absolute plate box from current vehicle box using locked relative offset."""
+        """Translate the plate with vehicle motion without distorting its aspect ratio."""
+        if self.plate_anchor_box is not None and self.plate_anchor_vehicle_box is not None:
+            avx1, avy1, avx2, avy2 = self.plate_anchor_vehicle_box
+            vx1, vy1, vx2, vy2 = v_box
+            dx = int(round(((vx1 + vx2) - (avx1 + avx2)) / 2.0))
+            dy = int(round(((vy1 + vy2) - (avy1 + avy2)) / 2.0))
+            px1, py1, px2, py2 = self.plate_anchor_box
+            return [px1 + dx, py1 + dy, px2 + dx, py2 + dy]
         if self.rel_plate_box is None:
             return self.plate_bbox
         vx1, vy1, vx2, vy2 = v_box
@@ -466,6 +478,8 @@ class PlateTracker:
                 continue
             track.vehicle_bbox = vehicle_bbox
             track.last_seen = now
+            if track.is_zone_fallback:
+                continue
             if track.rel_plate_box is not None:
                 track.plate_bbox = track.get_interpolated_plate_box(vehicle_bbox)
 
@@ -479,6 +493,7 @@ class PlateTracker:
         conf: float,
         now: float,
         variants: Optional[List[Dict[str, Any]]] = None,
+        bbox_quality: Optional[float] = None,
     ) -> VehicleTrack:
         """Update track coordinates, smooth plate box, and lock best plate string."""
         if track_id in self.tracks:
@@ -490,16 +505,11 @@ class PlateTracker:
 
             accepted_plate = track.plate
             if plate_text:
-<<<<<<< Updated upstream
-                track.add_plate_vote(plate_text, conf)
-                if not track.status_locked and status:
-=======
                 if track.first_plate_seen <= 0.0:
                     track.first_plate_seen = now
                 previous_plate = track.best_plate
                 accepted_plate = track.add_plate_vote(plate_text, conf, variants=variants, now=now)
                 if status:
->>>>>>> Stashed changes
                     track.status = status
                     track.status_locked = True
 
@@ -508,14 +518,34 @@ class PlateTracker:
 
                 if plate_bbox is not None and len(plate_bbox) == 4 and accepted_plate == plate_text:
                     cur_pbox = [int(v) for v in plate_bbox]
-                    track._update_rel_box(vehicle_bbox, cur_pbox)
-                    if track.plate_bbox is not None and previous_plate == accepted_plate:
-                        track.plate_bbox = [
-                            int(self.smoothing_alpha * cur_pbox[i] + (1.0 - self.smoothing_alpha) * track.plate_bbox[i])
-                            for i in range(4)
-                        ]
-                    else:
-                        track.plate_bbox = cur_pbox
+                    quality = float(bbox_quality if bbox_quality is not None else conf * 2.0)
+                    overlaps_current = track.plate_bbox is not None and compute_iou(cur_pbox, track.plate_bbox) >= 0.12
+                    prefers_lower_rear_box = False
+                    if track.plate_bbox is not None and not overlaps_current:
+                        current_center_y = (track.plate_bbox[1] + track.plate_bbox[3]) / 2.0
+                        candidate_center_y = (cur_pbox[1] + cur_pbox[3]) / 2.0
+                        vehicle_height = max(1, vehicle_bbox[3] - vehicle_bbox[1])
+                        prefers_lower_rear_box = (
+                            candidate_center_y >= current_center_y + max(12.0, vehicle_height * 0.06)
+                            and quality >= track.best_bbox_quality - 0.12
+                        )
+                    should_replace = (
+                        track.plate_bbox is None
+                        or previous_plate != accepted_plate
+                        or overlaps_current
+                        or prefers_lower_rear_box
+                        or quality >= track.best_bbox_quality + 0.15
+                    )
+                    if should_replace:
+                        if track.plate_bbox is not None and previous_plate == accepted_plate and overlaps_current:
+                            track.plate_bbox = [
+                                int(self.smoothing_alpha * cur_pbox[i] + (1.0 - self.smoothing_alpha) * track.plate_bbox[i])
+                                for i in range(4)
+                            ]
+                        else:
+                            track.plate_bbox = cur_pbox
+                        track.best_bbox_quality = max(track.best_bbox_quality, quality)
+                        track._update_rel_box(vehicle_bbox, track.plate_bbox)
             elif track.rel_plate_box is not None:
                 track.plate_bbox = track.get_interpolated_plate_box(vehicle_bbox)
 
@@ -530,6 +560,8 @@ class PlateTracker:
                 confidence=conf or 0.85,
                 last_seen=now,
             )
+            if bbox_quality is not None and plate_bbox:
+                new_track.best_bbox_quality = float(bbox_quality)
             self.tracks[track_id] = new_track
             return new_track
 

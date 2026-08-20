@@ -252,7 +252,9 @@ class LicensePlateReader:
         bh = max(1, y2 - y1)
         area = (bw * bh) / max(1.0, float(crop_w * crop_h))
         y_center = ((y1 + y2) / 2.0) / max(1.0, float(crop_h))
-        bumper_bonus = 0.08 if y_center >= 0.42 else 0.0
+        bumper_bonus = 0.16 if y_center >= 0.60 else (0.08 if y_center >= 0.42 else 0.0)
+        aspect = float(bw) / max(1.0, float(bh))
+        shape_bonus = 0.06 if 1.15 <= aspect <= 6.5 else 0.0
         raw_full_bonus = 0.16 if source == "vehicle_full_raw" else 0.0
         roi_bonus = 0.04 if source != "vehicle_full_raw" else 0.0
         refinement_bonus = 0.10 if source.startswith("plate_tight_") else 0.0
@@ -265,6 +267,7 @@ class LicensePlateReader:
             + roi_bonus
             + refinement_bonus
             + tight_bonus
+            + shape_bonus
             - enhancement_penalty
         )
 

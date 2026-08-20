@@ -824,3 +824,210 @@ def test_emitted_track_freezes_overlay_and_rejects_later_ocr_variants():
     assert track.best_plate == "15R-105.17"
     assert detection["plate"] == "15R-105.17"
     assert detection["confidence"] == 0.99
+
+
+def test_lane_fallback_plate_box_keeps_absolute_frame_coordinates():
+    from detection.gate_pipeline import GatePipeline
+
+    pipeline = GatePipeline.__new__(GatePipeline)
+    pipeline.tracker = PlateTracker()
+    observed_plate = [1410, 720, 1470, 765]
+    zone_box = [650, 330, 1590, 895]
+    yolo_vehicle_box = [900, 180, 1570, 880]
+
+    resolved = pipeline._resolve_plate_box(
+        observed_plate,
+        zone_box,
+        yolo_vehicle_box,
+        zone_fallback=True,
+    )
+
+    assert resolved == observed_plate
+
+
+def test_vehicle_dedupe_never_collapses_overlapping_vehicles_from_different_lanes():
+    from detection.gate_pipeline import GatePipeline
+
+    detections = [
+        {"class": "truck", "bbox": [500, 120, 1200, 850], "lane": "IN_1"},
+        {"class": "truck", "bbox": [420, 180, 1050, 820], "lane": "IN_2"},
+    ]
+
+    assert len(GatePipeline._dedupe_vehicle_detections(detections)) == 2
+
+
+def test_ocr_priority_reserves_one_slot_for_each_lane():
+    from detection.gate_pipeline import GatePipeline
+
+    pipeline = GatePipeline.__new__(GatePipeline)
+    pipeline.tracker = PlateTracker()
+    pipeline._lane_fallback_last_ocr = {}
+    detections = [
+        {"bbox": [700, 100, 1500, 890], "lane": "IN_1", "_zone_fallback": True},
+        {"bbox": [760, 160, 1450, 850], "lane": "IN_1", "_zone_fallback": True},
+        {"bbox": [20, 250, 720, 890], "lane": "IN_2", "_zone_fallback": True},
+    ]
+
+    selected = pipeline._prioritize_ocr_detections(detections, now=900.0, limit=2)
+
+    assert {item["lane"] for item in selected} == {"IN_1", "IN_2"}
+
+
+def test_distant_bbox_cannot_replace_stable_plate_location_on_small_quality_gain():
+    tracker = PlateTracker(smoothing_alpha=0.8)
+    vehicle_bbox = [700, 100, 1550, 880]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 910.0)
+    original_box = [1380, 700, 1450, 750]
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=vehicle_bbox,
+        plate_bbox=original_box,
+        plate_text="15R-105.17",
+        status="STRANGER",
+        conf=0.98,
+        now=910.0,
+        bbox_quality=2.50,
+    )
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=vehicle_bbox,
+        plate_bbox=[1320, 380, 1370, 440],
+        plate_text="15R-105.17",
+        status="STRANGER",
+        conf=0.99,
+        now=910.3,
+        bbox_quality=2.55,
+    )
+
+    assert tracker.tracks[track_id].plate_bbox == original_box
+
+
+def test_later_lower_rear_bbox_replaces_early_door_candidate():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 330, 1590, 895]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 912.0)
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=vehicle_bbox,
+        plate_bbox=[1394, 511, 1453, 563],
+        plate_text="15RM-097.87",
+        status="STRANGER",
+        conf=1.0,
+        now=912.0,
+        bbox_quality=2.12,
+    )
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=vehicle_bbox,
+        plate_bbox=[1386, 721, 1442, 770],
+        plate_text="15RM-097.87",
+        status="STRANGER",
+        conf=1.0,
+        now=912.3,
+        bbox_quality=2.16,
+    )
+
+    assert tracker.tracks[track_id].plate_bbox == [1386, 721, 1442, 770]
+
+
+def test_vehicle_motion_translation_preserves_plate_bbox_size_and_aspect():
+    tracker = PlateTracker()
+    track_id = tracker.match_or_create_track([800, 180, 1500, 850], 915.0)
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=[800, 180, 1500, 850],
+        plate_bbox=[1380, 700, 1450, 750],
+        plate_text="15RM-097.87",
+        status="STRANGER",
+        conf=0.98,
+        now=915.0,
+    )
+
+    tracker.update_related_plate_tracks(track_id, [760, 100, 1560, 890], 915.2)
+    moved = tracker.tracks[track_id].plate_bbox
+
+    assert moved is not None
+    assert moved[2] - moved[0] == 70
+    assert moved[3] - moved[1] == 50
+
+
+def test_zone_fallback_bbox_stays_absolute_between_ocr_passes():
+    tracker = PlateTracker()
+    track_id = tracker.match_or_create_track([650, 330, 1590, 895], 917.0)
+    track = tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=[650, 330, 1590, 895],
+        plate_bbox=[1386, 721, 1442, 770],
+        plate_text="15RM-097.87",
+        status="STRANGER",
+        conf=1.0,
+        now=917.0,
+    )
+    track.is_zone_fallback = True
+
+    tracker.update_related_plate_tracks(track_id, [900, 120, 1580, 890], 917.2)
+
+    assert track.plate_bbox == [1386, 721, 1442, 770]
+
+
+def test_passage_below_configured_confidence_is_not_logged():
+    from detection.gate_pipeline import GatePipeline
+
+    async def exercise():
+        pipeline = GatePipeline.__new__(GatePipeline)
+        pipeline.camera_id = "GATE-01"
+        pipeline.tracker = PlateTracker()
+        pipeline._ai_busy = False
+        pipeline.min_confidence = 0.90
+        captured = []
+
+        async def fake_handle(**kwargs):
+            captured.append(kwargs)
+
+        pipeline._handle_detected_plate = fake_handle
+        track_id = pipeline.tracker.match_or_create_track([700, 100, 1500, 880], 920.0)
+        for now in (920.0, 920.3, 920.6):
+            track = pipeline.tracker.update_track(
+                track_id=track_id,
+                vehicle_bbox=[700, 100, 1500, 880],
+                plate_bbox=[1380, 700, 1450, 750],
+                plate_text="15R-158.45",
+                status="STRANGER",
+                conf=0.85,
+                now=now,
+            )
+        track.passage_id = "P00009"
+        pipeline._lane_passages = {
+            "IN_1": {
+                "id": "P00009",
+                "last_seen": 920.6,
+                "event_plate": "",
+                "aggregate_track": track,
+                "crop": np.zeros((24, 48, 3), dtype=np.uint8),
+                "lane": "IN_1",
+                "zone_name": "Zone 1",
+            }
+        }
+
+        pipeline._schedule_ready_passage_events(924.0)
+        await asyncio.sleep(0)
+
+        assert captured == []
+        assert pipeline._lane_passages["IN_1"]["filtered"] is True
+
+    asyncio.run(exercise())
+
+
+def test_min_confidence_config_persists_across_pipeline_instances(tmp_path):
+    from detection.gate_pipeline import GatePipeline
+
+    config_path = tmp_path / "gate_pipeline.json"
+    first = GatePipeline.__new__(GatePipeline)
+    first.camera_id = "GATE-01"
+    first._config_path = config_path
+    assert first.update_min_confidence(0.83) == 0.83
+
+    second = GatePipeline.__new__(GatePipeline)
+    second.camera_id = "GATE-01"
+    second._config_path = config_path
+    assert second._load_min_confidence(0.70) == 0.83
