@@ -116,7 +116,8 @@ class StreamReader:
     def _advance_local_video_for_elapsed_time(self) -> None:
         """
         Advance playback time tracking for local video files.
-        Avoid heavy multi-frame grab loops on 4K/high-res videos which stall the decoder.
+        Skips frames to match the source video framerate with real wall-clock elapsed time,
+        preventing slow-motion playback when target_fps < source_fps or when inference takes time.
         """
         if (
             not self.is_local_file
@@ -132,11 +133,14 @@ class StreamReader:
         if previous is None:
             return
 
-        # Cap skipped frames to at most 1 frame per cycle to prevent decoder stalling on 4K files
         elapsed = now - previous
-        expected_interval = 1.0 / self.target_fps
-        if elapsed > expected_interval * 1.8:
-            self.cap.grab()
+        frames_needed = int(round(elapsed * self.source_fps))
+        skip_count = max(0, frames_needed - 1)
+        # Cap skip_count to avoid stalling on sudden pauses/debugging
+        skip_count = min(skip_count, int(self.source_fps * 2))
+        for _ in range(skip_count):
+            if not self.cap.grab():
+                break
 
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """

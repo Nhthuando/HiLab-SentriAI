@@ -122,9 +122,8 @@ class TestZoneRuleMatrix(unittest.TestCase):
         res1 = resolve_candidate_labels("motorcycle", "Xe máy", class_map)
         self.assertEqual(res1, ["Xe máy điện", "Xe máy số"])
 
-        # A model class without a DB mapping remains unknown and is still
-        # evaluated by ALLOW_SPECIFIED zone rules.
-        res2 = resolve_candidate_labels("truck", "Xe tải", class_map)
+        # A model class without a DB mapping and without translated label remains unknown
+        res2 = resolve_candidate_labels("truck", "truck", class_map)
         self.assertEqual(res2, ["CHƯA XÁC ĐỊNH"])
 
         # Completely unknown

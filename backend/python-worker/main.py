@@ -14,6 +14,16 @@ from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDiscon
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
+import dotenv
+
+# Load environment configuration
+for env_path in ["backend/.env", ".env", "../.env", "../../backend/.env"]:
+    if os.path.exists(env_path):
+        dotenv.load_dotenv(env_path)
+        break
+else:
+    dotenv.load_dotenv()
+
 from db import check_db_health, close_db_pool, close_stale_open_violations, init_db_pool
 from detection import AreaPipeline
 from stream import CameraPipeline
@@ -48,16 +58,19 @@ async def lifespan(app: FastAPI):
     gate_source = os.getenv("GATE_CAMERA_URL") or "./data/samples/gate_sample.mp4"
     area_source = os.getenv("AREA_CAMERA_URL") or "./data/samples/area_sample.mp4"
 
+    gate_target_fps = float(os.getenv("GATE_TARGET_FPS", "20.0"))
+    area_target_fps = float(os.getenv("AREA_TARGET_FPS", "20.0"))
+
     gate_pipeline = CameraPipeline(
         camera_id="GATE-01",
         source=gate_source,
-        target_fps=10.0,
+        target_fps=gate_target_fps,
         resolution=(640, 480),
     )
     area_pipeline = AreaPipeline(
         camera_id="BAI-KIEM",
         source=area_source,
-        target_fps=10.0,
+        target_fps=area_target_fps,
         resolution=(640, 480),
     )
 
