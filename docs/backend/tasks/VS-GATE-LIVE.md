@@ -29,6 +29,9 @@
   - 2026-08-21T02:05:00+07:00 | backend_verified -> in_progress | correcting fallback bbox projection, adjacent-lane OCR fairness and configurable event threshold | team1-backend
   - 2026-08-21T02:34:00+07:00 | in_progress -> backend_verified | five real-video bbox replays, dual-lane OCR and persisted confidence threshold verified | team1-backend
 
+  - 2026-08-21T09:25:00+07:00 | backend_verified -> in_progress | upgrading vehicle detection to YOLO11n and correcting bbox, label and threshold regressions | team1-backend
+  - 2026-08-21T10:22:00+07:00 | in_progress -> backend_verified | YOLO11n CUDA replay, passage finalization, stable bbox and DB-owned labels verified | team1-backend
+
 ## Inputs and dependencies
 
 - Requirement sources: Product M1 (§3), BR-01, BR-02, BR-05, AC-01, AC-02, AC-09, Product §7 (Exceptions)
@@ -267,6 +270,25 @@
   - Fresh: yes
   - Summary: Real replays placed boxes on `15R-105.17`, `15R-102.53`, `15RM-071.97`, `15RM-097.87` and `15R-158.45`; the adjacent lane recorded `15RM-032.88`; a 83% setting survived worker restart and was restored to 70%.
 
+  - Evidence ID: EVD-BE-GATE-LIVE-24
+  - Command/procedure: `python -m pytest tests/test_lpr_runtime_and_rear_roi.py tests/test_fast_alpr_pipeline.py tests/test_stream_pipeline.py -q`
+  - Context: YOLO11n defaults, bbox plausibility/confirmation, live snapshot locking, 51% threshold and DB-owned vehicle labels
+  - Exit/result: 0 (42 tests passed)
+  - Fresh: yes
+  - Summary: A distant or vertical latch bbox cannot replace a confirmed plate, fragmented tracks publish one best bbox, lower-confidence OCR cannot replace the live result, and one fast-vehicle read at 51% is finalized when the configured threshold is 50%.
+  - Evidence ID: EVD-BE-GATE-LIVE-25
+  - Command/procedure: Real-time `Gate-In.mp4` replay from 00:17 using `benchmark_gate_fps.py --realtime`
+  - Context: 1600x900 stream, YOLO11n CUDA, fast-alpr CUDA/CPU, 960x540 vehicle inference
+  - Exit/result: 0 (`15R-105.17` only at 100%; 13.0 live FPS; 94 stable overlay frames)
+  - Fresh: yes
+  - Summary: The orange truck no longer alternates between 15R/16R or 105/106 variants during the replay.
+  - Evidence ID: EVD-BE-GATE-LIVE-26
+  - Command/procedure: Real model inspection at 04:26-04:46 plus throughput benchmark
+  - Context: Moving lane-2 flatbed and recessed green-container plate frames
+  - Exit/result: 0 (YOLO11n detected the moving flatbed; ALPR returned `15RM-032.88` at 100%; zone fallback included exact `15R-102.53` evidence; 16.7 processing FPS throughput)
+  - Fresh: yes
+  - Summary: Moving vehicle detection remains above the 15 FPS target in throughput mode and the fallback path retains the correct green-truck character evidence.
+
 ## Execution record
 
 - Changed files:
@@ -297,6 +319,10 @@
 - 2026-08-21 decision: Use `GATE_VERIFIED_PLATES` (defaulting to the two user-confirmed plates) only for variants within two substitutions; this addresses repeatable camera-specific OCR confusion without rewriting unrelated plates.
 - 2026-08-21 decision: The new operator-configured threshold supersedes the former unconditional low-confidence logging rule for new gate events; historical events remain unchanged.
 - 2026-08-21 decision: Persist gate confidence locally under `backend/data/config/` without adding a database migration; Node and frontend use the existing camera API boundary.
+- 2026-08-21 decision: Use YOLO11n for vehicle detection at 960x540 with a 0.18 gate threshold, while keeping the dedicated fast-alpr detector/OCR unchanged.
+- 2026-08-21 decision: Treat `registered_vehicles` as the only KNOWN/STRANGER source for both live overlays and persisted events; unknown plates default to STRANGER.
+- 2026-08-21 decision: Publish a plate bbox only after spatial confirmation, retain the highest-confidence published snapshot, and reject implausibly vertical latch/pillar boxes.
+- 2026-08-21 decision: Passage finalization applies the user threshold inclusively to the best observation; a valid single-frame fast-vehicle read is retained after the passage closes.
 - Accepted limitation: Historical wrong events already stored before this fix are preserved; no existing database records were deleted or rewritten.
 - Blocker: none
 - Exact next action: User replay validation in the running frontend; retain original-resolution imports when the plate occupies fewer than roughly 20 pixels in the compressed image.

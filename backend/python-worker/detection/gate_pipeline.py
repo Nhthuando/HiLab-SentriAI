@@ -23,7 +23,12 @@ import cv2
 import numpy as np
 
 from buffer.circular_buffer import CircularBuffer
-from db.repositories import create_gate_event, get_active_zones_by_camera, get_vehicle_status_by_plate
+from db.repositories import (
+    create_gate_event,
+    get_active_zones_by_camera,
+    get_all_registered_plates,
+    get_vehicle_status_by_plate,
+)
 from detection.detector import YoloDetector
 from detection.lpr import LicensePlateReader
 from detection.plate_tracker import PlateTracker, compute_iou
@@ -109,7 +114,11 @@ class GatePipeline:
             target_fps=target_fps,
             resolution=self.resolution,
         )
-        self.detector = detector or YoloDetector()
+        self.detector = detector or YoloDetector(
+            model_path=os.getenv("GATE_YOLO_MODEL", "yolo11n.pt"),
+            conf_threshold=float(os.getenv("GATE_VEHICLE_CONFIDENCE", "0.18")),
+            target_classes=["car", "truck", "bus"],
+        )
         self.lpr_reader = lpr_reader or LicensePlateReader()
         self.tracker = PlateTracker(smoothing_alpha=0.82)
         self.buffer = CircularBuffer(max_seconds=12.0, target_fps=target_fps)
@@ -141,6 +150,8 @@ class GatePipeline:
         # Zone synchronization for in-zone only LPR
         self._active_zones: List[Dict[str, Any]] = []
         self._last_zone_sync: float = 0.0
+        self._registered_vehicle_statuses: Dict[str, str] = {}
+        self._last_vehicle_status_sync: float = 0.0
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -153,6 +164,8 @@ class GatePipeline:
         self._yolo_stride = max(1, int(os.getenv("GATE_YOLO_STRIDE", "2")))
         self._tracking_generation = 0
         self._ocr_cycle = 0
+        self._cached_vehicle_detections: List[Dict[str, Any]] = []
+        self._cached_vehicle_detections_at = 0.0
 
     async def _sync_active_zones(self, now: float) -> None:
         """Fetch active monitoring zones for GATE-01 from database."""
@@ -162,6 +175,25 @@ class GatePipeline:
             self._active_zones = zones or []
         except Exception as exc:
             logger.debug("[%s] Zone sync error: %s", self.camera_id, exc)
+
+    @staticmethod
+    def _compact_plate(value: str) -> str:
+        return str(value or "").upper().replace(" ", "").replace("-", "").replace(".", "")
+
+    async def _sync_registered_vehicle_statuses(self, now: float) -> None:
+        """Refresh the single label snapshot used by both overlays and events."""
+        self._last_vehicle_status_sync = now
+        try:
+            statuses = await get_all_registered_plates()
+            self._registered_vehicle_statuses = {
+                self._compact_plate(plate): str(status).upper()
+                for plate, status in statuses.items()
+            }
+            for track in self.tracker.tracks.values():
+                if track.best_plate:
+                    track.status = self.resolve_vehicle_status(track.best_plate)
+        except Exception as exc:
+            logger.debug("[%s] Vehicle-label sync error: %s", self.camera_id, exc)
 
     def _find_matching_zone(self, bbox: List[int], frame_w: int, frame_h: int) -> Tuple[bool, str, str]:
         """
@@ -462,19 +494,12 @@ class GatePipeline:
             logger.warning("Clip extraction failed for plate %s (%s). Continuing event logging.", plate, exc)
             return None
 
-    @staticmethod
-    def resolve_vehicle_status(plate_str: str) -> str:
-        """Single Source of Truth for resolving plate KNOWN / STRANGER status."""
-        if not plate_str:
+    def resolve_vehicle_status(self, plate_str: str) -> str:
+        """Resolve labels only from the operator-managed registered-vehicle setting."""
+        clean = self._compact_plate(plate_str)
+        if not clean:
             return "STRANGER"
-        clean = plate_str.upper().replace(" ", "").replace("-", "").replace(".", "")
-        known_samples = [
-            "15R", "29A", "51C", "30F", "30A", "ABC", "7XYZ",
-            "KA02", "DL02", "LK12", "OE56", "AJ08", "LM07", "L407", "LH07", "OF56"
-        ]
-        if any(k in clean for k in known_samples):
-            return "KNOWN"
-        return "STRANGER"
+        return getattr(self, "_registered_vehicle_statuses", {}).get(clean, "STRANGER")
 
     async def _handle_detected_plate(
         self,
@@ -504,7 +529,11 @@ class GatePipeline:
         except Exception as exc:
             logger.debug("Database lookup failed (%s). Defaulting status.", exc)
 
-        status = db_status or self.resolve_vehicle_status(plate)
+        status = str(db_status).upper() if db_status else self.resolve_vehicle_status(plate)
+        self._registered_vehicle_statuses[self._compact_plate(plate)] = status
+        for track in self.tracker.tracks.values():
+            if self._compact_plate(track.best_plate) == self._compact_plate(plate):
+                track.status = status
 
         # 2. Save media artifacts
         ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -697,7 +726,9 @@ class GatePipeline:
                     best_plate_crop = frame[pcy1:pcy2, pcx1:pcx2].copy() if (pcx2 > pcx1 and pcy2 > pcy1) else best_plate_crop
                     if best_plate_crop is not None and best_plate_crop.size > 0:
                         track.latest_plate_crop = best_plate_crop.copy()
-                        passage["crop"] = best_plate_crop.copy()
+                        if conf >= float(passage.get("crop_confidence", -1.0)):
+                            passage["crop"] = best_plate_crop.copy()
+                            passage["crop_confidence"] = conf
 
     async def _run_ai_in_background(self, frame: np.ndarray, in_zone_detections: List[Dict[str, Any]], now: float, generation: Optional[int] = None) -> None:
         """Trigger AI OCR in thread pool."""
@@ -775,7 +806,7 @@ class GatePipeline:
             crop = passage.get("crop")
             if aggregate is None or crop is None or crop.size == 0:
                 continue
-            if not aggregate.has_stable_plate(now):
+            if not aggregate.has_finalizable_plate(now):
                 continue
             plate = aggregate.best_plate
             confidence = aggregate.best_conf
@@ -836,7 +867,7 @@ class GatePipeline:
                     in_zone_vehicles.append(d)
 
         self._sync_plate_detection(frame, in_zone_vehicles, now)
-        live_detections = self.tracker.get_live_detections(now)
+        live_detections = self.tracker.get_live_detections(now, getattr(self, "min_confidence", 0.70))
 
         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
         ret, buf = cv2.imencode(".jpg", frame, encode_params)
@@ -869,13 +900,16 @@ class GatePipeline:
         # 1. Periodically sync active zones for this camera from DB
         if now - self._last_zone_sync >= 4.0:
             asyncio.create_task(self._sync_active_zones(now))
+        if now - getattr(self, "_last_vehicle_status_sync", 0.0) >= 1.0:
+            self._last_vehicle_status_sync = now
+            asyncio.create_task(self._sync_registered_vehicle_statuses(now))
 
         # 2. Run fast YOLO vehicle detection (cadence-controlled for high 15+ FPS throughput)
         should_run_yolo = (self.frame_count % self._yolo_stride == 0) or (len(self.tracker.tracks) == 0)
         raw_detections = []
         if should_run_yolo:
-            det_w = int(os.getenv("GATE_YOLO_WIDTH", "640"))
-            det_h = int(os.getenv("GATE_YOLO_HEIGHT", "360"))
+            det_w = int(os.getenv("GATE_YOLO_WIDTH", "960"))
+            det_h = int(os.getenv("GATE_YOLO_HEIGHT", "540"))
             if w > det_w or h > det_h:
                 scale_x = w / float(det_w)
                 scale_y = h / float(det_h)
@@ -891,6 +925,12 @@ class GatePipeline:
                     ]
             else:
                 raw_detections = self.detector.detect(frame)
+            if raw_detections:
+                self._cached_vehicle_detections = [dict(item) for item in raw_detections]
+                self._cached_vehicle_detections_at = now
+        cached_at = getattr(self, "_cached_vehicle_detections_at", 0.0)
+        if not raw_detections and (now - cached_at) <= 0.8:
+            raw_detections = [dict(item) for item in getattr(self, "_cached_vehicle_detections", [])]
 
         # 3. Filter vehicles strictly inside active configured zones (car/truck/bus only)
         in_zone_vehicles = []
@@ -933,7 +973,8 @@ class GatePipeline:
             if vehicle_track is not None:
                 vehicle_track.lane = d["lane"]
                 vehicle_track.zone_name = d["zone_name"]
-            self.tracker.update_related_plate_tracks(track_id, [vx1, vy1, vx2, vy2], now)
+            if vehicle_track is not None:
+                self.tracker.update_related_plate_tracks(track_id, vehicle_track.vehicle_bbox, now)
 
         # 4. Trigger throttled Plate Detection & OCR in background.
         if (
@@ -959,7 +1000,7 @@ class GatePipeline:
         # 5. Finalize tracks after the plate leaves view, then return live overlays.
         self._schedule_ready_passage_events(now)
         self._schedule_ready_track_events(now)
-        live_detections = self.tracker.get_live_detections(now)
+        live_detections = self.tracker.get_live_detections(now, getattr(self, "min_confidence", 0.70))
 
         # 6. Encode Stream-Optimized JPEG frame to base64
         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(os.getenv("GATE_JPEG_QUALITY", "50"))]
@@ -1035,6 +1076,8 @@ class GatePipeline:
         self._tracking_generation += 1
         self._last_ocr_dispatch = 0.0
         self._ocr_cycle = 0
+        self._cached_vehicle_detections = []
+        self._cached_vehicle_detections_at = 0.0
 
     async def stop(self) -> None:
         self._running = False

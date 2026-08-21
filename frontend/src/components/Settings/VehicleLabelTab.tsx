@@ -403,19 +403,46 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', paddingTop: '4px' }}>
           <div style={{ flex: '1 1 280px', display: 'flex', alignItems: 'center', gap: '12px' }}>
             <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink3)' }}>50%</span>
-            <input
-              type="range"
-              min="50"
-              max="95"
-              step="1"
-              value={minConfidence}
-              onChange={(e) => setMinConfidence(Number(e.target.value))}
-              style={{
-                flex: 1,
-                cursor: 'pointer',
-                accentColor: minConfidence >= 85 ? 'var(--ok)' : 'var(--acc)',
-              }}
-            />
+            <div style={{ position: 'relative', flex: 1, paddingTop: '24px' }}>
+              <span
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: `calc(${((minConfidence - 50) / 45) * 100}% + ${8 - ((minConfidence - 50) / 45) * 16}px)`,
+                  transform: 'translateX(-50%)',
+                  minWidth: '38px',
+                  padding: '2px 6px',
+                  borderRadius: '5px',
+                  backgroundColor: minConfidence >= 85 ? 'var(--ok)' : 'var(--acc)',
+                  color: '#ffffff',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  textAlign: 'center',
+                  pointerEvents: 'none',
+                }}
+              >
+                {minConfidence}%
+              </span>
+              <input
+                type="range"
+                min="50"
+                max="95"
+                step="1"
+                value={minConfidence}
+                aria-label="Ngưỡng độ chính xác tối thiểu"
+                aria-valuetext={`${minConfidence}%`}
+                onChange={(e) => setMinConfidence(Number(e.target.value))}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  margin: 0,
+                  cursor: 'pointer',
+                  accentColor: minConfidence >= 85 ? 'var(--ok)' : 'var(--acc)',
+                }}
+              />
+            </div>
             <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink3)' }}>95%</span>
           </div>
 

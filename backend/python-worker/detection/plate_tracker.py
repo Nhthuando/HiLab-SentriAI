@@ -51,8 +51,13 @@ class VehicleTrack:
         self.best_conf = confidence or 0.0
         self.best_score = 0.0
         self.best_bbox_quality = (confidence or 0.0) * 2.0 if plate_bbox else 0.0
+        self.bbox_confirmation_count = 1 if plate_bbox else 0
+        self.pending_plate_box: Optional[List[int]] = None
+        self.pending_bbox_quality = 0.0
+        self.pending_bbox_support = 0
         self.created_at = last_seen
         self.status = status or "SCANNING"
+        self.status_locked = bool(plate and status in {"KNOWN", "STRANGER"})
         self.confidence = confidence or 0.85
         self.last_seen = last_seen
         self.last_plate_seen = last_seen if plate_bbox else 0.0
@@ -63,6 +68,8 @@ class VehicleTrack:
         self.event_emitted = False
         self.emitted_conf = 0.0
         self.last_event_plate = ""
+        self.live_plate = ""
+        self.live_conf = 0.0
         self.latest_plate_crop: Optional[np.ndarray] = None
         self.lane = "IN_1"
         self.motion_ratio_ema = 1.0
@@ -357,36 +364,47 @@ class VehicleTrack:
         exact_vote_count = self.plate_votes.get(self.best_plate, {}).get("count", 0)
         frame_count = max(int(exact_vote_count), self.consensus_frame_count)
         total_observation_frames = len(self.observation_history)
-        if frame_count < 2 and total_observation_frames < 3:
+        if frame_count < 2 and total_observation_frames < 2:
             return False
-        if self.is_zone_fallback and frame_count < 4 and total_observation_frames < 5:
+        if self.bbox_confirmation_count < 2:
+            return False
+        if self.is_zone_fallback and frame_count < 3 and total_observation_frames < 3:
             return False
         observation_age = now - self.first_plate_seen if self.first_plate_seen else 0.0
         plate_stale_for = now - self.last_plate_seen if self.last_plate_seen else 0.0
         best_stable_for = now - self.best_plate_changed_at if self.best_plate_changed_at else 0.0
-        stationary_frame_requirement = 8 if self.is_zone_fallback else 7
+        stationary_frame_requirement = 4 if self.is_zone_fallback else 2
         enough_stationary_consensus = (
             (self.is_stationary(now) or self.is_zone_fallback)
-            and observation_age >= 3.0
-            and best_stable_for >= 1.8
+            and observation_age >= 0.70
+            and best_stable_for >= 0.70
             and frame_count >= stationary_frame_requirement
         )
         enough_live_consensus = (
-            observation_age >= 5.0
-            and best_stable_for >= 2.0
-            and frame_count >= 10
+            observation_age >= 0.70
+            and best_stable_for >= 0.70
+            and frame_count >= 2
         )
-        required_quiet = 1.10 if self.is_zone_fallback else 0.75
-        required_settle = 1.20 if self.is_zone_fallback else 0.75
+        required_quiet = 0.90 if self.is_zone_fallback else 0.60
+        required_settle = 0.60 if self.is_zone_fallback else 0.35
         finalized_after_plate_left = plate_stale_for >= required_quiet and best_stable_for >= required_settle and (
             frame_count >= 2 or total_observation_frames >= 3
         )
-        return self.best_conf >= 0.60 and (
-            enough_stationary_consensus or enough_live_consensus or finalized_after_plate_left
-        )
+        return enough_stationary_consensus or enough_live_consensus or finalized_after_plate_left
 
     def should_emit_event(self, now: float) -> bool:
-        return not self.event_emitted and self.has_stable_plate(now)
+        return not self.event_emitted and self.has_finalizable_plate(now)
+
+    def has_finalizable_plate(self, now: float) -> bool:
+        """Allow a passage to keep its best valid read even when a fast vehicle yields one frame."""
+        if self.has_stable_plate(now):
+            return True
+        if not self.best_plate or self.plate_bbox is None:
+            return False
+        if not self._format_vn_compact(self._compact_plate(self.best_plate)):
+            return False
+        plate_stale_for = now - self.last_plate_seen if self.last_plate_seen else 0.0
+        return plate_stale_for >= 1.0 and self.bbox_confirmation_count >= 1
 
     def mark_event_emitted(self) -> None:
         """Freeze display metadata to the exact snapshot persisted for this passage."""
@@ -402,6 +420,41 @@ class PlateTracker:
         self.smoothing_alpha = smoothing_alpha
         self.tracks: Dict[str, VehicleTrack] = {}
         self._next_id = 1
+
+    @staticmethod
+    def _is_plausible_plate_box(plate_bbox: List[int], vehicle_bbox: List[int]) -> bool:
+        """Reject latch/pillar boxes before they can become a plate anchor."""
+        px1, py1, px2, py2 = plate_bbox
+        vx1, vy1, vx2, vy2 = vehicle_bbox
+        pw, ph = px2 - px1, py2 - py1
+        vw, vh = max(1, vx2 - vx1), max(1, vy2 - vy1)
+        if pw < 10 or ph < 8 or pw / float(ph) < 0.65 or pw / float(ph) > 6.5:
+            return False
+        area_ratio = (pw * ph) / float(vw * vh)
+        center_x = (px1 + px2) / 2.0
+        center_y = (py1 + py2) / 2.0
+        margin_x = vw * 0.04
+        margin_y = vh * 0.04
+        return (
+            0.00025 <= area_ratio <= 0.10
+            and vx1 - margin_x <= center_x <= vx2 + margin_x
+            and vy1 - margin_y <= center_y <= vy2 + margin_y
+        )
+
+    @staticmethod
+    def _smooth_vehicle_bbox(previous: List[int], current: List[int]) -> List[int]:
+        """Damp detector edge jitter while following real vehicle motion quickly."""
+        old_cx = (previous[0] + previous[2]) / 2.0
+        old_cy = (previous[1] + previous[3]) / 2.0
+        new_cx = (current[0] + current[2]) / 2.0
+        new_cy = (current[1] + current[3]) / 2.0
+        diagonal = max(1.0, float(np.hypot(previous[2] - previous[0], previous[3] - previous[1])))
+        movement = float(np.hypot(new_cx - old_cx, new_cy - old_cy)) / diagonal
+        alpha = 0.86 if movement >= 0.035 else 0.62
+        return [
+            int(round(alpha * current[index] + (1.0 - alpha) * previous[index]))
+            for index in range(4)
+        ]
 
     def match_or_create_track(
         self,
@@ -500,15 +553,14 @@ class PlateTracker:
             track = self.tracks[track_id]
             if not plate_text:
                 track.update_vehicle_motion(vehicle_bbox, now)
-            track.vehicle_bbox = vehicle_bbox
+                vehicle_bbox = self._smooth_vehicle_bbox(track.vehicle_bbox, vehicle_bbox)
+            track.vehicle_bbox = [int(value) for value in vehicle_bbox]
             track.last_seen = now
 
-            accepted_plate = track.plate
             if plate_text:
                 if track.first_plate_seen <= 0.0:
                     track.first_plate_seen = now
-                previous_plate = track.best_plate
-                accepted_plate = track.add_plate_vote(plate_text, conf, variants=variants, now=now)
+                track.add_plate_vote(plate_text, conf, variants=variants, now=now)
                 if status:
                     track.status = status
                     track.status_locked = True
@@ -516,36 +568,61 @@ class PlateTracker:
                 if plate_bbox is not None and len(plate_bbox) == 4:
                     track.last_plate_seen = now
 
-                if plate_bbox is not None and len(plate_bbox) == 4 and accepted_plate == plate_text:
+                if (
+                    plate_bbox is not None
+                    and len(plate_bbox) == 4
+                    and self._is_plausible_plate_box(plate_bbox, vehicle_bbox)
+                ):
                     cur_pbox = [int(v) for v in plate_bbox]
                     quality = float(bbox_quality if bbox_quality is not None else conf * 2.0)
                     overlaps_current = track.plate_bbox is not None and compute_iou(cur_pbox, track.plate_bbox) >= 0.12
-                    prefers_lower_rear_box = False
-                    if track.plate_bbox is not None and not overlaps_current:
-                        current_center_y = (track.plate_bbox[1] + track.plate_bbox[3]) / 2.0
-                        candidate_center_y = (cur_pbox[1] + cur_pbox[3]) / 2.0
-                        vehicle_height = max(1, vehicle_bbox[3] - vehicle_bbox[1])
-                        prefers_lower_rear_box = (
-                            candidate_center_y >= current_center_y + max(12.0, vehicle_height * 0.06)
-                            and quality >= track.best_bbox_quality - 0.12
+                    if track.plate_bbox is None:
+                        track.plate_bbox = cur_pbox
+                        track.bbox_confirmation_count = 1
+                        track.best_bbox_quality = quality
+                        track._update_rel_box(vehicle_bbox, track.plate_bbox)
+                    elif overlaps_current:
+                        track.plate_bbox = [
+                            int(self.smoothing_alpha * cur_pbox[i] + (1.0 - self.smoothing_alpha) * track.plate_bbox[i])
+                            for i in range(4)
+                        ]
+                        track.bbox_confirmation_count = min(12, track.bbox_confirmation_count + 1)
+                        track.best_bbox_quality = max(track.best_bbox_quality, quality)
+                        track.pending_plate_box = None
+                        track.pending_bbox_support = 0
+                        track._update_rel_box(vehicle_bbox, track.plate_bbox)
+                    else:
+                        pending_overlap = (
+                            track.pending_plate_box is not None
+                            and compute_iou(cur_pbox, track.pending_plate_box) >= 0.25
                         )
-                    should_replace = (
-                        track.plate_bbox is None
-                        or previous_plate != accepted_plate
-                        or overlaps_current
-                        or prefers_lower_rear_box
-                        or quality >= track.best_bbox_quality + 0.15
-                    )
-                    if should_replace:
-                        if track.plate_bbox is not None and previous_plate == accepted_plate and overlaps_current:
-                            track.plate_bbox = [
-                                int(self.smoothing_alpha * cur_pbox[i] + (1.0 - self.smoothing_alpha) * track.plate_bbox[i])
+                        if pending_overlap:
+                            track.pending_plate_box = [
+                                int((cur_pbox[i] + track.pending_plate_box[i]) / 2.0)
                                 for i in range(4)
                             ]
+                            track.pending_bbox_support += 1
+                            track.pending_bbox_quality = max(track.pending_bbox_quality, quality)
                         else:
-                            track.plate_bbox = cur_pbox
-                        track.best_bbox_quality = max(track.best_bbox_quality, quality)
-                        track._update_rel_box(vehicle_bbox, track.plate_bbox)
+                            track.pending_plate_box = cur_pbox
+                            track.pending_bbox_support = 1
+                            track.pending_bbox_quality = quality
+
+                        current_center_y = (track.plate_bbox[1] + track.plate_bbox[3]) / 2.0
+                        pending_center_y = (track.pending_plate_box[1] + track.pending_plate_box[3]) / 2.0
+                        vehicle_height = max(1, vehicle_bbox[3] - vehicle_bbox[1])
+                        credible_lower_rear = (
+                            pending_center_y >= current_center_y + max(10.0, vehicle_height * 0.04)
+                            and track.pending_bbox_quality >= track.best_bbox_quality - 0.12
+                        )
+                        credible_quality_gain = track.pending_bbox_quality >= track.best_bbox_quality + 0.18
+                        if track.pending_bbox_support >= 2 and (credible_lower_rear or credible_quality_gain):
+                            track.plate_bbox = track.pending_plate_box
+                            track.bbox_confirmation_count = track.pending_bbox_support
+                            track.best_bbox_quality = track.pending_bbox_quality
+                            track.pending_plate_box = None
+                            track.pending_bbox_support = 0
+                            track._update_rel_box(vehicle_bbox, track.plate_bbox)
             elif track.rel_plate_box is not None:
                 track.plate_bbox = track.get_interpolated_plate_box(vehicle_bbox)
 
@@ -562,15 +639,21 @@ class PlateTracker:
             )
             if bbox_quality is not None and plate_bbox:
                 new_track.best_bbox_quality = float(bbox_quality)
+            if plate_bbox and not self._is_plausible_plate_box(new_track.plate_bbox, vehicle_bbox):
+                new_track.plate_bbox = None
+                new_track.rel_plate_box = None
+                new_track.plate_anchor_box = None
+                new_track.plate_anchor_vehicle_box = None
+                new_track.bbox_confirmation_count = 0
             self.tracks[track_id] = new_track
             return new_track
 
-    def get_live_detections(self, now: float) -> List[Dict[str, Any]]:
+    def get_live_detections(self, now: float, min_confidence: float = 0.0) -> List[Dict[str, Any]]:
         """
         Return active plate detections for all tracked vehicles currently in the zone.
         Maintains rock-solid continuous display for active vehicles without flickering.
         """
-        active = []
+        active_by_passage: Dict[str, Dict[str, Any]] = {}
         dead = []
 
         for tid, track in self.tracks.items():
@@ -581,12 +664,19 @@ class PlateTracker:
                 continue
 
             # Compute current plate box (interpolated smoothly from vehicle position)
-            track.is_locked = track.event_emitted or track.has_stable_plate(now)
+            track.is_locked = track.event_emitted or bool(track.live_plate) or track.has_stable_plate(now)
             pbox = track.get_interpolated_plate_box(track.vehicle_bbox)
             if pbox is not None and track.plate and track.is_locked:
-                display_plate = track.last_event_plate if track.event_emitted else track.plate
-                display_conf = track.emitted_conf if track.event_emitted else track.confidence
-                active.append({
+                if not track.event_emitted and (
+                    not track.live_plate or track.confidence > track.live_conf + 0.005
+                ):
+                    track.live_plate = track.plate
+                    track.live_conf = track.confidence
+                display_plate = track.last_event_plate if track.event_emitted else track.live_plate
+                display_conf = track.emitted_conf if track.event_emitted else track.live_conf
+                if display_conf < min_confidence:
+                    continue
+                detection = {
                     "class": "license_plate",
                     "bbox": pbox,
                     "plate": display_plate,
@@ -594,11 +684,26 @@ class PlateTracker:
                     "confidence": display_conf,
                     "is_locked": track.is_locked,
                     "track_id": track.track_id,
-                })
+                }
+                passage_key = str(getattr(track, "passage_id", "") or track.track_id)
+                rank = (
+                    int(track.bbox_confirmation_count),
+                    float(track.best_bbox_quality),
+                    float(display_conf),
+                    float(track.last_seen),
+                )
+                existing = active_by_passage.get(passage_key)
+                if existing is None or rank > existing["_rank"]:
+                    detection["_rank"] = rank
+                    active_by_passage[passage_key] = detection
 
         for tid in dead:
             self.tracks.pop(tid, None)
 
+        active = []
+        for detection in active_by_passage.values():
+            detection.pop("_rank", None)
+            active.append(detection)
         return active
 
 

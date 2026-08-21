@@ -8,7 +8,15 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from detection.lpr import LicensePlateReader, validate_and_normalize_plate
-from detection.plate_tracker import PlateTracker
+from detection.plate_tracker import PlateTracker, compute_iou
+
+
+def test_vehicle_detector_defaults_to_yolo11n():
+    import inspect
+    from detection.detector import YoloDetector
+
+    default_model = inspect.signature(YoloDetector.__init__).parameters["model_path"].default
+    assert default_model == "yolo11n.pt"
 
 
 class FakeALPR:
@@ -240,12 +248,12 @@ def test_gate_ocr_is_not_starved_when_measured_fps_is_below_fourteen():
             return "V001"
 
         def update_track(self, **kwargs):
-            self.tracks["V001"] = SimpleNamespace()
+            self.tracks["V001"] = SimpleNamespace(vehicle_bbox=kwargs["vehicle_bbox"])
 
         def update_related_plate_tracks(self, track_id, bbox, now):
             return None
 
-        def get_live_detections(self, now):
+        def get_live_detections(self, now, min_confidence=0.0):
             return []
 
     async def exercise():
@@ -257,6 +265,7 @@ def test_gate_ocr_is_not_starved_when_measured_fps_is_below_fourteen():
         pipeline.camera_id = "GATE-01"
         pipeline.frame_count = 0
         pipeline._last_zone_sync = 10**12
+        pipeline._last_vehicle_status_sync = 10**12
         pipeline._active_zones = []
         pipeline._ai_busy = False
         pipeline._last_ocr_dispatch = 0.0
@@ -926,8 +935,178 @@ def test_later_lower_rear_bbox_replaces_early_door_candidate():
         now=912.3,
         bbox_quality=2.16,
     )
+    tracker.update_track(
+        track_id=track_id,
+        vehicle_bbox=vehicle_bbox,
+        plate_bbox=[1384, 720, 1441, 770],
+        plate_text="15RM-097.87",
+        status="STRANGER",
+        conf=1.0,
+        now=912.6,
+        bbox_quality=2.17,
+    )
 
-    assert tracker.tracks[track_id].plate_bbox == [1386, 721, 1442, 770]
+    assert compute_iou(tracker.tracks[track_id].plate_bbox, [1386, 721, 1442, 770]) >= 0.90
+
+
+def test_vertical_door_latch_bbox_is_never_published_as_a_plate():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 330, 1590, 895]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 913.0)
+
+    for now in (913.0, 913.4, 913.8):
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[1400, 480, 1424, 540],
+            plate_text="15R-105.17",
+            status="STRANGER",
+            conf=0.99,
+            now=now,
+        )
+
+    assert tracker.tracks[track_id].plate_bbox is None
+    assert tracker.get_live_detections(914.8) == []
+
+
+def test_configured_fifty_percent_threshold_keeps_best_fifty_one_percent_result():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 330, 1590, 895]
+    track_id = tracker.match_or_create_track(vehicle_bbox, 914.0)
+
+    for now, confidence in ((914.0, 0.50), (914.4, 0.51), (914.8, 0.49)):
+        tracker.update_track(
+            track_id=track_id,
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[1386, 721, 1442, 770],
+            plate_text="15R-102.53",
+            status="STRANGER",
+            conf=confidence,
+            now=now,
+        )
+
+    track = tracker.tracks[track_id]
+    assert track.best_conf == 0.51
+    assert tracker.get_live_detections(915.6, min_confidence=0.50)[0]["confidence"] == 0.51
+    assert tracker.get_live_detections(915.6, min_confidence=0.52) == []
+
+
+def test_single_fast_vehicle_read_above_user_threshold_is_finalized_after_passage():
+    from detection.gate_pipeline import GatePipeline
+
+    async def exercise():
+        pipeline = GatePipeline.__new__(GatePipeline)
+        pipeline.camera_id = "GATE-01"
+        pipeline.tracker = PlateTracker()
+        pipeline._ai_busy = False
+        pipeline.min_confidence = 0.50
+        captured = []
+
+        async def fake_handle(**kwargs):
+            captured.append(kwargs)
+
+        pipeline._handle_detected_plate = fake_handle
+        track = pipeline.tracker.update_track(
+            track_id="V001",
+            vehicle_bbox=[650, 330, 1590, 895],
+            plate_bbox=[1386, 721, 1442, 770],
+            plate_text="15RM-032.88",
+            status="STRANGER",
+            conf=0.51,
+            now=916.0,
+        )
+        track.passage_id = "P00010"
+        pipeline._lane_passages = {
+            "IN_1": {
+                "id": "P00010",
+                "last_seen": 916.0,
+                "event_plate": "",
+                "aggregate_track": track,
+                "crop": np.zeros((24, 48, 3), dtype=np.uint8),
+                "lane": "IN_1",
+                "zone_name": "Zone 1",
+            }
+        }
+
+        pipeline._schedule_ready_passage_events(920.0)
+        await asyncio.sleep(0)
+
+        assert len(captured) == 1
+        assert captured[0]["plate"] == "15RM-032.88"
+        assert captured[0]["confidence"] == 0.51
+
+    asyncio.run(exercise())
+
+
+def test_vehicle_status_uses_registered_vehicle_setting_only():
+    from detection.gate_pipeline import GatePipeline
+
+    pipeline = GatePipeline.__new__(GatePipeline)
+    pipeline._registered_vehicle_statuses = {
+        pipeline._compact_plate("15R-105.17"): "STRANGER",
+        pipeline._compact_plate("29A-123.45"): "KNOWN",
+    }
+
+    assert pipeline.resolve_vehicle_status("15R-105.17") == "STRANGER"
+    assert pipeline.resolve_vehicle_status("29A-123.45") == "KNOWN"
+    assert pipeline.resolve_vehicle_status("15R-999.99") == "STRANGER"
+
+
+def test_lower_confidence_variant_cannot_replace_published_live_plate():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 330, 1590, 895]
+    for index, now in enumerate((921.0, 921.4, 921.8)):
+        tracker.update_track(
+            track_id="V001",
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[1386, 721, 1442, 770],
+            plate_text="15RM-032.88",
+            status="STRANGER",
+            conf=1.0,
+            now=now,
+        )
+
+    assert tracker.get_live_detections(922.0, 0.50)[0]["plate"] == "15RM-032.88"
+
+    for index, now in enumerate((922.2, 922.6, 923.0)):
+        tracker.update_track(
+            track_id="V001",
+            vehicle_bbox=vehicle_bbox,
+            plate_bbox=[1386, 721, 1442, 770],
+            plate_text="15RM-032.58",
+            status="STRANGER",
+            conf=0.93,
+            now=now,
+        )
+
+    assert tracker.get_live_detections(923.2, 0.50)[0]["plate"] == "15RM-032.88"
+
+
+def test_fragmented_tracks_in_one_passage_publish_only_best_confirmed_bbox():
+    tracker = PlateTracker()
+    vehicle_bbox = [650, 330, 1590, 895]
+    boxes = {
+        "V001": ([1386, 721, 1442, 770], 2.10),
+        "V002": ([1390, 724, 1448, 772], 2.40),
+    }
+    for track_id, (plate_box, quality) in boxes.items():
+        for now in (924.0, 924.4, 924.8):
+            track = tracker.update_track(
+                track_id=track_id,
+                vehicle_bbox=vehicle_bbox,
+                plate_bbox=plate_box,
+                plate_text="15R-105.17",
+                status="STRANGER",
+                conf=0.99,
+                now=now,
+                bbox_quality=quality,
+            )
+            track.passage_id = "P00011"
+
+    detections = tracker.get_live_detections(925.0, 0.50)
+
+    assert len(detections) == 1
+    assert compute_iou(detections[0]["bbox"], boxes["V002"][0]) >= 0.95
 
 
 def test_vehicle_motion_translation_preserves_plate_bbox_size_and_aspect():

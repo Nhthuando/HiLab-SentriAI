@@ -16,14 +16,14 @@ logger = logging.getLogger("sentriai.detection.tracked")
 
 class TrackedYoloDetector(YoloDetector):
     """
-    YOLOv8 Object Detector with ByteTrack tracking for persistent object identities.
+    YOLO11 Object Detector with ByteTrack tracking for persistent object identities.
     Area monitoring is restricted to person and truck detections. The truck class is
     mapped to the business label Container by the active object-label snapshot.
     """
 
     def __init__(
         self,
-        model_path: str = "yolov8n.pt",
+        model_path: str = "yolo11n.pt",
         conf_threshold: float = 0.45,
         tracker: str = "bytetrack.yaml",
         target_classes: Optional[Sequence[str]] = None,

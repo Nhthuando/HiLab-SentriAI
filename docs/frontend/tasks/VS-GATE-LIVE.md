@@ -18,6 +18,8 @@
   - 2026-08-21T02:05:00+07:00 | frontend_verified -> in_progress | verifying gate event panel against the new minimum-confidence setting | team1-frontend
   - 2026-08-21T02:34:00+07:00 | in_progress -> frontend_verified | camera config API and threshold-to-event-panel flow verified | team1-frontend
 
+  - 2026-08-21T10:22:00+07:00 | frontend_verified -> frontend_verified | confidence thumb percentage and responsive settings layout verified | team1-frontend
+
 ## Inputs and dependencies
 
 - Requirement sources: Product M1, BR-01, BR-02, AC-01, AC-02, AC-09, UI Design Contract §2.2, UI Handoff §2.1
@@ -95,6 +97,13 @@
   - Exit/result: 0 (Vite production build passed; 70% -> 83% -> worker restart retained 83%; restored to 70%)
   - Fresh: yes
   - Summary: The setting is connected to the backend event gate and survives worker restart; the panel continues to consume only emitted gate events.
+
+  - Evidence ID: EVD-FE-GATE-LIVE-03
+  - Command/procedure: `npm.cmd run build`, Node `npm.cmd run typecheck`, and 1440x1000 headless Chrome screenshot
+  - Context: Vehicle-label settings confidence control
+  - Exit/result: 0 (TypeScript/Vite build passed; percentage bubble aligned with the 70% range thumb without overlap)
+  - Fresh: yes
+  - Summary: Users can read the exact configured percentage directly on the slider while the existing save/API flow remains unchanged.
 
 ## User acceptance and delivery
 

@@ -1,7 +1,7 @@
 """
-detection.detector — YOLOv8 Object Detection Pipeline
+detection.detector — YOLO11 Object Detection Pipeline
 
-Loads lightweight YOLOv8-nano model, runs inference on 640x480 frames,
+Loads the lightweight YOLO11-nano model, runs inference on camera frames,
 and maps COCO classes to domain Vietnamese labels.
 """
 import logging
@@ -38,7 +38,7 @@ COCO_VIETNAMESE_MAPPING: Dict[str, str] = {
 class YoloDetector:
     def __init__(
         self,
-        model_path: str = "yolov8n.pt",
+        model_path: str = "yolo11n.pt",
         conf_threshold: float = 0.25,
         target_classes: Optional[List[str]] = None,
     ):
