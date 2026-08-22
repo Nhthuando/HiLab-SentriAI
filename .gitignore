@@ -26,6 +26,15 @@ backend/data/clips/*.mp4
 backend/data/crops/*.jpg
 backend/data/crops/*.png
 backend/data/samples/
+backend/data/uploads/
+backend/data/user_media.json
+
+# Runtime-generated training data and experiment outputs (server-managed, never source)
+backend/data/training/
+backend/data/external-datasets/
+backend/python-worker/runs/
+backend/python-worker/weights/
+backend/python-worker/.yolo*.part
 
 # ─── AI Models ─────────────────────────────────────────────────────────────────
 *.pt

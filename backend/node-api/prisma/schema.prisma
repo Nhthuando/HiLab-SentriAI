@@ -132,16 +132,66 @@ model ObjectLabel {
 // Access pattern: AP-07 (load samples by label)
 // ─────────────────────────────────────────────────────────────────────────────
 model LabelSample {
-  id        String      @id @default(uuid()) @db.Uuid
-  labelId   String      @db.Uuid @map("label_id")
-  imagePath String      @db.VarChar(500) @map("image_path")
-  bbox      Json
-  createdAt DateTime    @default(now()) @db.Timestamptz() @map("created_at")
+  id               String      @id @default(uuid()) @db.Uuid
+  labelId          String      @db.Uuid @map("label_id")
+  imagePath        String      @db.VarChar(500) @map("image_path")
+  mediaRef         String?     @db.VarChar(500) @map("media_ref")
+  mediaKind        String?     @db.VarChar(10) @map("media_kind")
+  frameTimestampMs Int?        @map("frame_timestamp_ms")
+  bbox             Json
+  createdAt        DateTime    @default(now()) @db.Timestamptz() @map("created_at")
 
   label ObjectLabel @relation(fields: [labelId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([labelId], name: "idx_label_samples_label_id")
   @@map("label_samples")
+}
+
+model TrainingDataset {
+  id           String        @id @default(uuid()) @db.Uuid
+  manifestPath String        @db.VarChar(500) @map("manifest_path")
+  contentHash  String        @unique @db.VarChar(64) @map("content_hash")
+  sampleCount  Int           @map("sample_count")
+  sourceCount  Int           @map("source_count")
+  createdAt    DateTime      @default(now()) @db.Timestamptz() @map("created_at")
+  jobs         TrainingJob[]
+  @@map("training_datasets")
+}
+
+model TrainingJob {
+  id           String         @id @default(uuid()) @db.Uuid
+  datasetId    String         @db.Uuid @map("dataset_id")
+  status       String         @default("QUEUED") @db.VarChar(20)
+  baseModel    String         @db.VarChar(100) @map("base_model")
+  currentEpoch Int            @default(0) @map("current_epoch")
+  totalEpochs  Int            @map("total_epochs")
+  pauseReason  String?        @db.VarChar(50) @map("pause_reason")
+  failureReason String?       @db.Text @map("failure_reason")
+  requestedAt  DateTime       @default(now()) @db.Timestamptz() @map("requested_at")
+  startedAt    DateTime?      @db.Timestamptz() @map("started_at")
+  completedAt  DateTime?      @db.Timestamptz() @map("completed_at")
+  dataset      TrainingDataset @relation(fields: [datasetId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  modelVersion ModelVersion?
+  @@index([requestedAt(sort: Desc)], name: "idx_training_jobs_requested_at_desc")
+  @@index([status, requestedAt(sort: Desc)], name: "idx_training_jobs_status_requested_at")
+  @@map("training_jobs")
+}
+
+model ModelVersion {
+  id                String       @id @default(uuid()) @db.Uuid
+  trainingJobId     String       @unique @db.Uuid @map("training_job_id")
+  versionKey        String       @unique @db.VarChar(100) @map("version_key")
+  baseModel         String       @db.VarChar(100) @map("base_model")
+  artifactPath      String       @db.VarChar(500) @map("artifact_path")
+  artifactSha256    String       @db.VarChar(64) @map("artifact_sha256")
+  status            String       @default("CANDIDATE") @db.VarChar(20)
+  evaluationMetrics Json?        @map("evaluation_metrics")
+  evaluatedAt       DateTime?    @db.Timestamptz() @map("evaluated_at")
+  activatedAt       DateTime?    @db.Timestamptz() @map("activated_at")
+  createdAt         DateTime     @default(now()) @db.Timestamptz() @map("created_at")
+  trainingJob       TrainingJob  @relation(fields: [trainingJobId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  @@index([createdAt(sort: Desc)], name: "idx_model_versions_created_at_desc")
+  @@map("model_versions")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

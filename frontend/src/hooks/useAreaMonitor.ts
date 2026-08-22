@@ -9,7 +9,8 @@
  * 5. Search, tab filters (all, violation, ok), and hover synchronization
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getAreaEvents, getClipUrl } from '../api/events';
+import { getAreaEvents, getClipUrl, deleteAreaEvents } from '../api/events';
+import { getCameraPlayback, getCameraPlaybackPreview, seekCameraPlayback, type CameraPlaybackState } from '../api/cameras';
 import type {
   AreaAction,
   AreaEvent,
@@ -51,7 +52,7 @@ function formatTimeString(isoOrDate: string | Date | number): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-const DETECTION_PRESENTATION_GRACE_MS = 12_000;
+const DETECTION_PRESENTATION_GRACE_MS = 900;
 
 interface StableDetectionEntry {
   actualTrackId: number;
@@ -102,6 +103,8 @@ export function useAreaMonitor() {
   const [violations, setViolations] = useState<AreaEvent[]>([]);
   const [isLoadingRest, setIsLoadingRest] = useState<boolean>(true);
   const [restError, setRestError] = useState<string | null>(null);
+  const [playback, setPlayback] = useState<CameraPlaybackState | null>(null);
+  const previewRequestSequenceRef = useRef(0);
 
   const [filterMode, setFilterMode] = useState<'all' | 'violation' | 'ok'>('all');
   const [searchFilter, setSearchFilter] = useState<string>('');
@@ -207,7 +210,8 @@ export function useAreaMonitor() {
       setIsLoadingRest(true);
       setRestError(null);
       const res = await getAreaEvents({ limit: 50, offset: 0 });
-      const mapped: AreaEvent[] = res.items.map((dto) => ({
+      const items = Array.isArray(res?.items) ? res.items : [];
+      const mapped: AreaEvent[] = items.map((dto) => ({
         id: dto.id,
         time: formatTimeString(dto.enteredAt),
         obj: dto.objectLabel,
@@ -231,6 +235,34 @@ export function useAreaMonitor() {
   useEffect(() => {
     fetchViolations();
   }, [fetchViolations]);
+
+  const refreshPlayback = useCallback(async () => {
+    try {
+      setPlayback(await getCameraPlayback('BAI-KIEM'));
+    } catch {
+      setPlayback(null);
+    }
+  }, []);
+
+  const seekPlayback = useCallback(async (positionSeconds: number) => {
+    return seekCameraPlayback('BAI-KIEM', positionSeconds);
+  }, []);
+
+  const previewPlayback = useCallback(async (positionSeconds: number): Promise<string | null> => {
+    const requestSequence = ++previewRequestSequenceRef.current;
+    try {
+      const result = await getCameraPlaybackPreview('BAI-KIEM', positionSeconds);
+      return requestSequence === previewRequestSequenceRef.current ? result.image : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPlayback();
+    const interval = window.setInterval(() => void refreshPlayback(), 1000);
+    return () => window.clearInterval(interval);
+  }, [refreshPlayback]);
 
   // 3. Listen to real-time violation events on /ws/events/area
   const handleAreaEventMessage = useCallback((msg: AreaEventWsPacket) => {
@@ -372,6 +404,18 @@ export function useAreaMonitor() {
     (d) => d.status === 'ALLOWED' && d.zoneMatches && d.zoneMatches.length > 0
   ).length;
 
+  const clearAreaEvents = useCallback(async (): Promise<boolean> => {
+    try {
+      await deleteAreaEvents();
+      setViolations([]);
+      setHoveredEventId(null);
+      return true;
+    } catch (err) {
+      console.error('Failed to clear area events:', err);
+      return false;
+    }
+  }, []);
+
   return {
     // Feed & Connection
     frameImage,
@@ -381,6 +425,10 @@ export function useAreaMonitor() {
     isOnline,
     statusText,
     reconnectFeed,
+    playback,
+    seekPlayback,
+    previewPlayback,
+    sourceResetSequence,
     // REST & Events
     violations,
     liveAllowedEvents,
@@ -389,6 +437,7 @@ export function useAreaMonitor() {
     isLoadingRest,
     restError,
     fetchViolations,
+    clearAreaEvents,
     // Filters & UI State
     filterMode,
     setFilterMode,

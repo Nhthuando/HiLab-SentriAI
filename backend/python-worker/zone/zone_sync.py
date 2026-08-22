@@ -54,6 +54,16 @@ class ZoneSynchronizer:
             for lbl in raw_labels:
                 b_cls = (lbl.get("base_class") or "").strip().casefold()
                 vn_name = (lbl.get("vietnamese_name") or "").strip()
+                # Compatibility repair for older projects where every heavy
+                # vehicle label was saved as `truck`. Keep user data intact but
+                # expose precise runtime classes to YOLO-World.
+                vn_folded = vn_name.casefold()
+                if vn_folded == "container":
+                    b_cls = "container"
+                elif vn_folded in {"xe nâng", "xe cẩu"}:
+                    b_cls = "forklift"
+                elif vn_folded in {"xe chở người", "xe cho người"}:
+                    b_cls = "personnel_carrier"
                 if b_cls and vn_name:
                     if b_cls not in class_map:
                         class_map[b_cls] = []

@@ -8,6 +8,7 @@ import type { IncomingMessage } from 'http';
 import type { Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket, RawData } from 'ws';
 import { channelManager } from './channels';
+import { pythonConnector } from './pythonConnector';
 import type { ExtendedWebSocket, WsMessage } from './types';
 
 export class SentriWebSocketServer {
@@ -46,6 +47,17 @@ export class SentriWebSocketServer {
     } catch {
       return rawUrl.split('?')[0] || '';
     }
+  }
+
+  private syncFeedActivation(channel: string): void {
+    const canonical = channelManager.canonicalChannelName(channel);
+    if (!canonical.startsWith('feed:')) return;
+
+    const cameraId = canonical.slice('feed:'.length);
+    void pythonConnector.setCameraActive(
+      cameraId,
+      channelManager.getSubscriberCount(canonical) > 0,
+    );
   }
 
   private handleConnection(ws: ExtendedWebSocket, request: IncomingMessage): void {
@@ -110,6 +122,7 @@ export class SentriWebSocketServer {
 
     if (subscribedChannel) {
       channelManager.subscribe(subscribedChannel, ws);
+      this.syncFeedActivation(subscribedChannel);
       console.log(`[WS Server] Client (${ws.clientIp}) subscribed to ${subscribedChannel}`);
 
       // Send initial welcome/status message
@@ -135,10 +148,12 @@ export class SentriWebSocketServer {
         if (msg.action === 'subscribe' && msg.channel) {
           const ch = channelManager.canonicalChannelName(msg.channel);
           channelManager.subscribe(ch, ws);
+          this.syncFeedActivation(ch);
           ws.send(JSON.stringify({ status: 'subscribed', channel: ch }));
         } else if (msg.action === 'unsubscribe' && msg.channel) {
           const ch = channelManager.canonicalChannelName(msg.channel);
           channelManager.unsubscribe(ch, ws);
+          this.syncFeedActivation(ch);
           ws.send(JSON.stringify({ status: 'unsubscribed', channel: ch }));
         } else if (msg.type === 'ping') {
           ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
@@ -149,12 +164,16 @@ export class SentriWebSocketServer {
     });
 
     ws.on('close', () => {
+      const feedChannels = [...(ws.channels || [])].filter((channel) => channel.startsWith('feed:'));
       channelManager.unsubscribeAll(ws);
+      feedChannels.forEach((channel) => this.syncFeedActivation(channel));
     });
 
     ws.on('error', (err) => {
       console.error(`[WS Server] Subscriber error (${ws.clientIp}):`, err);
+      const feedChannels = [...(ws.channels || [])].filter((channel) => channel.startsWith('feed:'));
       channelManager.unsubscribeAll(ws);
+      feedChannels.forEach((channel) => this.syncFeedActivation(channel));
     });
   }
 

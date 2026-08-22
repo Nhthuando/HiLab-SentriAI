@@ -20,6 +20,11 @@ export interface GateEvent {
   zone: string;
   conf: number | null;
   status: VehicleStatus;
+  clipPath?: string | null;
+  cropPath?: string | null;
+  cameraId?: string;
+  lane?: string;
+  eventTimestamp?: string;
 }
 
 export type ViolationStatus = 'OPEN' | 'CLOSED';
@@ -96,6 +101,8 @@ export interface ObjectLabel {
   id: string;
   name: string;
   kind: ObjectKind;
+  /** Canonical detector class used by the Python worker (for example `forklift`). */
+  baseClass?: string;
   tint: string;
   samples: number;
 }
@@ -105,7 +112,10 @@ export interface AnnotationSource {
   name: string;
   kind: 'img' | 'video';
   img?: string;
+  thumbnail?: string;
   tint?: string;
+  isDefault?: boolean;
+  filename?: string;
 }
 
 export interface AnnotationSample {
@@ -119,6 +129,34 @@ export interface AnnotationSample {
   h: number;
   session?: number;
 }
+
+export interface TrainingReadiness {
+  savedSamples: number;
+  labelsWithSamples: number;
+  sourceCount: number;
+  excludedSamples: number;
+  isReady: boolean;
+  issues?: string[];
+  labelCoverage?: Array<{
+    label: string;
+    minimumSamples: number;
+    minimumSources: number;
+    savedSamples: number;
+    sourceCount: number;
+    splitCounts: { train: number; val: number; test: number };
+    ready: boolean;
+  }>;
+}
+
+export type MockTrainingStatus =
+  | 'idle'
+  | 'queued'
+  | 'running'
+  | 'paused_gpu'
+  | 'evaluating'
+  | 'candidate'
+  | 'active'
+  | 'failed';
 
 export interface VideoClipInfo {
   cam: string;

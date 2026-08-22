@@ -31,6 +31,18 @@ export async function getAreaEvents(params?: {
   return apiClient.get<AreaEventsPage>(`/events/area${qs}`);
 }
 
+export async function deleteAreaEvents(): Promise<{ message: string; deletedRecords: number; deletedFiles: number }> {
+  return apiClient.delete<{ message: string; deletedRecords: number; deletedFiles: number }>('/events/area');
+}
+
+export async function deleteGateEvents(): Promise<{ message: string; deletedRecords: number; deletedFiles: number }> {
+  return apiClient.delete<{ message: string; deletedRecords: number; deletedFiles: number }>('/events/gate');
+}
+
+export async function deleteAllEvents(): Promise<{ message: string; deletedAreaRecords: number; deletedGateRecords: number; deletedFiles: number }> {
+  return apiClient.delete<{ message: string; deletedAreaRecords: number; deletedGateRecords: number; deletedFiles: number }>('/events/all');
+}
+
 export function getCropImageUrl(cropPathOrName?: string | null): string {
   if (!cropPathOrName) return '';
   if (cropPathOrName.startsWith('http') || cropPathOrName.startsWith('data:')) {

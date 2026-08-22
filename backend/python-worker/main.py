@@ -5,12 +5,13 @@ Port: 8001 (Architecture §6.1)
 """
 import asyncio
 import logging
+import math
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
 import cv2
-from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -25,8 +26,7 @@ else:
     dotenv.load_dotenv()
 
 from db import check_db_health, close_db_pool, close_stale_open_violations, init_db_pool
-from detection import AreaPipeline
-from stream import CameraPipeline
+from detection import AreaPipeline, GatePipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,33 +54,30 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Could not connect to Database on startup (%s). Will retry on demand.", exc)
 
-    # 2. Initialize Camera Pipelines (GATE-01 and BAI-KIEM)
-    gate_source = os.getenv("GATE_CAMERA_URL") or "./data/samples/gate_sample.mp4"
-    area_source = os.getenv("AREA_CAMERA_URL") or "./data/samples/area_sample.mp4"
+    # 2. Initialize Camera Pipelines (GATE-01 with LPR and BAI-KIEM with Area Violation)
+    gate_source = os.getenv("GATE_CAMERA_URL") or os.getenv("VIDEO_GATE_PATH") or "./data/samples/gate_sample.mp4"
+    area_source = os.getenv("AREA_CAMERA_URL") or os.getenv("VIDEO_AREA_PATH") or "./data/samples/area_sample.mp4"
 
-    gate_target_fps = float(os.getenv("GATE_TARGET_FPS", "20.0"))
-    area_target_fps = float(os.getenv("AREA_TARGET_FPS", "20.0"))
+    gate_target_fps = float(os.getenv("GATE_TARGET_FPS", "25.0"))
+    area_target_fps = float(os.getenv("AREA_TARGET_FPS", "25.0"))
 
-    gate_pipeline = CameraPipeline(
+    gate_pipeline = GatePipeline(
         camera_id="GATE-01",
         source=gate_source,
         target_fps=gate_target_fps,
-        resolution=(640, 480),
+        resolution=(1280, 720),
     )
     area_pipeline = AreaPipeline(
         camera_id="BAI-KIEM",
         source=area_source,
         target_fps=area_target_fps,
-        resolution=(640, 480),
+        resolution=(1280, 720),
     )
 
     pipelines["GATE-01"] = gate_pipeline
     pipelines["BAI-KIEM"] = area_pipeline
 
-    # Start stream loops in background
-    gate_pipeline.start()
-    area_pipeline.start()
-    logger.info("Camera pipelines started (GATE-01: CameraPipeline, BAI-KIEM: AreaPipeline).")
+    logger.info("Camera pipelines initialized and paused until a feed subscriber connects.")
 
     yield
 
@@ -112,7 +109,14 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     db_ok = await check_db_health()
-    stats = {cam_id: p.get_stats() for cam_id, p in pipelines.items()}
+    stats = {}
+    for cam_id, p in pipelines.items():
+        stats[cam_id] = {
+            "fps": getattr(p, "fps_measured", 0.0) or getattr(p, "target_fps", 15.0),
+            "frame_count": getattr(p, "frame_count", 0),
+            "connected": getattr(getattr(p, "reader", None), "is_connected", True),
+            "active": bool(getattr(p, "_active", False)),
+        }
     return {
         "status": "ok",
         "service": "python-worker",
@@ -121,18 +125,97 @@ async def health():
     }
 
 
+@app.post("/cameras/{camera_id}/activation")
+async def set_camera_activation(camera_id: str, payload: Dict[str, bool] = Body(default={})):
+    """Start or pause inference for a camera based on live-feed subscriber demand."""
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+
+    is_active = bool(payload.get("active", True))
+    if is_active:
+        pipeline.start()
+    else:
+        pipeline.pause()
+
+    return {"cameraId": cid, "active": is_active}
+
+
+@app.get("/cameras/{camera_id}/playback")
+async def get_camera_playback(camera_id: str):
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    return {"cameraId": cid, **pipeline.get_playback_state()}
+
+
+@app.post("/cameras/{camera_id}/playback")
+async def seek_camera_playback(camera_id: str, payload: Dict[str, float] = Body(default={})):
+    if "positionSeconds" not in payload:
+        raise HTTPException(status_code=422, detail="positionSeconds is required")
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    return {"cameraId": cid, **pipeline.request_seek(float(payload["positionSeconds"]))}
+
+
+@app.get("/cameras/{camera_id}/playback/preview")
+async def get_camera_playback_preview(camera_id: str, positionSeconds: float):
+    if not math.isfinite(positionSeconds) or positionSeconds < 0:
+        raise HTTPException(status_code=422, detail="positionSeconds must be a non-negative finite number")
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    if not pipeline.get_playback_state().get("seekable"):
+        raise HTTPException(status_code=409, detail="Camera source is not seekable")
+    frame = await asyncio.to_thread(pipeline.reader.preview_frame, positionSeconds)
+    if frame is None:
+        raise HTTPException(status_code=503, detail="Cannot decode preview frame")
+    ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    if not ret:
+        raise HTTPException(status_code=500, detail="Cannot encode preview frame")
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
 @app.websocket("/ws/hub")
-async def ws_hub_endpoint(websocket: WebSocket):
+async def websocket_hub(websocket: WebSocket):
+    """
+    WebSocket endpoint for Node.js API PythonConnector.
+    Maintains persistent duplex connection and handles ping/heartbeats.
+    """
     await websocket.accept()
-    logger.info("Node.js WebSocket Hub client connected on /ws/hub")
+    logger.info("Accepted inbound WebSocket connection from Node.js API (/ws/hub).")
     try:
         while True:
-            # Keep connection open for heartbeat / status sync
-            await websocket.receive_text()
+            msg = await websocket.receive_text()
+            # Respond to ping or heartbeat
+            if msg == "ping":
+                await websocket.send_text("pong")
     except WebSocketDisconnect:
-        logger.info("Node.js WebSocket Hub client disconnected from /ws/hub")
+        logger.info("Node.js API client disconnected from /ws/hub.")
     except Exception as exc:
-        logger.debug("Hub WebSocket connection ended: %s", exc)
+        logger.debug("WebSocket hub closed: %s", exc)
 
 
 @app.get("/cameras/{camera_id}/snapshot")
@@ -167,4 +250,9 @@ async def get_snapshot(camera_id: str):
 if __name__ == "__main__":
     port = int(os.getenv("PYTHON_WORKER_PORT", "8001"))
     logger.info("Starting SentriAI Python Worker on port %d", port)
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    try:
+        uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    except KeyboardInterrupt:
+        logger.info("Received KeyboardInterrupt (Ctrl+C). Terminating cleanly...")
+    finally:
+        os._exit(0)

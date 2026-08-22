@@ -194,6 +194,11 @@ export class ChannelManager {
     }
     return stats;
   }
+
+  /** Return the active subscriber count for a canonical channel. */
+  public getSubscriberCount(channel: string): number {
+    return this.channels.get(this.canonicalChannelName(channel))?.size ?? 0;
+  }
 }
 
 // Global default instance

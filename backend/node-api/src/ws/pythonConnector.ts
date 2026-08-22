@@ -53,6 +53,23 @@ export class PythonWorkerConnector {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 
+  /** Tell the Python worker whether a camera currently has a live-feed viewer. */
+  public async setCameraActive(cameraId: string, active: boolean): Promise<void> {
+    const httpBaseUrl = (process.env.PYTHON_HTTP_URL || this.wsUrl).replace(/^ws/, 'http').replace(/\/+$/, '');
+    try {
+      const response = await fetch(`${httpBaseUrl}/cameras/${encodeURIComponent(cameraId)}/activation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+    } catch (err) {
+      console.warn(`[PythonConnector] Could not ${active ? 'activate' : 'pause'} ${cameraId}:`, err);
+    }
+  }
+
   private connect(): void {
     if (this.isStopped || this.isConnecting || this.isConnected()) {
       return;

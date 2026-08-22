@@ -6,6 +6,13 @@ interface AreaMonitorProps {
   clock: string;
 }
 
+const formatTime = (secs: number) => {
+  if (isNaN(secs) || secs < 0) return '00:00';
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+};
+
 export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
   const {
     frameImage,
@@ -15,6 +22,8 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
     isOnline,
     statusText,
     reconnectFeed,
+    playback,
+    seekPlayback,
     violations,
     filteredEvents,
     filterMode,
@@ -26,19 +35,23 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
     isLoadingRest,
     restError,
     fetchViolations,
+    clearAreaEvents,
     kpis,
   } = useAreaMonitor();
 
   const [hoveredFeedObjectKey, setHoveredFeedObjectKey] = useState<string | null>(null);
   const [selectedClipUrl, setSelectedClipUrl] = useState<string | null>(null);
 
-  // Play / Pause video feed state
+  // Play / Pause & Seek timeline state
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [frozenFrame, setFrozenFrame] = useState<string | null>(null);
   const [frozenDetections, setFrozenDetections] = useState<typeof detections>([]);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [seekValue, setSeekValue] = useState<number>(0);
+  const [seekPreview, setSeekPreview] = useState<string | null>(null);
 
-  const displayFrame = isPaused ? (frozenFrame || frameImage) : frameImage;
-  const displayDetections = isPaused ? frozenDetections : detections;
+  const displayFrame = seekPreview || (isPaused ? (frozenFrame || frameImage) : frameImage);
+  const displayDetections = seekPreview ? [] : (isPaused ? frozenDetections : detections);
 
   const togglePause = () => {
     if (!isPaused) {
@@ -387,13 +400,13 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                   style={{
                     fontSize: '10.5px',
                     fontFamily: 'var(--font-mono)',
-                    color: 'var(--ink3)',
-                    backgroundColor: 'rgba(255,255,255,0.06)',
+                    color: isPaused ? '#f59e0b' : 'var(--ink3)',
+                    backgroundColor: isPaused ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255,255,255,0.06)',
                     padding: '2px 6px',
                     borderRadius: '4px',
                   }}
                 >
-                  640x480 · {fps.toFixed(1)} FPS
+                  1280x720 · {isPaused ? 'TẠM DỪNG' : `${fps.toFixed(1)} FPS`}
                 </span>
               </div>
 
@@ -600,6 +613,136 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
               })}
           </div>
 
+          {/* Timeline & Video Playback Scrub Bar (When camera source is a video file) */}
+          {playback?.seekable && (
+            <div
+              className="glass-card"
+              style={{
+                marginTop: '12px',
+                padding: '10px 14px',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                backgroundColor: 'var(--panel)',
+                border: '1px solid var(--line2)',
+              }}
+            >
+              {/* Quick Jump Back -10s */}
+              <button
+                onClick={() => {
+                  const target = Math.max(0, (playback.positionSeconds || 0) - 10);
+                  seekPlayback(target);
+                }}
+                title="Lùi 10 giây"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  border: '1px solid var(--line2)',
+                  color: 'var(--ink2)',
+                  borderRadius: '6px',
+                  padding: '4px 8px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                -10s
+              </button>
+
+              {/* Play / Pause Toggle Button */}
+              <button
+                onClick={togglePause}
+                style={{
+                  background: isPaused ? 'rgba(245, 158, 11, 0.25)' : 'var(--acc)',
+                  border: isPaused ? '1px solid var(--p1)' : 'none',
+                  color: isPaused ? 'var(--p1)' : '#ffffff',
+                  borderRadius: '6px',
+                  padding: '5px 12px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {isPaused ? '▶ Tiếp tục' : '⏸ Tạm dừng'}
+              </button>
+
+              {/* Quick Jump Forward +10s */}
+              <button
+                onClick={() => {
+                  const target = Math.min(playback.durationSeconds || 100, (playback.positionSeconds || 0) + 10);
+                  seekPlayback(target);
+                }}
+                title="Tua 10 giây"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  border: '1px solid var(--line2)',
+                  color: 'var(--ink2)',
+                  borderRadius: '6px',
+                  padding: '4px 8px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                +10s
+              </button>
+
+              {/* Time Display */}
+              <span
+                style={{
+                  fontSize: '12px',
+                  fontFamily: 'var(--font-mono)',
+                  color: 'var(--ink2)',
+                  minWidth: '95px',
+                  fontWeight: 600,
+                  textAlign: 'center',
+                }}
+              >
+                {formatTime(isDragging ? seekValue : (playback.positionSeconds || 0))} / {formatTime(playback.durationSeconds || 0)}
+              </span>
+
+              {/* Scrub Slider */}
+              <input
+                type="range"
+                min={0}
+                max={playback.durationSeconds || 100}
+                step={0.5}
+                value={isDragging ? seekValue : (playback.positionSeconds || 0)}
+                onMouseDown={() => {
+                  setIsDragging(true);
+                  setSeekValue(playback.positionSeconds || 0);
+                }}
+                onTouchStart={() => {
+                  setIsDragging(true);
+                  setSeekValue(playback.positionSeconds || 0);
+                }}
+                onChange={(e) => {
+                  setSeekValue(parseFloat(e.target.value));
+                }}
+                onMouseUp={() => {
+                  setIsDragging(false);
+                  void seekPlayback(seekValue);
+                  setSeekPreview(null);
+                }}
+                onTouchEnd={() => {
+                  setIsDragging(false);
+                  void seekPlayback(seekValue);
+                  setSeekPreview(null);
+                }}
+                style={{
+                  flex: 1,
+                  accentColor: 'var(--acc)',
+                  cursor: 'pointer',
+                  height: '6px',
+                }}
+              />
+            </div>
+          )}
+
           {/* Type Rule Chips */}
           <div style={{ display: 'flex', gap: '8px', marginTop: '14px', flexWrap: 'wrap' }}>
             {dynamicTypeRules.map((rule, idx) => (
@@ -663,6 +806,37 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                   {filteredEvents.length} sự kiện
                 </span>
               </div>
+
+              {/* Clear all events button */}
+              <button
+                onClick={async () => {
+                  if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ sự kiện và các video clip đã lưu để giải phóng dung lượng?')) {
+                    const ok = await clearAreaEvents();
+                    if (ok) alert('Đã xóa toàn bộ sự kiện thành công!');
+                  }
+                }}
+                title="Xóa toàn bộ sự kiện & giải phóng dung lượng video clip"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid rgba(244, 63, 94, 0.35)',
+                  backgroundColor: 'rgba(244, 63, 94, 0.12)',
+                  color: '#f43f5e',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+                <span>Xóa tất cả</span>
+              </button>
             </div>
 
             {/* Filter Pills */}

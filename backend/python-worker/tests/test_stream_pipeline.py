@@ -72,7 +72,7 @@ async def run_tests():
     # 2. Test YoloDetector
     # -------------------------------------------------------------------------
     print("\n[2/5] Testing YoloDetector...")
-    detector = YoloDetector(model_path="yolov8n.pt", conf_threshold=0.20)
+    detector = YoloDetector(model_path="yolo11n.pt", conf_threshold=0.20)
 
     # Test detection on sample asset image if available, else synthetic
     test_img_path = "frontend/public/assets/cam-gate.png"

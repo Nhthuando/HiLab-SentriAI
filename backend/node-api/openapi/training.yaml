@@ -1,0 +1,167 @@
+openapi: 3.0.3
+info:
+  title: SentriAI Object Detection Training API
+  version: 1.0.0
+servers:
+  - url: http://localhost:3001/api/v1
+paths:
+  /training/datasets/readiness:
+    get:
+      operationId: getTrainingReadiness
+      responses:
+        '200':
+          description: Trainable saved-sample summary. Legacy or missing sources are excluded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadinessEnvelope' }
+  /training/datasets/export:
+    post:
+      operationId: exportTrainingDataset
+      responses:
+        '200':
+          description: Immutable source-grouped snapshot, or an insufficient-data result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportEnvelope' }
+        '201':
+          description: A new immutable snapshot was created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportEnvelope' }
+  /training/jobs:
+    get:
+      operationId: listTrainingJobs
+      responses:
+        '200':
+          description: Newest training jobs first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobsEnvelope' }
+    post:
+      operationId: createTrainingJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [datasetId]
+              properties:
+                datasetId: { type: string, format: uuid }
+      responses:
+        '201': { description: Queued manual training job }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /training/jobs/{id}/start:
+    post:
+      operationId: startTrainingJob
+      parameters: [{ $ref: '#/components/parameters/JobId' }]
+      responses:
+        '200': { description: The queued job was handed to the isolated runner. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /training/jobs/versions:
+    get:
+      operationId: listModelVersions
+      responses:
+        '200':
+          description: Candidate, active, inactive and rejected custom augmentations.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VersionsEnvelope' }
+  /training/jobs/versions/{id}/use:
+    post:
+      operationId: activateModelVersion
+      parameters: [{ $ref: '#/components/parameters/VersionId' }]
+      responses:
+        '200': { description: Atomically enables this custom augmentation only. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /training/jobs/versions/return:
+    post:
+      operationId: returnToBaseModel
+      responses:
+        '200': { description: Disables every custom augmentation; base YOLO remains active. }
+components:
+  parameters:
+    JobId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    VersionId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+  responses:
+    BadRequest: { description: Invalid state, missing snapshot, or failed integrity check. }
+    NotFound: { description: Requested dataset, job or version does not exist. }
+  schemas:
+    ReadinessEnvelope:
+      type: object
+      required: [success, data, timestamp]
+      properties:
+        success: { type: boolean, example: true }
+        timestamp: { type: string, format: date-time }
+        data:
+          type: object
+          required: [savedSamples, labelsWithSamples, sourceCount, excludedSamples, ready, excluded]
+          properties:
+            savedSamples: { type: integer, minimum: 0 }
+            labelsWithSamples: { type: integer, minimum: 0 }
+            sourceCount: { type: integer, minimum: 0 }
+            excludedSamples: { type: integer, minimum: 0 }
+            ready: { type: boolean }
+            excluded: { type: array, items: { $ref: '#/components/schemas/ExcludedSample' } }
+    ExportEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        timestamp: { type: string, format: date-time }
+        data:
+          type: object
+          required: [exported]
+          properties:
+            exported: { type: boolean }
+            reused: { type: boolean }
+            reason: { type: string }
+            dataset: { $ref: '#/components/schemas/Dataset' }
+    JobsEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data: { type: array, items: { $ref: '#/components/schemas/TrainingJob' } }
+        timestamp: { type: string, format: date-time }
+    VersionsEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data: { type: array, items: { $ref: '#/components/schemas/ModelVersion' } }
+        timestamp: { type: string, format: date-time }
+    ExcludedSample:
+      type: object
+      required: [id, reason]
+      properties: { id: { type: string, format: uuid }, reason: { type: string } }
+    Dataset:
+      type: object
+      required: [id, manifestPath, contentHash, sampleCount, sourceCount]
+      properties:
+        id: { type: string, format: uuid }
+        manifestPath: { type: string, description: Server-managed relative path only. }
+        contentHash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        sampleCount: { type: integer }
+        sourceCount: { type: integer }
+    TrainingJob:
+      type: object
+      required: [id, datasetId, status, totalEpochs]
+      properties:
+        id: { type: string, format: uuid }
+        datasetId: { type: string, format: uuid }
+        status: { type: string, enum: [QUEUED, RUNNING, PAUSED_GPU, EVALUATING, SUCCEEDED, FAILED] }
+        currentEpoch: { type: integer, minimum: 0 }
+        totalEpochs: { type: integer, minimum: 1 }
+        pauseReason: { type: string, nullable: true }
+        failureReason: { type: string, nullable: true }
+    ModelVersion:
+      type: object
+      required: [id, trainingJobId, versionKey, status, artifactSha256]
+      properties:
+        id: { type: string, format: uuid }
+        trainingJobId: { type: string, format: uuid }
+        versionKey: { type: string }
+        status: { type: string, enum: [CANDIDATE, ACTIVE, INACTIVE, REJECTED] }
+        artifactSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        evaluationMetrics: { type: object, nullable: true }

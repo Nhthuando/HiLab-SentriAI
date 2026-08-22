@@ -59,6 +59,7 @@
 - Gắn nhãn xe: Danh sách biển số đã thu thập; đánh dấu từng xe là `XE QUEN` / `XE LẠ`
 - Vẽ zone: Chọn camera (Cổng / Bãi Kiểm); vẽ polygon trên khung hình thật; zone lưu cập nhật ngay trên màn hình giám sát
 - Nhãn đối tượng: Import ảnh hoặc video, vẽ bounding box, chọn loại từ class model gốc, đặt tên nhãn tiếng Việt; nhãn đã lưu xuất hiện trong danh sách loại của mọi zone
+- Huấn luyện nhận diện đối tượng: Người dùng chủ động bắt đầu một lần huấn luyện từ các mẫu đã gán nhãn; hệ thống đánh giá version mới trước khi cho phép kích hoạt, đồng thời giữ model đang chạy để tiếp tục giám sát
 
 **M4 — Hỏi đáp AI**
 - Khung chat; người dùng hỏi bằng ngôn ngữ tự nhiên về sự kiện đã lưu
@@ -71,7 +72,6 @@
 
 ### Làm sau (LATER)
 
-- Fine-tune / re-train model detection từ dataset nhãn đã lưu
 - Docker-compose hoàn chỉnh cho production deployment
 - Nhận diện làn xe ra (OUT lane)
 - Push notification ra ngoài app (email, Telegram...)
@@ -88,7 +88,9 @@
 ## 4. Luồng sản phẩm chính
 
 ```
-[Cài đặt] Vẽ zone + define loại xe + gắn nhãn biển số
+[Cài đặt] Vẽ zone + define loại xe + gắn nhãn biển số + gán mẫu đối tượng
+        ↓
+[Huấn luyện thủ công] Chọn train → đánh giá version → kích hoạt version đạt yêu cầu
         ↓
 [Giám sát] Nhận stream → detect → kiểm tra zone → sinh event
         ↓
@@ -118,6 +120,8 @@ Xe vào làn IN → LPR detect biển số → Tra danh sách quen/lạ → Hi�
 | BR-07 | Zone cập nhật từ Cài đặt có hiệu lực ngay lập tức trên màn hình giám sát đang chạy |
 | BR-08 | Floating mini-alert chỉ xuất hiện khi user đang ở tab khác trong app; tắt khi quay về tab giám sát |
 | BR-09 | AI Q&A chỉ query trên dữ liệu đã lưu; không phân tích stream real-time |
+| BR-10 | Lưu mẫu gán nhãn không tự khởi động huấn luyện; người dùng phải chủ động bắt đầu từng lần huấn luyện |
+| BR-11 | Trong lúc huấn luyện hoặc đánh giá thất bại, màn hình giám sát tiếp tục dùng model đang kích hoạt; chỉ version đã đánh giá thành công mới được cho phép kích hoạt |
 
 ---
 
@@ -146,6 +150,7 @@ Xe vào làn IN → LPR detect biển số → Tra danh sách quen/lạ → Hi�
 - Vi phạm zone được phát hiện và alert xuất hiện trong <= 2s
 - AI Q&A trả lời đúng >= 5 câu hỏi mẫu cơ bản có kèm clip tham chiếu
 - Bộ nhãn: >= 5 loại, mỗi loại >= 20 mẫu đã gắn nhãn
+- Có thể huấn luyện thủ công từ bộ mẫu đã lưu, xem kết quả đánh giá theo version và chỉ kích hoạt version đã qua đánh giá
 - Demo video 3-5 phút bao phủ đủ 4 module
 
 ---
@@ -163,6 +168,8 @@ Xe vào làn IN → LPR detect biển số → Tra danh sách quen/lạ → Hi�
 | AC-07 | Query "Hôm nay có bao nhiêu xe lạ vào?" → số đúng + chi tiết + clip reference + nút tải | So sánh với dữ liệu DB |
 | AC-08 | Đối tượng không khớp class model → hiện nhãn `CHƯA XÁC ĐỊNH`, vẫn kiểm tra zone rule | Test với vật thể lạ trong video |
 | AC-09 | Stream ngắt → app hiện "Mất kết nối", không crash | Ngắt nguồn video file giả lập |
+| AC-10 | Người dùng lưu mẫu rồi chủ động bắt đầu huấn luyện; việc lưu mẫu không tự chạy huấn luyện | Thao tác ở Cài đặt → Nhãn đối tượng |
+| AC-11 | Model version mới chỉ được kích hoạt sau khi có kết quả đánh giá; khi huấn luyện/lỗi, giám sát vẫn dùng version đang hoạt động | Theo dõi giám sát và lịch sử version trong lúc train/thử lỗi |
 
 ---
 
@@ -172,6 +179,7 @@ Xe vào làn IN → LPR detect biển số → Tra danh sách quen/lạ → Hi�
 - Thời gian: 2 tuần; review với mentor mỗi tuần 1 lần
 - Nguồn video: RTSP hoặc video file giả lập
 - Xử lý >= 5 FPS
+- Huấn luyện là thao tác thủ công theo lô; không làm gián đoạn luồng giám sát đang hoạt động
 - Giao diện bám theo luồng nghiệp vụ `Intern-LPR-Gate.dc.html`; không cần pixel-perfect
 
 **Giả định:**
@@ -191,11 +199,49 @@ Xe vào làn IN → LPR detect biển số → Tra danh sách quen/lạ → Hi�
 - **Project root:** `d:/HuuThuan - Project/HiLab-SentriAI`
 - **Canonical product path:** `docs/product/product.md`
 - **Product constraints cần giữ nguyên:** >= 5 FPS; clip pre-saved ngay khi event; zone update real-time không cần restart; floating mini-alert cross-tab trong app
-- **Feasibility/risk cần kiểm tra:** Performance khi chạy đồng thời 2 stream + LPR + object detection + clip ghi liên tục trên máy intern; dung lượng storage clip 10s tích lũy
+- **Feasibility/risk cần kiểm tra:** Performance khi chạy đồng thời 2 stream + LPR + object detection + clip ghi liên tục trên máy intern; dung lượng storage clip 10s tích lũy; chất lượng và độ đa dạng của mẫu gán nhãn trước khi huấn luyện
 - **Tích hợp cần lưu ý:** LLM cho Q&A (text-to-SQL hoặc function calling) — model và API key cần xác định ở Architecture; file UI mẫu `Intern-LPR-Gate.dc.html` cần được đọc để xác nhận layout
 
 ---
 
 ## Extension registry
 
-Chưa có extension.
+### Extension: `ext-20260820-object-detection-training` — product r1
+
+```yaml
+schema: team1-extension/v1
+extension_id: ext-20260820-object-detection-training
+title: "Huấn luyện thủ công từ mẫu nhãn đối tượng"
+artifact: product
+revision: 1
+status: approved
+depends_on: []
+supersedes: []
+sources: {}
+approved_at: "2026-08-20T15:15:59+07:00"
+approved_by: "HuuThuan — chat explicit approval"
+```
+
+#### Product delta
+
+Đưa huấn luyện nhận diện đối tượng từ LATER vào phạm vi hiện tại. Mẫu được lưu trong Nhãn đối tượng trở thành dữ liệu đầu vào cho các lần huấn luyện do người dùng chủ động bắt đầu. Sau mỗi lần, người dùng xem kết quả đánh giá của một version model trước khi quyết định kích hoạt version đó cho giám sát.
+
+#### Canonical sections changed
+
+Product §3 M3, §4 luồng sản phẩm, §5 business rules, §8 success metrics, §9 acceptance criteria, §10 ràng buộc và §11 handoff.
+
+#### Acceptance criteria delta
+
+AC-10 và AC-11: lưu mẫu không tự huấn luyện; huấn luyện thủ công không làm gián đoạn giám sát; chỉ version đã có kết quả đánh giá mới được kích hoạt.
+
+#### Unchanged product invariants
+
+Hai camera cố định, single user, chạy local, luồng zone/violation hiện hữu, clip 10 giây, Q&A chỉ truy vấn dữ liệu đã lưu và yêu cầu xử lý giám sát tối thiểu 5 FPS đều giữ nguyên.
+
+#### Downstream impact
+
+Architecture cần xác định vòng đời dataset/model version, cách cô lập tiến trình huấn luyện với giám sát, tiêu chí đánh giá và rollback. Database, backend Python/Node và giao diện Nhãn đối tượng đều cần kế hoạch triển khai mới.
+
+#### Blockers
+
+Không có Product blocker. Độ chính xác cuối cùng phụ thuộc độ đủ và độ đa dạng của dữ liệu gán nhãn; Architecture phải biến điều này thành quy trình đánh giá đo được.

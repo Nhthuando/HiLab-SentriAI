@@ -36,8 +36,8 @@ app.use(cors({ origin: process.env.CORS_ORIGIN ?? 'http://localhost:5173' }));
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
 }
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '150mb' }));
+app.use(express.urlencoded({ limit: '150mb', extended: true }));
 
 // --- Static Media Storage (Crops & Clips) ---
 function resolveMediaDir(subDir: string): string {
@@ -68,9 +68,11 @@ function resolveMediaDir(subDir: string): string {
 
 const cropsDir = resolveMediaDir('crops');
 const clipsDir = resolveMediaDir('clips');
+const uploadsDir = resolveMediaDir('uploads');
 
 app.use('/data/crops', express.static(cropsDir));
 app.use('/data/clips', express.static(clipsDir));
+app.use('/data/uploads', express.static(uploadsDir));
 
 // --- REST API Version 1 Routes ---
 app.use('/api/v1', apiRouter);

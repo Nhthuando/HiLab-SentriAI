@@ -33,6 +33,7 @@ frontend/
             ├── VehicleLabelTab.tsx # Gắn nhãn xe, Tìm kiếm, Sắp xếp tiêu đề cột, Lọc loại xe/trạng thái
             ├── ZoneEditorTab.tsx   # Trình vẽ đa giác, Enter lưu, Undo/Redo Ctrl+Z/Y, Panel cuộn độc lập
             ├── ObjectLabelTab.tsx  # Gán nhãn mẫu từ ảnh/video frame, Phím tắt 1-8, Crosshair
+            ├── ObjectTrainingPanel.tsx # Cải thiện nhận diện từ mẫu đã lưu, trạng thái và quyết định dùng bản mới
             └── ThemeSettingsTab.tsx # Cài đặt giao diện Sáng/Tối, Bộ chọn Accent Color, Preview Cards
 ```
 
@@ -50,6 +51,7 @@ frontend/
 | **Gắn nhãn xe (`VehicleLabelTab`)** | `labels: Record<string, 'quen'\|'la'>` | `GET /api/v1/vehicles?type=:type&status=:status`<br>`PATCH /api/v1/vehicles/:plate/label` | `registered_vehicles` | Lấy danh sách xe đã lưu (`visit_count`, `last_seen_at`, `crop_image_url`, `status: KNOWN\|STRANGER`), lọc theo loại xe/trạng thái và cập nhật trạng thái `KNOWN` / `STRANGER`. |
 | **Cấu hình Zone (`ZoneEditorTab`)** | `zonesByCam: Record<string, PolygonZone[]>` | `GET /api/v1/zones?camera_id=:camId`<br>`POST /api/v1/zones`<br>`PUT /api/v1/zones/:id`<br>`DELETE /api/v1/zones/:id` | `zones` | Lưu tọa độ đa giác percentage `polygon_points: JSON`, `name`, `color`, `allowed_types: JSON`, và `is_active: boolean`. |
 | **Nhãn & Mẫu (`ObjectLabelTab`)** | `objLabels: ObjectLabel[]`<br>`annSamples: AnnotationSample[]` | `GET /api/v1/labels`<br>`POST /api/v1/labels`<br>`POST /api/v1/samples/batch` | `object_labels`<br>`annotation_samples` | Quản lý danh mục nhãn (`vietnamese_name`, `category: VEHICLE\|PERSON`, `tint_color`) và lưu batch danh sách bounding box đã khoanh trên frame ảnh/video. |
+| **Cải thiện nhận diện (`ObjectTrainingPanel`)** | `TrainingReadiness`, job/version thực | `GET/POST /training/datasets/*`, `GET/POST /training/jobs*` — OpenAPI `backend/node-api/openapi/training.yaml` | `label_samples`<br>`training_datasets`<br>`training_jobs`<br>`model_versions` | Luồng thân thiện: lưu mẫu → snapshot → train thủ công → chỉ dùng bản mới đã pass evaluation. Không tự train khi lưu mẫu; base YOLO luôn giữ nhận diện người/các xe nền. |
 | **Giao diện & Chủ đề (`ThemeSettingsTab`)** | `themeMode: ThemeMode`<br>`accentColor: AccentColor` | `localStorage` (Client-side UI Preference) | N/A (Client Setting) | Lưu tùy biến theme (`dark \| light \| system`), accent color (`blue \| emerald \| cyan \| purple \| amber`), glassmorphism và compact mode. |
 | **Hỏi đáp AI (`AIQAChat`)** | `QA_KNOWLEDGE_BASE` | `POST /api/v1/qa/query` | Gemini 3.5 Flash Lite + Function Calling | Body: `{ query: string }`. Response: `{ text: string, clip?: { cam, from, to, title, boxLabel, boxColor, tint, downloadUrl } }`. |
 | **Video Clip 10s** | Mock thumbnail & timeline | `GET /api/v1/clips/:id/download`<br>`GET /api/v1/clips/:id/stream` | Local Video Storage | Stream và tải đoạn video 10 giây được trích xuất tự động quanh thời điểm phát hiện. |
@@ -92,6 +94,27 @@ frontend/
   - Khung hình camera: Bbox / Zone tương ứng nhận `boxShadow: 0 0 24px`, scale nhẹ `1.04`, viền sáng trắng.
   - Khi chuột rời khỏi (`onMouseLeave`): Trở về trạng thái chuẩn, hủy bỏ toàn bộ highlight.
 
+### 4.3 Cải thiện nhận diện từ mẫu đã lưu
+
+```
+[Lưu thêm mẫu] ──(đủ mẫu đã lưu)──> [Bắt đầu cải thiện nhận diện]
+                                              │
+                                              ├──(camera cần ưu tiên)──> [Tạm dừng bảo vệ camera] ──> [tiếp tục khi ổn định]
+                                              └──(đã kiểm tra kết quả)──> [Bản nhận diện mới]
+                                                                                 │
+                                                                                 ├──(Dùng bản mới)──> [Custom augmentation active]
+                                                                                 └──(Quay về bản trước)──> [Base YOLO continues]
+```
+
+- **UI source:** `frontend/src/components/Settings/ObjectTrainingPanel.tsx`, mounted by `frontend/src/components/Settings/ObjectLabelTab.tsx`.
+- **Approved primary copy:** `Cải thiện nhận diện`, `Bắt đầu cải thiện nhận diện`, `Bản nhận diện mới`, `Dùng bản nhận diện mới`, `Quay về bản đang dùng trước đó`.
+- **Runtime bindings:** readiness polling, immutable dataset export, job/version polling, activate và return-to-base qua `frontend/src/api/training.ts`. Minimum export gate: 20 valid annotations from at least 3 independent uploaded sources; final promotion is still controlled by held-out evaluation.
+- **User actions:** Start is disabled until enough saved samples; saving an annotation only refreshes readiness. During camera protection, status explains that the camera remains the priority. Activate and return actions require a confirmation dialog.
+- **UI states:** insufficient data, ready, preparing, improving, protecting camera, checking result, result ready, active custom augmentation, recoverable failure. The main path deliberately hides internal terms such as candidate, GPU, FPS, mAP and rollback.
+- **Production gaps:** All job/version transitions are mock-local. Endpoint/method/payload, real progress subscription and activate/return operations are unknown until the API contract is authored. Future integration must preserve Architecture §11: custom model augments base YOLO, never replaces it.
+- **Visual-only:** progress indicator, plain-language status, readiness cards and confirmation dialogs.
+- **Verification evidence:** `npm.cmd run build` passed on 2026-08-20; local Vite URL `http://127.0.0.1:5173/`; visual approval by HuuThuan in chat on 2026-08-20.
+
 ---
 
 ## 5. Danh sách Kiểm tra Chất lượng (Quality Gate Checklist)
@@ -102,3 +125,12 @@ frontend/
 - [x] Đã lược bỏ toàn bộ câu từ quảng cáo dư thừa, giữ lại trải nghiệm vận hành trực quan.
 - [x] Đáp ứng đầy đủ 4 phân hệ theo Product Spec, Architecture Spec, Database Spec và Prototype.
 - [x] Đã xuất và cập nhật đầy đủ `docs/design/ui-design-contract.md` và `docs/design/ui-to-frontend-handoff.md`.
+- [x] Flow `M3-OBJECT-DETECTION-TRAINING` đã được HuuThuan duyệt trên local Vite, dùng wording thân thiện cho người không chuyên (2026-08-20).
+
+---
+
+## 6. Approval History
+
+| Date | Flow | Evidence | Decision |
+|---|---|---|---|
+| 2026-08-20 | `M3-OBJECT-DETECTION-TRAINING` within Settings → Object Labels | HuuThuan chat: `ok duyệt` | Approved with plain-language primary path; technical details remain secondary; backend integration intentionally not part of UI approval. |

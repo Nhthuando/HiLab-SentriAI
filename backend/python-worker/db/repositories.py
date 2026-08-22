@@ -4,6 +4,7 @@ db.repositories — Database CRUD and Query Helpers for Python Worker
 Implements query access patterns (AP-01 to AP-07) and lifecycle updates
 for registered_vehicles, gate_events, zones, zone_violations, and object_labels.
 """
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
@@ -473,3 +474,25 @@ async def close_stale_open_violations(
         return count
     except Exception:
         return 0
+
+
+async def get_active_custom_model(
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    """Load only the active custom augmentation; base YOLO is intentionally absent."""
+    executor = _get_executor(conn_or_pool)
+    row = await executor.fetchrow(
+        """
+        SELECT version_key, artifact_path, artifact_sha256, evaluation_metrics
+        FROM model_versions
+        WHERE status = 'ACTIVE'
+        LIMIT 1
+        """
+    )
+    result = _record_to_dict(row)
+    if result and isinstance(result.get("evaluation_metrics"), str):
+        try:
+            result["evaluation_metrics"] = json.loads(result["evaluation_metrics"])
+        except json.JSONDecodeError:
+            result["evaluation_metrics"] = {}
+    return result

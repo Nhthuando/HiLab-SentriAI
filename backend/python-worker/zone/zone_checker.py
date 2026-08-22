@@ -73,81 +73,6 @@ def get_detection_bottom_center(
     Compute normalized bottom-center point ((x1+x2)/2, y2) in [0, 1].
     Represents ground contact for overhead camera BAI-KIEM.
     """
-"""
-zone.zone_checker — Pure Point-in-Polygon Containment, Rule Matrix, and Violation State Machine
-
-Coordinates:
-- DB polygon_points: [{"x": float, "y": float}] in [0, 1]
-- Detection: normalized bottom-center point ((x1+x2)/2, y2)
-- Containment: Shapely.Polygon.covers(Point) (boundary included)
-- Rules: PROHIBIT_SPECIFIED vs ALLOW_SPECIFIED
-- State Machine: (camera_id, track_id, zone_id) with entry/exit hysteresis,
-  3-frame exit grace, and missing-track reconnect grace
-"""
-import logging
-import math
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
-import uuid
-
-from shapely.geometry import Point, Polygon
-
-logger = logging.getLogger("sentriai.zone.checker")
-
-
-def parse_polygon(points_data: Any) -> Optional[Polygon]:
-    """
-    Parse polygon points from JSON array of {'x': float, 'y': float} or [[x, y], ...].
-    Returns a valid Shapely Polygon or None if invalid.
-    """
-    if not points_data or not isinstance(points_data, (list, tuple)):
-        return None
-
-    coords: List[Tuple[float, float]] = []
-    for pt in points_data:
-        if isinstance(pt, dict) and "x" in pt and "y" in pt:
-            try:
-                coords.append((float(pt["x"]), float(pt["y"])))
-            except (ValueError, TypeError):
-                return None
-        elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
-            try:
-                coords.append((float(pt[0]), float(pt[1])))
-            except (ValueError, TypeError):
-                return None
-        else:
-            return None
-
-    if len(coords) < 3:
-        return None
-
-    if any(
-        not math.isfinite(coord) or coord < 0.0 or coord > 1.0
-        for point in coords
-        for coord in point
-    ):
-        return None
-
-    try:
-        poly = Polygon(coords)
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-        if poly.is_empty or len(poly.exterior.coords) < 4:
-            return None
-        return poly
-    except Exception as exc:
-        logger.warning("Failed to create Polygon: %s", exc)
-        return None
-
-
-def get_detection_bottom_center(
-    normalized_bbox: List[float],
-) -> Tuple[float, float]:
-    """
-    Compute normalized bottom-center point ((x1+x2)/2, y2) in [0, 1].
-    Represents ground contact for overhead camera BAI-KIEM.
-    """
     x1, y1, x2, y2 = normalized_bbox
     px = (x1 + x2) / 2.0
     py = y2
@@ -193,23 +118,59 @@ def resolve_candidate_labels(
 ) -> List[str]:
     """
     Resolve candidate Vietnamese names for a YOLO class.
-    1. Check class_to_labels (from object_labels table)
-    2. Map warehouse vehicle classes (forklift, crane) to truck category if present
-    3. Fallback to COCO translated name if available
-    4. If no mapping exists, return ['CHƯA XÁC ĐỊNH'].
+    1. Confirmed custom reach stacker / crane / forklift labels -> ['Xe nâng', 'Xe cẩu']
+    2. Check class_to_labels (from object_labels table)
+    3. Check class aliases
+    4. If class_to_labels is active (configured in DB), any class not in whitelist returns ['CHƯA XÁC ĐỊNH']
+    5. Fallback to COCO translated name if class_to_labels is empty
     """
     c_folded = yolo_class.strip().casefold() if yolo_class else ""
+    lbl_clean = coco_label.strip() if coco_label else ""
+    lbl_folded = lbl_clean.casefold()
+
+    # Confirmed custom reach stacker / crane / forklift labels
+    if lbl_folded in {"xe nâng", "xe cẩu", "reach stacker", "forklift"} or c_folded in {"reach stacker", "forklift", "container handler"}:
+        if "forklift" in class_to_labels and class_to_labels["forklift"]:
+            return class_to_labels["forklift"]
+        if "reach stacker" in class_to_labels and class_to_labels["reach stacker"]:
+            return class_to_labels["reach stacker"]
+        if not class_to_labels:
+            return ["Xe nâng", "Xe cẩu"]
+
     if c_folded in class_to_labels and class_to_labels[c_folded]:
         return class_to_labels[c_folded]
 
-    # Map industrial / warehouse equipment synonyms to truck category in DB
-    if c_folded in ["forklift", "crane", "mobile crane"]:
-        if "truck" in class_to_labels and class_to_labels["truck"]:
-            return class_to_labels["truck"]
+    class_aliases = {
+        "container": ("container", "shipping container"),
+        "shipping container": ("container", "shipping container"),
+        "forklift": ("forklift", "reach stacker", "container handler", "xe nâng"),
+        "container handler": ("forklift", "container handler", "reach stacker", "xe nâng"),
+        "reach stacker": ("forklift", "reach stacker", "container handler", "xe nâng"),
+        "truck": ("truck", "heavy_vehicle", "container_truck", "container truck"),
+        "container truck": ("truck", "container"),
+        "person": ("person", "pedestrian"),
+        "car": ("car", "automobile"),
+        "motorcycle": ("motorcycle", "motorbike"),
+        "bus": ("bus",),
+        "personnel carrier": ("personnel_carrier", "personnel carrier"),
+        "personnel_carrier": ("personnel_carrier", "personnel carrier"),
+        "utility vehicle": ("personnel_carrier", "personnel carrier"),
+        "golf cart": ("personnel_carrier", "personnel carrier"),
+    }
+    for canonical_base in class_aliases.get(c_folded, ()):
+        if class_to_labels.get(canonical_base):
+            return class_to_labels[canonical_base]
 
-    # Fallback to COCO translated name if present and not raw class
-    if coco_label and coco_label.strip().casefold() != c_folded:
-        return [coco_label]
+    # If class_to_labels is active (configured in DB), check if lbl_clean is in whitelist values
+    if class_to_labels:
+        for base, names in class_to_labels.items():
+            if lbl_clean in names:
+                return [lbl_clean]
+        return ["CHƯA XÁC ĐỊNH"]
+
+    # Fallback only when class_to_labels is empty (e.g. initial setup or test environment)
+    if lbl_clean and lbl_folded not in {"truck", "car", "bus", "motorcycle", "person", "boat", "train"}:
+        return [lbl_clean]
 
     return ["CHƯA XÁC ĐỊNH"]
 
@@ -217,14 +178,19 @@ def resolve_candidate_labels(
 def choose_display_label(
     candidate_labels: List[str],
     target_labels: Optional[List[str]] = None,
+    preferred_label: Optional[str] = None,
 ) -> str:
     """
     Choose the best display label:
+    - If preferred_label is in candidate_labels, use it.
     - If any candidate matches target_labels of the zone, prefer it.
     - Otherwise use the first candidate.
     """
     if not candidate_labels:
         return "CHƯA XÁC ĐỊNH"
+
+    if preferred_label and preferred_label.strip() in candidate_labels:
+        return preferred_label.strip()
 
     if target_labels:
         norm_targets = {t.strip().casefold() for t in target_labels if t}
@@ -434,6 +400,12 @@ class ZoneChecker:
         annotated_detections: List[Dict[str, Any]] = []
 
         for det in detections:
+            # The detector's spatial-temporal gate marks stationary yard
+            # infrastructure (notably container stacks) as non-vehicles.  Keep
+            # this defensive guard here so a caller cannot accidentally turn a
+            # suppressed object into a zone violation.
+            if det.get("suppressedStatic"):
+                continue
             bbox = det.get("bbox", [0, 0, 0, 0])
             norm_bbox = det.get("normalized_bbox")
             if not norm_bbox:
@@ -452,6 +424,13 @@ class ZoneChecker:
             yolo_cls = det.get("class", "")
             coco_lbl = det.get("label", "")
             candidates = resolve_candidate_labels(yolo_cls, coco_lbl, class_to_labels)
+
+            # Strict Whitelist Gate:
+            # When object_labels are configured in DB (class_to_labels is not empty),
+            # any detection that cannot be matched to a configured label is DROPPED.
+            if class_to_labels and (not candidates or candidates == ["CHƯA XÁC ĐỊNH"]):
+                continue
+
             raw_track_id = det.get("trackId")
             track_id = int(raw_track_id) if raw_track_id is not None else None
             if track_id is not None:
@@ -490,15 +469,19 @@ class ZoneChecker:
                 if not exact_inside and not sustained_inside:
                     continue
 
-                zone_matches.append({
-                    "zoneId": zone_id,
-                    "zoneName": zone_name,
-                    "status": match_status,
-                })
+                # The overlay represents the exact current frame. Hysteresis
+                # still protects event persistence but cannot leave a box shown
+                # after the vehicle has visibly exited the polygon.
+                if exact_inside:
+                    zone_matches.append({
+                        "zoneId": zone_id,
+                        "zoneName": zone_name,
+                        "status": match_status,
+                    })
 
                 if match_status == "VIOLATION":
                     has_violation = True
-                    disp_lbl = choose_display_label(candidates, target_labels)
+                    disp_lbl = choose_display_label(candidates, target_labels, preferred_label=coco_lbl)
                     if first_violating_label is None:
                         first_violating_label = disp_lbl
 
@@ -522,7 +505,8 @@ class ZoneChecker:
                 if has_violation
                 else ("ALLOWED" if zone_matches else "OUTSIDE")
             )
-            chosen_label = first_violating_label or choose_display_label(candidates)
+            pref_lbl = coco_lbl if coco_lbl and coco_lbl != "CHƯA XÁC ĐỊNH" else None
+            chosen_label = first_violating_label or choose_display_label(candidates, preferred_label=pref_lbl)
 
             annotated_det = dict(det)
             annotated_det["label"] = chosen_label

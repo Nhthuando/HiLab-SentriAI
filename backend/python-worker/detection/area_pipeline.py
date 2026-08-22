@@ -25,6 +25,7 @@ from buffer.circular_buffer import CircularBuffer
 from db.repositories import (
     close_zone_violation,
     create_zone_violation,
+    get_active_custom_model,
     update_violation_clip_path,
 )
 from detection.tracked_detector import TrackedYoloDetector
@@ -77,6 +78,17 @@ class AreaPipeline:
             resolution=resolution,
         )
         self.detector = detector or TrackedYoloDetector()
+        self._default_custom_model = TrackedYoloDetector.default_custom_model_config()
+        self._force_default_custom_model = os.getenv("CUSTOM_AUGMENT_FORCE_DEFAULT", "false").strip().casefold() in {"1", "true", "yes", "on"}
+        # A one-class fallback model can relabel every vehicle as its only class.
+        # It remains available only for an explicit diagnostic override; normal
+        # operation loads a reviewed active candidate or uses base YOLO alone.
+        if self._force_default_custom_model and self._default_custom_model and hasattr(self.detector, "configure_custom_model"):
+            self.detector.configure_custom_model(
+                str(self._default_custom_model["version_key"]),
+                str(self._default_custom_model["artifact_path"]),
+                self._default_custom_model["label_map"],
+            )
         self.buffer = CircularBuffer(max_seconds=15.0, target_fps=target_fps)
         self.emitter = emitter or StreamEmitter()
         self.zone_sync = zone_sync or ZoneSynchronizer(camera_id=camera_id, sync_interval=5.0)
@@ -87,12 +99,59 @@ class AreaPipeline:
         )
 
         self._running = False
+        self._active = False
         self._task: Optional[asyncio.Task] = None
         self._clip_tasks: Set[asyncio.Task] = set()
         self.frame_count = 0
         self.fps_measured = 0.0
         self._last_fps_calc = time.time()
         self._fps_counter = 0
+        self._last_custom_model_sync = 0.0
+
+    async def _refresh_custom_model(self) -> None:
+        """Poll active custom augmentation from DB; fallback to default custom model if available."""
+        if self._force_default_custom_model:
+            return
+        if time.time() - self._last_custom_model_sync < 5.0:
+            return
+        self._last_custom_model_sync = time.time()
+        try:
+            active = await get_active_custom_model()
+            if not active:
+                if self._default_custom_model:
+                    await asyncio.to_thread(
+                        self.detector.configure_custom_model,
+                        str(self._default_custom_model["version_key"]),
+                        str(self._default_custom_model["artifact_path"]),
+                        self._default_custom_model["label_map"],
+                    )
+                else:
+                    await asyncio.to_thread(self.detector.configure_custom_model, None, None, None)
+                return
+            metrics = active.get("evaluation_metrics") or {}
+            label_map = metrics.get("labelMap") if isinstance(metrics, dict) else {}
+            backend_root = Path(__file__).resolve().parents[2]
+            data_root = backend_root / "data"
+            artifact_path = (data_root / str(active["artifact_path"])).resolve()
+            if data_root not in artifact_path.parents:
+                raise ValueError("unsafe custom artifact path")
+            await asyncio.to_thread(
+                self.detector.configure_custom_model,
+                str(active["version_key"]),
+                str(artifact_path),
+                label_map if isinstance(label_map, dict) else {},
+            )
+        except Exception as exc:
+            if self._default_custom_model:
+                await asyncio.to_thread(
+                    self.detector.configure_custom_model,
+                    str(self._default_custom_model["version_key"]),
+                    str(self._default_custom_model["artifact_path"]),
+                    self._default_custom_model["label_map"],
+                )
+            else:
+                await asyncio.to_thread(self.detector.configure_custom_model, None, None, None)
+            logger.warning("[%s] Could not refresh reviewed custom model; using fallback custom or base YOLO: %s", self.camera_id, exc)
 
     def process_single_frame(self) -> Dict[str, Any]:
         """
@@ -166,6 +225,19 @@ class AreaPipeline:
             "fps": self.fps_measured or self.target_fps,
             "source_reset": self.reader.did_loop,
         }
+
+    def get_playback_state(self) -> Dict[str, Any]:
+        return self.reader.get_playback_state()
+
+    def request_seek(self, position_seconds: float) -> Dict[str, Any]:
+        state = self.reader.request_seek(position_seconds)
+        if state.get("seekable"):
+            self.detector.reset_tracking()
+            self.buffer.clear()
+            self._fps_counter = 0
+            self._last_fps_calc = time.time()
+            self.fps_measured = self.target_fps
+        return state
 
     async def _handle_transition(self, t: ViolationTransition) -> None:
         """Handle violation state machine transitions (DB persistence + WS emission + clip)."""
@@ -322,8 +394,13 @@ class AreaPipeline:
         interval = 1.0 / self.target_fps
 
         while self._running:
+            if not self._active:
+                await asyncio.sleep(0.2)
+                continue
+
             start_t = time.time()
             try:
+                await self._refresh_custom_model()
                 result = await asyncio.to_thread(self.process_single_frame)
 
                 if result["success"]:
@@ -352,15 +429,23 @@ class AreaPipeline:
 
     def start(self) -> None:
         """Start the area pipeline background tasks."""
+        self._active = True
+        self._fps_counter = 0
+        self._last_fps_calc = time.time()
+        self.fps_measured = self.target_fps
         if self._running:
             return
         self._running = True
         self.zone_sync.start()
         self._task = asyncio.create_task(self._loop())
 
+    def pause(self) -> None:
+        """Suspend frame processing while retaining the warm model and camera resources."""
+        self._active = False
     async def stop(self) -> None:
         """Stop background tasks and release resources cleanly."""
         self._running = False
+        self._active = False
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=2.0)
@@ -387,6 +472,7 @@ class AreaPipeline:
         return {
             "camera_id": self.camera_id,
             "running": self._running,
+            "active": self._active,
             "frame_count": self.frame_count,
             "fps": self.fps_measured,
             "buffered_frames": self.buffer.get_frame_count(),

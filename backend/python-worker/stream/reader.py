@@ -1,14 +1,15 @@
 """
-stream.reader — OpenCV Video Stream Reader with Fallback & Auto-Reconnect
+stream.reader - OpenCV Video Stream Reader with Fallback & Auto-Reconnect
 
 Supports:
 - RTSP video streams
-- Local MP4 / AVI video files (with seamless loop on EOF)
+- Local MP4 / AVI video files (with seamless loop on EOF and 1.0x real-time pacing)
 - Fallback image assets (frontend/public/assets/cam-gate.png, cam-baikiem.png)
 - Dynamic synthetic frame generator (for headless / offline dev testing)
 """
 import logging
 import os
+import threading
 import time
 from typing import Optional, Tuple
 
@@ -23,15 +24,23 @@ class StreamReader:
         self,
         source: Optional[str] = None,
         camera_id: str = "GATE-01",
-        target_fps: float = 10.0,
-        resolution: Tuple[int, int] = (640, 480),
+        resolution: Tuple[int, int] = (1280, 720),
+        target_fps: float = 25.0,
     ):
         self.camera_id = camera_id
         self.target_fps = max(1.0, float(target_fps))
         self.resolution = resolution  # (width, height)
         self.source = source
         self.cap: Optional[cv2.VideoCapture] = None
+        self._preview_cap: Optional[cv2.VideoCapture] = None
+        self._preview_lock = threading.Lock()
         self.is_image_fallback = False
+
+        self.is_local_file = False
+        self.source_fps = 0.0
+        self._total_frames = 0.0
+        self._duration_seconds = 0.0
+        self._current_pos_seconds = 0.0
         self.is_synthetic = False
         self.fallback_frame: Optional[np.ndarray] = None
         self.frame_count = 0
@@ -40,10 +49,9 @@ class StreamReader:
         self.synthetic_frame_index = 0
         # True only for the first frame after a local video rewinds.
         self.did_loop = False
-        self.is_local_file = False
-        self.source_fps = 0.0
         self._last_local_frame_at: Optional[float] = None
-
+        self._pending_seek_seconds: Optional[float] = None
+        self._source_reset_pending = False
         self._resolve_source()
         self._open_stream()
 
@@ -57,11 +65,88 @@ class StreamReader:
             logger.info("[%s] Using network stream source: %s", self.camera_id, self.source)
             return
 
-        # Check if local video file exists
-        if self.source and os.path.exists(self.source):
-            self.is_local_file = True
-            logger.info("[%s] Using local video file: %s", self.camera_id, self.source)
-            return
+        def _optimize_local_video(path_str: str) -> str:
+            """Ensure local video files have index tables and zero-base PTS for instant, artifact-free seeking."""
+            if "_fastseek" in path_str:
+                return path_str
+            mp4_candidate = os.path.splitext(path_str)[0] + "_fastseek.mp4"
+            if os.path.exists(mp4_candidate) and os.path.getsize(mp4_candidate) > 1024:
+                return mp4_candidate
+            try:
+                import subprocess
+                import imageio_ffmpeg
+                ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+                cmd = [
+                    ffmpeg_exe, "-y",
+                    "-fflags", "+genpts",
+                    "-i", path_str,
+                    "-c", "copy",
+                    "-avoid_negative_ts", "make_zero",
+                    "-movflags", "+faststart",
+                    mp4_candidate,
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                if res.returncode == 0 and os.path.exists(mp4_candidate) and os.path.getsize(mp4_candidate) > 1024:
+                    logger.info("[%s] Auto-indexed video stream to fast-seek container: %s", self.camera_id, mp4_candidate)
+                    return mp4_candidate
+            except Exception as exc:
+                logger.warning("[%s] Could not auto-index video %s (%s). Using original.", self.camera_id, path_str, exc)
+            return path_str
+
+        # Check if local video file exists or discover in data folders
+        if self.source:
+            candidate_paths = [
+                self.source,
+                os.path.abspath(self.source),
+                os.path.join(os.getcwd(), self.source),
+                os.path.join(os.path.dirname(__file__), "../../data/samples", os.path.basename(self.source)),
+                os.path.join(os.path.dirname(__file__), "../../../data/samples", os.path.basename(self.source)),
+                os.path.join(os.path.dirname(__file__), "../../data", os.path.basename(self.source)),
+            ]
+            for p in candidate_paths:
+                if os.path.exists(p) and os.path.isfile(p):
+                    self.source = _optimize_local_video(p)
+                    self.is_local_file = True
+                    logger.info("[%s] Found and using local video file: %s", self.camera_id, self.source)
+                    return
+
+        # Auto-discover video file matching camera_id in data/samples
+        search_dirs = [
+            os.path.join(os.path.dirname(__file__), "../../data/samples"),
+            os.path.join(os.path.dirname(__file__), "../../../data/samples"),
+        ]
+        cam_prefix = "gate" if "GATE" in self.camera_id.upper() else "area"
+        for s_dir in search_dirs:
+            if os.path.exists(s_dir) and os.path.isdir(s_dir):
+                for f in os.listdir(s_dir):
+                    if cam_prefix in f.lower() and f.lower().endswith(('.mp4', '.avi', '.mkv', '.mov')):
+                        self.source = os.path.join(s_dir, f)
+                        self.is_local_file = True
+                        logger.info("[%s] Auto-discovered video file: %s", self.camera_id, self.source)
+                        return
+
+        # Check the camera's bundled sample asset relative to the repository root.
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[3]
+        asset_name = "cam-gate.png" if "GATE" in self.camera_id else "cam-baikiem.png"
+        possible_asset_paths = [
+            str(repo_root / "frontend" / "public" / "assets" / asset_name),
+        ]
+
+        for asset_path in possible_asset_paths:
+            if os.path.exists(asset_path):
+                img = cv2.imread(asset_path)
+                if img is not None:
+                    self.is_image_fallback = True
+                    self.fallback_frame = cv2.resize(img, self.resolution)
+                    logger.info(
+                        "[%s] Using fallback image asset for stream: %s (%dx%d)",
+                        self.camera_id,
+                        asset_path,
+                        self.resolution[0],
+                        self.resolution[1],
+                    )
+                    return
 
         # Check the camera's bundled sample asset relative to the repository root.
         from pathlib import Path
@@ -95,6 +180,7 @@ class StreamReader:
 
     def _open_stream(self) -> None:
         """Open VideoCapture or mark ready for fallback."""
+        self._frame_step_accumulator = 0.0
         if self.is_image_fallback or self.is_synthetic:
             self.is_connected = True
             return
@@ -104,7 +190,15 @@ class StreamReader:
             if self.cap.isOpened():
                 self.is_connected = True
                 self.source_fps = max(0.0, float(self.cap.get(cv2.CAP_PROP_FPS)))
-                logger.info("[%s] VideoCapture opened successfully.", self.camera_id)
+                self._total_frames = max(0.0, float(self.cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+                self._duration_seconds = self._total_frames / self.source_fps if self.source_fps > 0 else 0.0
+                self._current_pos_seconds = 0.0
+                logger.info(
+                    "[%s] VideoCapture opened successfully (source FPS: %.2f, duration: %.2fs).",
+                    self.camera_id,
+                    self.source_fps,
+                    self._duration_seconds,
+                )
             else:
                 logger.warning("[%s] Failed to open VideoCapture for: %s", self.camera_id, self.source)
                 self.is_connected = False
@@ -134,26 +228,105 @@ class StreamReader:
             return
 
         elapsed = now - previous
-        frames_needed = int(round(elapsed * self.source_fps))
-        skip_count = max(0, frames_needed - 1)
-        # Cap skip_count to avoid stalling on sudden pauses/debugging
-        skip_count = min(skip_count, int(self.source_fps * 2))
+        # If elapsed is too long (e.g. system paused, seeking, or inference delay), do NOT skip massive frames
+        if elapsed > 0.4:
+            return
+
+        frames_needed = elapsed * self.source_fps
+        skip_needed = int(max(0.0, frames_needed - 1.0))
+        max_skip = max(1, int(round(self.source_fps / max(1.0, float(self.target_fps)))))
+        skip_count = min(skip_needed, max_skip)
         for _ in range(skip_count):
             if not self.cap.grab():
                 break
+            self._current_pos_seconds = min(self._duration_seconds, self._current_pos_seconds + (1.0 / self.source_fps))
+
+    def get_playback_state(self) -> dict:
+        """Return seek metadata for a local video; live streams are not seekable (cached & thread-safe)."""
+        if not self.is_local_file or self.cap is None or not self.cap.isOpened():
+            return {"seekable": False, "positionSeconds": 0.0, "durationSeconds": 0.0}
+
+        return {
+            "seekable": self._duration_seconds > 0.0,
+            "positionSeconds": min(self._current_pos_seconds, self._duration_seconds),
+            "durationSeconds": self._duration_seconds,
+        }
+
+    def request_seek(self, position_seconds: float) -> dict:
+        """Queue a safe seek, applied by the pipeline's frame-reading thread."""
+        state = self.get_playback_state()
+        if not state["seekable"]:
+            return state
+
+        target = max(0.0, min(float(position_seconds), float(state["durationSeconds"])))
+        self._pending_seek_seconds = target
+        state["positionSeconds"] = target
+        return state
+
+    def preview_frame(self, position_seconds: float) -> Optional[np.ndarray]:
+        """Decode one local-video frame without moving the monitored reader.
+
+        Uses a cached capture instance protected by a thread lock to provide
+        instant (< 30ms) seek previews without thrashing disk I/O.
+        """
+        state = self.get_playback_state()
+        if not state["seekable"] or not self.source:
+            return None
+        target = max(0.0, min(float(position_seconds), float(state["durationSeconds"])))
+        with self._preview_lock:
+            if self._preview_cap is None or not self._preview_cap.isOpened():
+                self._preview_cap = cv2.VideoCapture(self.source)
+            if not self._preview_cap.isOpened():
+                return None
+            fps = self.source_fps or max(0.0, float(self._preview_cap.get(cv2.CAP_PROP_FPS)))
+            if fps > 0.0:
+                target_frame = max(0, int(round(target * fps)))
+                self._preview_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+            else:
+                self._preview_cap.set(cv2.CAP_PROP_POS_MSEC, target * 1000.0)
+            ok, frame = self._preview_cap.read()
+            if not ok or frame is None:
+                # Reopen once if stale
+                self._preview_cap.release()
+                self._preview_cap = cv2.VideoCapture(self.source)
+                if self._preview_cap.isOpened():
+                    if fps > 0.0:
+                        self._preview_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                    else:
+                        self._preview_cap.set(cv2.CAP_PROP_POS_MSEC, target * 1000.0)
+                    ok, frame = self._preview_cap.read()
+            if not ok or frame is None:
+                return None
+            return cv2.resize(frame, self.resolution, interpolation=cv2.INTER_LINEAR)
+
+    def _apply_pending_seek(self) -> None:
+        if self._pending_seek_seconds is None or self.cap is None or not self.cap.isOpened():
+            return
+        target = self._pending_seek_seconds
+        self._pending_seek_seconds = None
+        fps = self.source_fps or max(0.0, float(self.cap.get(cv2.CAP_PROP_FPS)))
+        if fps > 0.0:
+            target_frame = max(0, int(round(target * fps)))
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        else:
+            self.cap.set(cv2.CAP_PROP_POS_MSEC, target * 1000.0)
+        self._current_pos_seconds = target
+        self._last_local_frame_at = time.monotonic()
+        self._source_reset_pending = True
 
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
-        Read the next frame, resized to target resolution (640x480).
-        Handles video file loop, synthetic frame generation without blocking sleeps.
+        Read next frame without blocking event loop.
+        Fast resize with INTER_LINEAR for smooth, high-definition streaming.
         """
+        self.last_frame_time = time.time()
         self.frame_count += 1
-        self.did_loop = False
+        self.did_loop = self._source_reset_pending
+        self._source_reset_pending = False
 
         # 1. Image fallback (creates animated simulation overlay)
         if self.is_image_fallback and self.fallback_frame is not None:
             frame = self.fallback_frame.copy()
-            # Add dynamic timestamp and frame counter in top corner
             ts_str = time.strftime("%Y-%m-%d %H:%M:%S")
             cv2.putText(
                 frame,
@@ -169,18 +342,29 @@ class StreamReader:
 
         # 2. OpenCV VideoCapture stream (file or RTSP)
         if self.cap is not None and self.cap.isOpened():
+            self._apply_pending_seek()
+            # Mark the first processed frame after a seek.  Consumers can then
+            # replace an unannotated seek preview as soon as AI finishes this
+            # exact frame rather than waiting for one additional inference.
+            if self._source_reset_pending:
+                self.did_loop = True
+                self._source_reset_pending = False
             ret, frame = self.cap.read()
             if ret and frame is not None:
-                resized = cv2.resize(frame, self.resolution)
+                if self.source_fps > 0:
+                    self._current_pos_seconds = min(self._duration_seconds, self._current_pos_seconds + (1.0 / self.source_fps))
+                resized = cv2.resize(frame, self.resolution, interpolation=cv2.INTER_LINEAR)
                 self._advance_local_video_for_elapsed_time()
                 return True, resized
             else:
-                # End of video file -> rewind to beginning
+                # End of video file -> rewind to beginning seamlessly.
                 self.did_loop = True
+                self._last_local_frame_at = None
+                self._current_pos_seconds = 0.0
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = self.cap.read()
                 if ret and frame is not None:
-                    resized = cv2.resize(frame, self.resolution)
+                    resized = cv2.resize(frame, self.resolution, interpolation=cv2.INTER_LINEAR)
                     self._advance_local_video_for_elapsed_time()
                     return True, resized
                 else:
@@ -220,5 +404,9 @@ class StreamReader:
         if self.cap is not None:
             self.cap.release()
             self.cap = None
+        with self._preview_lock:
+            if self._preview_cap is not None:
+                self._preview_cap.release()
+                self._preview_cap = None
         self.is_connected = False
         logger.info("[%s] StreamReader released.", self.camera_id)

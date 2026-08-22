@@ -1,17 +1,21 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import type { ObjectLabel, AnnotationSource, AnnotationSample } from '../../types';
+import type { ObjectLabel, AnnotationSource, AnnotationSample, TrainingReadiness } from '../../types';
+import { getMediaSources, uploadMediaSource, deleteMediaSource } from '../../api/labels';
+import { resolveMediaUrl } from '../../api/client';
+import { ObjectTrainingPanel } from './ObjectTrainingPanel';
 
 interface ObjectLabelTabProps {
   objLabels: ObjectLabel[];
   annSources: AnnotationSource[];
   annSamples: AnnotationSample[];
-  onAddLabel: (name: string, kind: 'xe' | 'nguoi', tint?: string) => void;
-  onRenameLabel: (id: string, newName: string, kind?: 'xe' | 'nguoi', tint?: string) => void;
+  onUpdateSources?: (sources: AnnotationSource[]) => void;
+  onAddLabel: (name: string, baseClass: string, kind: 'xe' | 'nguoi', tint?: string) => void;
+  onRenameLabel: (id: string, newName: string, baseClass?: string, kind?: 'xe' | 'nguoi', tint?: string) => void;
   onDeleteLabel: (id: string) => void;
-  onAddSample: (sample: Omit<AnnotationSample, 'id'>) => void;
+  onAddSample: (sample: Omit<AnnotationSample, 'id'> & { id?: string }) => void;
   onUpdateSample: (id: string, patch: Partial<AnnotationSample>) => void;
   onDeleteSample: (id: string) => void;
-  onSaveSamples: () => void;
+  onSaveSamples: () => Promise<boolean>;
 }
 
 type DragMode = 'draw' | 'move' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br';
@@ -20,6 +24,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   objLabels,
   annSources,
   annSamples,
+  onUpdateSources,
   onAddLabel,
   onRenameLabel,
   onDeleteLabel,
@@ -30,7 +35,6 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
 }) => {
   const [activeSourceId, setActiveSourceId] = useState<string>(annSources[0]?.id || 'src1');
   const [selectedLabelId, setSelectedLabelId] = useState<string>(objLabels[0]?.id || 'l8');
-  const [vidFrameIdx, setVidFrameIdx] = useState<number>(0);
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
 
   // Crosshair guide lines
@@ -56,7 +60,21 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   const [editingLabel, setEditingLabel] = useState<ObjectLabel | null>(null);
   const [modalName, setModalName] = useState<string>('');
   const [modalKind, setModalKind] = useState<'xe' | 'nguoi'>('xe');
+  const [modalBaseClass, setModalBaseClass] = useState<string>('truck');
   const [modalTint, setModalTint] = useState<string>('#3b82f6');
+
+  const baseClassOptions = [
+    { value: 'person', label: 'Người' },
+    { value: 'forklift', label: 'Xe nâng / forklift' },
+    { value: 'container handler', label: 'Xe nâng container' },
+    { value: 'reach stacker', label: 'Xe nâng reach stacker' },
+    { value: 'container', label: 'Container' },
+    { value: 'personnel_carrier', label: 'Xe chở người' },
+    { value: 'truck', label: 'Xe tải' },
+    { value: 'car', label: 'Xe con' },
+    { value: 'bus', label: 'Xe buýt' },
+    { value: 'motorcycle', label: 'Xe máy' },
+  ];
 
   const colorPalette = [
     '#3b82f6', // Classic Blue
@@ -69,8 +87,158 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     '#64748b'  // Slate
   ];
 
-  const currentSource = annSources.find((s) => s.id === activeSourceId) || annSources[0];
-  const isVideo = currentSource.kind === 'video';
+  const [sources, setSources] = useState<AnnotationSource[]>(annSources);
+  const [deleteTargetSource, setDeleteTargetSource] = useState<AnnotationSource | null>(null);
+
+  // Sync with prop annSources
+  useEffect(() => {
+    if (Array.isArray(annSources) && annSources.length > 0) {
+      setSources(annSources);
+    }
+  }, [annSources]);
+
+  // Load persistent media sources from backend on mount once
+  useEffect(() => {
+    let isMounted = true;
+    const loadMedia = async () => {
+      try {
+        const data = await getMediaSources();
+        if (isMounted && Array.isArray(data) && data.length > 0) {
+          setSources((prev) => {
+            const map = new Map(prev.map((s) => [s.id, s]));
+            data.forEach((d) => map.set(d.id, d));
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to fetch media sources from API:', err);
+      }
+    };
+    loadMedia();
+    return () => { isMounted = false; };
+  }, []);
+
+  // Helper to extract first frame from video as thumbnail Data URL
+  const extractVideoThumbnail = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const video = document.createElement('video');
+      video.src = url;
+      video.muted = true;
+      video.playsInline = true;
+      video.crossOrigin = 'anonymous';
+
+      const handleSeeked = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth || 640;
+          canvas.height = video.videoHeight || 360;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          URL.revokeObjectURL(url);
+          resolve(dataUrl);
+        } catch {
+          resolve('');
+        }
+      };
+
+      video.addEventListener('seeked', handleSeeked, { once: true });
+      video.addEventListener('loadedmetadata', () => {
+        video.currentTime = Math.min(0.2, (video.duration || 1) / 2);
+      });
+      video.addEventListener('error', () => resolve(''), { once: true });
+    });
+  };
+
+  // Video playback and timeline controller states
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [duration, setDuration] = useState<number>(0);
+  const [playbackRate, setPlaybackRate] = useState<number>(1);
+
+  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const isVid = file.type.startsWith('video') || file.name.endsWith('.mp4') || file.name.endsWith('.webm') || file.name.endsWith('.mov');
+    
+    // Generate video thumbnail if video
+    let thumbDataUrl = '';
+    if (isVid) {
+      thumbDataUrl = await extractVideoThumbnail(file);
+    }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      const finalThumb = isVid ? thumbDataUrl || '' : dataUrl;
+
+      try {
+        const saved = await uploadMediaSource({
+          data: dataUrl,
+          filename: file.name,
+          kind: isVid ? 'video' : 'img',
+          thumbnail: finalThumb,
+        });
+        const updated = [saved, ...sources.filter((p) => p.id !== saved.id)];
+        setSources(updated);
+        if (onUpdateSources) onUpdateSources(updated);
+        setActiveSourceId(saved.id);
+        setSelectedSampleId(null);
+        setSavedSuccessMsg(`✓ Đã lưu thành công "${file.name}"`);
+      } catch (err) {
+        console.warn('Upload API error, saving to local state:', err);
+        const newId = `imported-${Date.now()}`;
+        const newSource: AnnotationSource = {
+          id: newId,
+          name: file.name.slice(0, 18),
+          kind: isVid ? 'video' : 'img',
+          img: dataUrl,
+          thumbnail: finalThumb,
+          isDefault: false,
+        };
+        const updated = [newSource, ...sources.filter((p) => p.id !== newId)];
+        setSources(updated);
+        if (onUpdateSources) onUpdateSources(updated);
+        setActiveSourceId(newId);
+        setSelectedSampleId(null);
+        setSavedSuccessMsg(`✓ Đã nạp "${file.name}"`);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const confirmDeleteSource = async () => {
+    if (!deleteTargetSource) return;
+    const target = deleteTargetSource;
+    setDeleteTargetSource(null);
+
+    try {
+      if (target.filename || target.id) {
+        await deleteMediaSource(target.filename || target.id);
+      }
+    } catch (err) {
+      console.warn('Delete media API error:', err);
+    }
+
+    const remaining = sources.filter((s) => s.id !== target.id);
+    setSources(remaining);
+    if (onUpdateSources) onUpdateSources(remaining);
+
+    if (activeSourceId === target.id && remaining.length > 0) {
+      setActiveSourceId(remaining[0].id);
+    }
+
+    // Remove samples belonging to deleted source
+    annSamples.filter((s) => s.srcId === target.id).forEach((s) => onDeleteSample(s.id));
+    setSavedSuccessMsg(`✓ Đã xóa "${target.name}"`);
+  };
+
+  const currentSource = sources.find((s) => s.id === activeSourceId) || sources[0] || annSources[0];
+  const isVideo = currentSource.kind === 'video' || (typeof currentSource.img === 'string' && (currentSource.img.endsWith('.mp4') || currentSource.img.includes('video/')));
   const selectedLabel = objLabels.find((l) => l.id === selectedLabelId);
 
   const getLabelColor = (labelId: string) => {
@@ -78,12 +246,59 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     return l?.tint || '#3b82f6';
   };
 
-  const vidTicks = [
-    { label: '00:12', pct: '8%' },
-    { label: '00:47', pct: '31%' },
-    { label: '01:23', pct: '55%' },
-    { label: '02:05', pct: '82%' }
-  ];
+  // Video playback handlers
+  const handleVideoTimeUpdate = () => {
+    if (videoRef.current) {
+      setCurrentTime(videoRef.current.currentTime);
+    }
+  };
+
+  const handleVideoLoadedMetadata = () => {
+    if (videoRef.current) {
+      setDuration(videoRef.current.duration || 0);
+      setCurrentTime(videoRef.current.currentTime || 0);
+    }
+  };
+
+  const togglePlayPause = () => {
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) {
+      videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+    } else {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newTime = parseFloat(e.target.value);
+    if (videoRef.current) {
+      videoRef.current.currentTime = newTime;
+      setCurrentTime(newTime);
+    }
+  };
+
+  const handleSkip = (deltaSeconds: number) => {
+    if (videoRef.current) {
+      const targetTime = Math.max(0, Math.min(duration || 100, videoRef.current.currentTime + deltaSeconds));
+      videoRef.current.currentTime = targetTime;
+      setCurrentTime(targetTime);
+    }
+  };
+
+  const handlePlaybackRateChange = (rate: number) => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = rate;
+      setPlaybackRate(rate);
+    }
+  };
+
+  const formatTime = (secs: number) => {
+    if (isNaN(secs) || secs < 0) return '00:00';
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
 
   // Number key shortcuts (1 - 8) & Delete/Backspace shortcut
   useEffect(() => {
@@ -121,9 +336,16 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     return { x: +x.toFixed(1), y: +y.toFixed(1) };
   }, []);
 
-  // Canvas Mouse Down: Start Drawing or Deselect
+  // Canvas Mouse Down: Start Drawing or Deselect (Auto-pause video on draw)
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
+
+    // Auto pause video when user starts drawing boxes
+    if (isVideo && videoRef.current && !videoRef.current.paused) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
+
     const p = getPercentageCoords(e);
     if (!p) return;
 
@@ -254,16 +476,20 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
 
     if (dragRef.current.mode === 'draw' && draftBox) {
       if (draftBox.w >= 2 && draftBox.h >= 2 && selectedLabelId) {
+        const newSampleId = 's' + Date.now() + Math.random().toString(36).substring(2, 6);
         onAddSample({
+          id: newSampleId,
           labelId: selectedLabelId,
           srcId: currentSource.id,
-          frame: isVideo ? vidFrameIdx : null,
+          frame: isVideo ? Math.round(currentTime * 10) / 10 : null,
           x: +draftBox.x.toFixed(1),
           y: +draftBox.y.toFixed(1),
           w: +draftBox.w.toFixed(1),
           h: +draftBox.h.toFixed(1),
           session: 1
         });
+        // Auto-select the newly created box so clicking any label on the right assigns it in 1 click!
+        setSelectedSampleId(newSampleId);
         setSavedSuccessMsg('');
       }
     }
@@ -273,11 +499,25 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   };
 
   const pendingSessionCount = annSamples.filter((s) => s.session === 1).length;
+  const savedSamples = annSamples.filter((sample) => sample.session !== 1);
+  const readiness: TrainingReadiness = {
+    savedSamples: savedSamples.length,
+    labelsWithSamples: new Set(savedSamples.map((sample) => sample.labelId)).size,
+    sourceCount: new Set(savedSamples.map((sample) => sample.srcId)).size,
+    excludedSamples: 0,
+    isReady: savedSamples.length >= 20 && new Set(savedSamples.map((sample) => sample.labelId)).size >= 2,
+  };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (pendingSessionCount === 0) return;
-    onSaveSamples();
-    setSavedSuccessMsg(`✓ Đã lưu thành công ${pendingSessionCount} mẫu gắn nhãn!`);
+    const saved = await onSaveSamples();
+    if (!saved) {
+      setSavedSuccessMsg('Không thể lưu mẫu. Các khung đã giữ lại để thử lại.');
+      return;
+    }
+    setSelectedSampleId(null);
+    setDraftBox(null);
+    setSavedSuccessMsg(`✓ Đã lưu thành công ${pendingSessionCount} mẫu vào cơ sở dữ liệu!`);
   };
 
   // Open Modal to Add
@@ -285,6 +525,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     setEditingLabel(null);
     setModalName('');
     setModalKind('xe');
+    setModalBaseClass('truck');
     setModalTint(colorPalette[objLabels.length % colorPalette.length]);
     setLabelModalOpen(true);
   };
@@ -294,6 +535,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     setEditingLabel(label);
     setModalName(label.name);
     setModalKind(label.kind);
+    setModalBaseClass(label.baseClass || (label.kind === 'nguoi' ? 'person' : 'truck'));
     setModalTint(label.tint || '#3b82f6');
     setLabelModalOpen(true);
   };
@@ -303,21 +545,15 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     if (!modalName.trim()) return;
 
     if (editingLabel) {
-      onRenameLabel(editingLabel.id, modalName.trim(), modalKind, modalTint);
+      onRenameLabel(editingLabel.id, modalName.trim(), modalBaseClass, modalKind, modalTint);
     } else {
-      onAddLabel(modalName.trim(), modalKind, modalTint);
+      onAddLabel(modalName.trim(), modalBaseClass, modalKind, modalTint);
     }
     setLabelModalOpen(false);
   };
 
-  // Filter boxes for current source and frame
-  const visibleBoxes = annSamples.filter((s) => {
-    if (s.srcId !== currentSource.id) return false;
-    if (isVideo) {
-      return s.frame === vidFrameIdx;
-    }
-    return true;
-  });
+  // Filter boxes for current source
+  const visibleBoxes = annSamples.filter((s) => s.srcId === currentSource.id);
 
   const selectedSample = annSamples.find((s) => s.id === selectedSampleId) || null;
 
@@ -345,8 +581,54 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
         </div>
 
         {/* Source Thumbnails Strip */}
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', overflowX: 'auto', paddingBottom: '3px' }}>
-          {annSources.map((s) => {
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', overflowX: 'auto', paddingBottom: '3px', alignItems: 'center' }}>
+          {/* Upload / Import Media Button */}
+          <label
+            style={{
+              position: 'relative',
+              flex: 'none',
+              width: '110px',
+              height: '66px',
+              borderRadius: '11px',
+              border: '1.5px dashed var(--line2)',
+              backgroundColor: 'rgba(255, 255, 255, 0.02)',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '4px',
+              transition: 'all 0.16s ease',
+              color: 'var(--ink2)',
+              boxSizing: 'border-box',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--acc)';
+              e.currentTarget.style.color = 'var(--acc)';
+              e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.06)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'var(--line2)';
+              e.currentTarget.style.color = 'var(--ink2)';
+              e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.02)';
+            }}
+            title="Tải lên ảnh hoặc video mới để khoanh mẫu"
+          >
+            <input
+              type="file"
+              accept="image/*,video/*"
+              style={{ display: 'none' }}
+              onChange={handleFileImport}
+            />
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <span style={{ fontSize: '10px', fontWeight: 600 }}>+ Tải ảnh/video</span>
+          </label>
+
+          {sources.map((s) => {
             const isSel = s.id === activeSourceId;
             return (
               <button
@@ -370,9 +652,9 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                   transition: 'all 0.16s ease'
                 }}
               >
-                {s.img ? (
+                {s.thumbnail || s.img ? (
                   <img
-                    src={s.img}
+                    src={resolveMediaUrl(s.thumbnail || s.img)}
                     alt={s.name}
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
@@ -393,6 +675,50 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                     </svg>
                   </div>
                 )}
+
+                {/* Sleek Trash Bin Icon for all media */}
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteTargetSource(s);
+                  }}
+                  title={`Xóa ${s.name}`}
+                    style={{
+                      position: 'absolute',
+                      top: '4px',
+                      left: '4px',
+                      width: '22px',
+                      height: '22px',
+                      borderRadius: '6px',
+                      backgroundColor: 'rgba(15, 23, 42, 0.75)',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      color: 'rgba(255, 255, 255, 0.75)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      zIndex: 15,
+                      padding: 0,
+                      transition: 'all 0.18s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
+                      e.currentTarget.style.color = '#ffffff';
+                      e.currentTarget.style.borderColor = '#ef4444';
+                      e.currentTarget.style.transform = 'scale(1.12)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.75)';
+                      e.currentTarget.style.color = 'rgba(255, 255, 255, 0.75)';
+                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                      e.currentTarget.style.transform = 'scale(1)';
+                    }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                  </div>
 
                 {s.kind === 'video' && (
                   <div
@@ -459,15 +785,39 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
             userSelect: 'none'
           }}
         >
-          {/* Background image or mock camera graphic */}
-          {currentSource.img ? (
+          {/* Video element if video, or image if static graphic */}
+          {isVideo ? (
+            <video
+              ref={videoRef}
+              key={currentSource.id + '-' + currentSource.img}
+              src={resolveMediaUrl(currentSource.img)}
+              playsInline
+              muted
+              preload="auto"
+              onTimeUpdate={handleVideoTimeUpdate}
+              onLoadedMetadata={handleVideoLoadedMetadata}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onError={(e) => {
+                console.warn('Video element failed to load source:', currentSource.img, e);
+              }}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'contain',
+                backgroundColor: '#000000',
+                pointerEvents: 'none'
+              }}
+            />
+          ) : currentSource.img ? (
             <img
-              src={currentSource.img}
+              src={resolveMediaUrl(currentSource.img)}
               alt="Source Feed"
               style={{
                 width: '100%',
                 height: '100%',
-                objectFit: 'cover',
+                objectFit: 'contain',
+                backgroundColor: '#000000',
                 pointerEvents: 'none'
               }}
             />
@@ -502,7 +852,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
               zIndex: 10
             }}
           >
-            {currentSource.name} {isVideo ? `· khung ${vidTicks[vidFrameIdx].label}` : ''}
+            {currentSource.name} {isVideo ? `· ${formatTime(currentTime)} / ${formatTime(duration)}` : ''}
           </div>
 
           {/* Crosshair Guide Lines */}
@@ -699,52 +1049,139 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
           )}
         </div>
 
-        {/* Video Scrubber Timeline if video source */}
+        {/* Video Scrubber & Playback Controls if video source */}
         {isVideo && (
           <div
             className="glass-card"
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '12px',
+              gap: '10px',
               marginTop: '12px',
               borderRadius: '12px',
-              padding: '10px 16px'
+              padding: '10px 16px',
+              flexWrap: 'wrap',
+              backgroundColor: 'var(--panel)',
+              border: '1px solid var(--line)'
             }}
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="var(--ink2)">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            <span style={{ fontSize: '11px', color: 'var(--ink3)', fontFamily: 'var(--font-mono)' }}>00:00</span>
-            <div style={{ flex: 1, height: '6px', borderRadius: '3px', backgroundColor: 'var(--raise)', position: 'relative' }}>
-              {vidTicks.map((tick, i) => (
+            {/* Play / Pause Toggle Button */}
+            <button
+              onClick={togglePlayPause}
+              style={{
+                width: '34px',
+                height: '34px',
+                borderRadius: '8px',
+                border: 'none',
+                backgroundColor: 'var(--acc)',
+                color: '#ffffff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                boxShadow: '0 2px 8px var(--acc-glow)',
+                flex: 'none'
+              }}
+              title={isPlaying ? 'Tạm dừng video' : 'Phát video'}
+            >
+              {isPlaying ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="4" width="4" height="16" rx="1" />
+                  <rect x="14" y="4" width="4" height="16" rx="1" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+              )}
+            </button>
+
+            {/* Fast Backward 5s */}
+            <button
+              onClick={() => handleSkip(-5)}
+              style={{
+                padding: '6px 9px',
+                borderRadius: '6px',
+                border: '1px solid var(--line2)',
+                backgroundColor: 'var(--card)',
+                color: 'var(--ink2)',
+                fontSize: '11px',
+                cursor: 'pointer',
+                fontWeight: 600
+              }}
+              title="Tua lùi 5 giây"
+            >
+              -5s
+            </button>
+
+            {/* Fast Forward 5s */}
+            <button
+              onClick={() => handleSkip(5)}
+              style={{
+                padding: '6px 9px',
+                borderRadius: '6px',
+                border: '1px solid var(--line2)',
+                backgroundColor: 'var(--card)',
+                color: 'var(--ink2)',
+                fontSize: '11px',
+                cursor: 'pointer',
+                fontWeight: 600
+              }}
+              title="Tua tới 5 giây"
+            >
+              +5s
+            </button>
+
+            {/* Current Playback Time */}
+            <span style={{ fontSize: '11.5px', color: 'var(--ink)', fontFamily: 'var(--font-mono)', minWidth: '38px' }}>
+              {formatTime(currentTime)}
+            </span>
+
+            {/* Interactive Timeline Range Scrubber */}
+            <div style={{ flex: 1, minWidth: '120px', display: 'flex', alignItems: 'center' }}>
+              <input
+                type="range"
+                min={0}
+                max={duration || 100}
+                step={0.05}
+                value={currentTime}
+                onChange={handleSeek}
+                style={{
+                  width: '100%',
+                  cursor: 'pointer',
+                  accentColor: 'var(--acc)',
+                  height: '6px'
+                }}
+              />
+            </div>
+
+            {/* Total Duration */}
+            <span style={{ fontSize: '11.5px', color: 'var(--ink3)', fontFamily: 'var(--font-mono)', minWidth: '38px' }}>
+              {formatTime(duration)}
+            </span>
+
+            {/* Playback Speed Controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', borderLeft: '1px solid var(--line)', paddingLeft: '8px' }}>
+              <span style={{ fontSize: '10.5px', color: 'var(--ink3)', marginRight: '2px' }}>Tốc độ:</span>
+              {[0.25, 0.5, 1, 1.5, 2].map((rate) => (
                 <button
-                  key={i}
-                  onClick={() => {
-                    setVidFrameIdx(i);
-                    setSelectedSampleId(null);
-                  }}
-                  title={`Khung hình ${tick.label}`}
+                  key={rate}
+                  onClick={() => handlePlaybackRateChange(rate)}
                   style={{
-                    position: 'absolute',
-                    left: tick.pct,
-                    top: '50%',
-                    width: '14px',
-                    height: '14px',
-                    margin: '-7px 0 0 -7px',
-                    borderRadius: '50%',
-                    border: '2px solid #ffffff',
-                    backgroundColor: vidFrameIdx === i ? 'var(--acc)' : 'var(--ink3)',
-                    cursor: 'pointer',
-                    padding: 0
+                    padding: '3px 6px',
+                    borderRadius: '5px',
+                    border: playbackRate === rate ? '1px solid var(--acc)' : '1px solid var(--line2)',
+                    backgroundColor: playbackRate === rate ? 'var(--accq)' : 'var(--card)',
+                    color: playbackRate === rate ? 'var(--acc)' : 'var(--ink3)',
+                    fontSize: '10.5px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
                   }}
-                />
+                >
+                  {rate}x
+                </button>
               ))}
             </div>
-            <span style={{ fontSize: '11px', color: 'var(--ink3)', fontFamily: 'var(--font-mono)' }}>02:30</span>
-            <span style={{ fontSize: '11.5px', color: 'var(--ink)' }}>
-              khung <b style={{ color: 'var(--acc)' }}>{vidTicks[vidFrameIdx].label}</b>
-            </span>
           </div>
         )}
 
@@ -907,7 +1344,13 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
               return (
                 <div
                   key={o.id}
-                  onClick={() => setSelectedLabelId(o.id)}
+                  onClick={() => {
+                    setSelectedLabelId(o.id);
+                    if (selectedSampleId) {
+                      onUpdateSample(selectedSampleId, { labelId: o.id });
+                      setSavedSuccessMsg(`✓ Đã gán nhãn "${o.name}" cho mẫu được chọn`);
+                    }
+                  }}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -1100,6 +1543,8 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
             </button>
           </div>
         </div>
+
+        <ObjectTrainingPanel readiness={readiness} />
       </div>
 
       {/* Modal: Thêm / Sửa Nhãn Đối Tượng */}
@@ -1192,7 +1637,10 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                 </label>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                   <button
-                    onClick={() => setModalKind('xe')}
+                    onClick={() => {
+                      setModalKind('xe');
+                      if (modalBaseClass === 'person') setModalBaseClass('truck');
+                    }}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -1213,7 +1661,10 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                   </button>
 
                   <button
-                    onClick={() => setModalKind('nguoi')}
+                    onClick={() => {
+                      setModalKind('nguoi');
+                      setModalBaseClass('person');
+                    }}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -1237,6 +1688,28 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
 
               {/* Field 3: Màu sắc nhận diện */}
               <div>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink2)', display: 'block', marginBottom: '8px' }}>
+                  Class model gốc:
+                </label>
+                <select
+                  value={modalBaseClass}
+                  aria-label="Class model gốc"
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setModalBaseClass(next);
+                    setModalKind(next === 'person' ? 'nguoi' : 'xe');
+                  }}
+                  style={{ width: '100%', marginBottom: '10px', padding: '9px 12px', borderRadius: '9px', border: '1px solid var(--line2)', backgroundColor: 'var(--bg)', color: 'var(--ink)', fontSize: '13px', outline: 'none' }}
+                >
+                  {baseClassOptions
+                    .filter((option) => modalKind === 'nguoi' ? option.value === 'person' : option.value !== 'person')
+                    .map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                </select>
+                <div style={{ marginBottom: '8px', fontSize: '10.5px', color: 'var(--ink3)' }}>
+                  Chọn class model gốc; lưu mẫu không tự huấn luyện model.
+                </div>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink2)', display: 'block', marginBottom: '8px' }}>
                   Màu sắc nhận diện bounding box:
                 </label>
@@ -1317,6 +1790,104 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                 }}
               >
                 {editingLabel ? 'Cập nhật' : 'Thêm nhãn'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Custom Delete Confirmation Modal */}
+      {deleteTargetSource && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.78)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99999,
+            animation: 'fadeIn 0.15s ease forwards',
+          }}
+          onClick={() => setDeleteTargetSource(null)}
+        >
+          <div
+            className="glass-panel"
+            style={{
+              width: '90%',
+              maxWidth: '430px',
+              borderRadius: '16px',
+              padding: '24px',
+              backgroundColor: 'var(--panel)',
+              border: '1px solid var(--line)',
+              boxShadow: '0 24px 60px rgba(0,0,0,0.75)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
+              <div
+                style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '10px',
+                  backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                  color: '#ef4444',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flex: 'none',
+                }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: 'var(--ink)' }}>
+                  Xác nhận xóa tệp
+                </h3>
+                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: 'var(--ink3)' }}>
+                  Hành động này sẽ xóa vĩnh viễn tệp
+                </p>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '13px', color: 'var(--ink2)', lineHeight: 1.5, margin: '14px 0 24px' }}>
+              Bạn có chắc chắn muốn xóa tệp <b style={{ color: 'var(--ink)' }}>"{deleteTargetSource.name}"</b> không? Tất cả các mẫu đã khoanh trên tệp này cũng sẽ bị xóa.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                onClick={() => setDeleteTargetSource(null)}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--line2)',
+                  backgroundColor: 'var(--card)',
+                  color: 'var(--ink2)',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Hủy
+              </button>
+              <button
+                onClick={confirmDeleteSource}
+                style={{
+                  padding: '8px 20px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  backgroundColor: '#ef4444',
+                  color: '#ffffff',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 10px rgba(239, 68, 68, 0.4)',
+                }}
+              >
+                Xác nhận xóa
               </button>
             </div>
           </div>

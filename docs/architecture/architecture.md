@@ -3,7 +3,7 @@
 ## 1. Tóm tắt để ra quyết định
 
 - **Mode:** `design-new`
-- **Product revision đã đọc:** `docs/product/product.md` — Đã duyệt, 2026-08-17T14:43:00+07:00
+- **Product revision đã đọc:** `docs/product/product.md` — Đã duyệt; extension `ext-20260820-object-detection-training` (r1) đã phê duyệt
 - **Mục tiêu kỹ thuật:** Xây dựng hệ thống giám sát camera AI gồm 4 module (M1 Cổng, M2 Bãi Kiểm, M3 Cài đặt, M4 Q&A), chạy local, demo 2 tuần, single user
 - **Kết luận feasibility:** Khả thi có điều kiện
 - **Khuyến nghị chính:** Python AI Worker + Node.js/Express API + React Vite SPA + PostgreSQL Neon (cloud) + Prisma ORM + Gemini 3.5 Flash Lite function calling
@@ -36,7 +36,8 @@
 | Ghi sự kiện: timestamp, biển số, làn, trạng thái, ảnh cắt, clip path | Python Worker ghi vào PostgreSQL Neon qua asyncpg (batch insert); ảnh cắt và clip lưu local filesystem | Khả thi có điều kiện | Cần Internet cho Neon; disk local cho clip/ảnh |
 | AI Q&A bằng ngôn ngữ tự nhiên, trả lời kèm clip reference | Node.js nhận câu hỏi → gọi Gemini 3.5 Flash Lite với bộ function tool riêng → function gọi Prisma query DB → LLM tổng hợp + trả clip reference | Khả thi | BR-09: chỉ query dữ liệu đã lưu, không real-time |
 | Vẽ zone đa giác trên khung hình thật | React Canvas component cho phép click/drag vẽ polygon; lưu tọa độ % (normalized) vào DB qua Node.js API | Khả thi | Cần snapshot frame từ camera để làm nền vẽ |
-| Nhãn đối tượng: import ảnh/video, vẽ bbox, đặt tên | React upload component + canvas bbox editor; lưu ảnh/metadata vào local filesystem + DB | Khả thi | M3 labeling tool đơn giản, không train model |
+| Nhãn đối tượng: import ảnh/video, vẽ bbox, đặt tên | React upload component + canvas bbox editor; lưu ảnh/metadata vào local filesystem + DB | Khả thi | Mẫu phải giữ liên kết tới media/frame gốc để có thể xuất dataset bất biến |
+| Huấn luyện thủ công từ mẫu nhãn đối tượng | Node điều phối job riêng; Python training runner xuất dataset, fine-tune, đánh giá và tạo candidate model version | Khả thi có điều kiện | GPU 4 GB phải ưu tiên inference; candidate chỉ kích hoạt sau đánh giá và thao tác người dùng |
 | Single user, no auth, local deployment | Không có authentication layer; CORS restricted đến localhost; env file cho secrets | Khả thi | Secret (Neon URL, Gemini key) không được commit vào Git |
 
 ---
@@ -53,6 +54,8 @@
   - **R2: Neon connectivity** — Demo cần Internet. Mitigated bằng: hiển thị error rõ ràng nếu DB không kết nối được (AC-09 pattern)
   - **R3: Clip storage** — Không có giới hạn disk tự động. Mitigated bằng: cảnh báo khi disk còn < 1GB; clip field = null nếu ghi thất bại (BR-05)
   - **R4: OCR chất lượng thấp** — Biển số mờ vẫn ghi sự kiện với confidence thấp (Business rule đã cover)
+  - **R5: Tranh chấp GPU train/inference** — Training không được làm FPS Area Monitor thấp hơn ngưỡng vận hành. Mitigated bằng GPU governor: giới hạn batch/VRAM, mixed precision, đo FPS/VRAM, pause training khi Area FPS tiến sát 8 FPS và chỉ resume khi ổn định; inference đang chạy luôn có quyền ưu tiên.
+  - **R6: Mẫu nhãn kém hoặc lệch nguồn video** — Fine-tune có thể giảm chất lượng tổng quát. Mitigated bằng dataset snapshot, split theo source media, evaluation hold-out và không tự động thay model đang chạy.
 - **Dependency ngoài:** Gemini API (cần API key), Neon PostgreSQL (cần account + connection string), PaddleOCR hoặc EasyOCR (pip install)
 - **Giả định kỹ thuật:**
   - Máy intern có CPU đủ cho YOLO-nano × 2 stream tại 640×480
@@ -164,6 +167,7 @@ User nhập câu hỏi → React POST tới Node.js API → Node.js gọi Gemini
 | Real-time (browser) | WebSocket (từ Node.js proxy) | Bidirectional, low latency, native browser support | SSE nếu chỉ cần server-push |
 | Cross-tab alert | BroadcastChannel API | Native browser, không cần server roundtrip | SharedWorker nếu cần complex logic |
 | Inter-process (Python↔Node) | WebSocket (Python expose ws server, Node connect) | Đơn giản, JSON message, không cần gRPC | HTTP polling nếu latency không quan trọng |
+| Custom model lifecycle | Dataset snapshot + Ultralytics fine-tune process + immutable candidate versions | Tái lập được kết quả, tách train khỏi inference, rollback rõ ràng | Nếu candidate không đạt ngưỡng accuracy/FPS → giữ nguyên model active |
 
 ---
 
@@ -206,6 +210,9 @@ HiLab-SentriAI/
 ├── data/
 │   ├── clips/             # MP4 clips (local)
 │   └── crops/             # Crop images (local)
+│   └── training/          # Dataset snapshots, báo cáo evaluation (local)
+├── models/
+│   └── versions/          # Candidate/active custom model artifacts, immutable theo version
 ├── docs/
 │   ├── product/product.md
 │   └── architecture/architecture.md
@@ -228,6 +235,9 @@ HiLab-SentriAI/
 | RAM overflow từ circular buffer | 2 stream × buffer 10s × 5 FPS = 100 frames/stream | Giới hạn buffer size bằng deque(maxlen=50); encode JPEG Q=60 trong buffer (~15-30KB/frame) | Chất lượng clip buffer thấp hơn live feed |
 | Gemini API timeout | Q&A phụ thuộc Gemini external API | Timeout 15s; trả lỗi rõ ràng cho user nếu timeout | Không có local fallback LLM |
 | LLM query an toàn | LLM không sinh SQL tùy tiện vào DB | Function calling với tool set định nghĩa sẵn — LLM chỉ gọi được các function đã define | Nếu user hỏi ngoài scope tool → LLM báo "không tìm thấy thông tin" |
+| Training không làm gián đoạn monitor | BR-11 và ngưỡng FPS Area Monitor | Training runner là process tách biệt; governor giảm batch/tạm dừng trước khi ảnh hưởng inference; active model không bị ghi đè | Thời gian train dài hơn trên GPU 4 GB |
+| Candidate model an toàn | Fine-tune lỗi, OOM, hoặc regression | Artifact version bất biến, checksum/metadata, evaluate trước promote, activate nguyên tử và giữ version trước để rollback | Cần thêm dung lượng local cho artifact/dataset |
+| Dataset tái lập và không rò split | Accuracy phải đo trên dữ liệu chưa thấy khi train | Snapshot mẫu tại thời điểm chạy; split theo source image/video, không theo frame đơn lẻ; báo cáo sample bị loại | Dataset nhỏ có thể chưa đủ đại diện mọi video |
 
 ---
 
@@ -246,12 +256,63 @@ Một câu hỏi mở không blocking:
 |---|---|---|---|
 | GA-01 | Máy intern đủ CPU chạy YOLOv8-nano × 2 stream tại 640×480, ≥ 5 FPS | Phải giảm thêm resolution hoặc chạy 1 stream tại 1 thời điểm | Benchmark ngay khi có máy; fallback: YOLOv8-nano ở 320×320 |
 | GA-02 | Demo luôn có Internet (Neon + Gemini) | Cần chuyển sang SQLite hoặc PostgreSQL Docker | Quyết định lúc cần; không thay đổi architecture tổng thể |
-| GA-03 | COCO class của YOLO bao gồm đủ các loại xe trong proposal | Một số loại (xe nâng, xe cẩu) không có trong COCO → gán CHƯA XÁC ĐỊNH | BR-03/BR-04 đã cover trường hợp này; không blocking |
+| GA-03 | Mẫu gán nhãn đủ đa dạng để fine-tune các lớp ngoài COCO (ví dụ xe nâng) | Candidate không đạt accuracy hoặc dễ nhầm lớp xe | Chỉ đánh giá/promotion khi đạt ngưỡng trên hold-out theo source; bổ sung mẫu từ video thất bại nếu chưa đạt |
 | GA-04 | PaddleOCR hoặc EasyOCR đạt ≥ 80% accuracy với biển số Việt Nam trong video mẫu | Phải thử cả hai, có thể cần preprocessing (sharpen, denoise) | Không thay đổi architecture; chỉ đổi OCR engine |
 | GA-05 | Neon free tier đủ (~500MB, 100 compute hours) cho 2 tuần demo | Cần nâng gói hoặc chuyển sang local PostgreSQL | Theo dõi usage; fallback rõ ràng |
 
 ---
 
+## 11. Bổ sung kiến trúc: huấn luyện từ mẫu nhãn đối tượng
+
+**Luồng 8 — Train, đánh giá và kích hoạt model:** Người dùng yêu cầu train thủ công trong M3 → Node tạo training job và chụp snapshot bất biến của các sample hợp lệ → dataset exporter resolve media gốc, trích frame video đúng timestamp, chuẩn hoá bbox và tách train/validation theo source media → Python training runner fine-tune custom detector Ultralytics trong process riêng → GPU governor theo dõi FPS của Area Monitor, VRAM và tiến trình train; governor hạ batch hoặc pause/resume job trước khi inference bị ảnh hưởng → runner đánh giá candidate trên validation hold-out, đo quality lẫn tốc độ inference và regression cho người/các lớp xe nền → lưu artifact, metrics và trạng thái candidate version → chỉ thao tác activate rõ ràng của người dùng mới nạp candidate như một lớp bổ sung vào pipeline hybrid; base YOLO vẫn tiếp tục nhận diện người/container/các xe COCO. Lỗi hoặc đánh giá không đạt giữ nguyên baseline và custom version đang active.
+
+**Ranh giới thành phần:** React chỉ khởi tạo job, hiển thị tiến độ/báo cáo và yêu cầu activate/rollback. Node API là owner của job state, dataset snapshot metadata, version state và quyền chuyển trạng thái. Python Worker tiếp tục phục vụ video inference; Python training runner độc lập, không dùng cùng model instance đang active. PostgreSQL lưu metadata bền vững; local filesystem chỉ lưu media, dataset snapshot và model artifact theo version. Database/API/UI schema chi tiết thuộc tài liệu downstream, không được suy diễn trong extension này.
+
+**Chính sách hybrid và GPU:** Base YOLO là detector luôn-on cho người/container/các phương tiện COCO. Custom candidate chỉ đóng góp các lớp đã train (ví dụ `forklift`) và không được đổi label COCO nền nếu không có bằng chứng regression. Activate chỉ thay custom version đang bổ sung; rollback tắt custom version đó để base YOLO tiếp tục chạy. Trên máy hiện tại RTX 3050 Laptop 4 GB, fine-tune ưu tiên cấu hình adaptive batch, mixed precision và checkpoint/resume. Governor coi Area FPS 8 FPS là ngưỡng bảo vệ: khi metric đến sát hoặc thấp hơn ngưỡng, training chuyển sang paused/throttled; chỉ tiếp tục sau một cửa sổ FPS ổn định. Training không được làm dừng Gate/Area stream.
+
 ## Extension registry
 
-Chưa có extension.
+### Extension: `ext-20260820-object-detection-training` — architecture r1
+
+```yaml
+schema: team1-extension/v1
+extension_id: ext-20260820-object-detection-training
+title: "Huấn luyện thủ công từ mẫu nhãn đối tượng"
+artifact: architecture
+revision: 1
+status: approved
+depends_on: []
+supersedes: []
+sources:
+  product: 1
+approved_at: "2026-08-20T16:00:00+07:00"
+approved_by: "HuuThuan — chat approval of GPU governor and hybrid base-model preservation"
+```
+
+#### Architecture delta
+
+Thêm lifecycle local cho custom detection model: training job thủ công, snapshot dataset từ LabelSample, Python training runner tách inference, candidate model version, evaluation hold-out và activate/rollback có chủ đích. Candidate là augmentation của base YOLO, không phải thay thế model nền; đánh giá bắt buộc gồm regression người/các lớp xe nền. GPU governor bảo vệ Area Monitor tại ngưỡng 8 FPS thay vì coi GPU là tài nguyên không giới hạn.
+
+#### Canonical sections changed
+
+§1, §3, §4, §6.3, §7, §8, §10 và §11; các quyết định nền Python Worker + Node API + React + PostgreSQL và luồng Gate/Area hiện có không đổi.
+
+#### Components and interfaces affected
+
+M3 label workflow, Node job/version orchestration, local dataset/artifact storage, Python training runner, base/custom hybrid detector và Area inference telemetry. Contract API, schema database và UI chi tiết sẽ được chốt ở database design và delivery plan.
+
+#### Security, reliability and operational impact
+
+Không nhận arbitrary artifact/path từ client; artifact được version hoá bất biến và kiểm tra trước promote. Job lỗi/OOM không chạm active model. Split theo source media giảm leakage; sample lỗi bị báo cáo và loại khỏi snapshot, không sửa mẫu gốc. Governor có telemetry và resume để vận hành không bị silent degradation.
+
+#### Backend and frontend handoff impact
+
+Backend cần job state, validation/export, process supervision, version registry và atomic activation. Frontend cần điều khiển train thủ công, hiển thị tiến độ/metrics/cảnh báo pause, danh sách candidate và activate/rollback. Cả hai phải giữ nhãn đã lưu tiếp tục dùng cho zone ngay cả khi chưa train.
+
+#### Unchanged architecture decisions
+
+Inference real-time tiếp tục ở Python Worker, browser qua Node proxy, metadata bền vững ở PostgreSQL và media/artifact cục bộ. Base YOLO luôn chạy; custom model chỉ augment các class đã train. Không thêm cloud training, auth layer hoặc thay transport realtime.
+
+#### Validation and blockers
+
+Architecture hợp lệ khi downstream database design định nghĩa metadata/version/job tối thiểu và delivery plan có benchmark giữ Area ≥8 FPS, held-out evaluation theo source, OOM/pause/resume và rollback test. Không có architecture blocker; accuracy tuyệt đối trên mọi video không thể cam kết nếu dữ liệu train không đại diện.

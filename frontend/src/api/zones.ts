@@ -5,7 +5,7 @@ export type ZoneRuleType = 'PROHIBIT_SPECIFIED' | 'ALLOW_SPECIFIED';
 
 export interface ZoneRecord {
   id: string;
-  cameraId: 'BAI-KIEM';
+  cameraId: string;
   name: string;
   polygonPoints: Array<{ x: number; y: number }>;
   ruleType: ZoneRuleType;
@@ -16,7 +16,7 @@ export interface ZoneRecord {
 }
 
 export interface ZoneWriteInput {
-  cameraId: 'BAI-KIEM';
+  cameraId: string;
   name: string;
   polygonPoints: Array<{ x: number; y: number }>;
   ruleType: ZoneRuleType;
@@ -62,13 +62,14 @@ export function zoneRecordToView(
 export function zoneViewToWrite(
   zone: PolygonZone,
   availableLabels: string[],
+  cameraId: string = 'BAI-KIEM',
 ): ZoneWriteInput {
   const allowedLabels = availableLabels.filter((label) => Boolean(zone.types[label]));
   const forbiddenLabels = availableLabels.filter((label) => !zone.types[label]);
   const useAllowRule = allowedLabels.length <= forbiddenLabels.length;
 
   return {
-    cameraId: 'BAI-KIEM',
+    cameraId,
     name: zone.name.trim(),
     polygonPoints: zone.points.map(([x, y]) => ({ x: x / 100, y: y / 100 })),
     ruleType: useAllowRule ? 'ALLOW_SPECIFIED' : 'PROHIBIT_SPECIFIED',
@@ -77,8 +78,9 @@ export function zoneViewToWrite(
   };
 }
 
-export async function getZones(): Promise<ZoneRecord[]> {
-  return apiClient.get<ZoneRecord[]>('/zones?camera_id=BAI-KIEM');
+export async function getZones(cameraId?: string): Promise<ZoneRecord[]> {
+  const query = cameraId ? `?camera_id=${encodeURIComponent(cameraId)}` : '';
+  return apiClient.get<ZoneRecord[]>(`/zones${query}`);
 }
 
 export async function createZone(data: ZoneWriteInput): Promise<ZoneRecord> {
@@ -87,7 +89,7 @@ export async function createZone(data: ZoneWriteInput): Promise<ZoneRecord> {
 
 export async function updateZone(
   id: string,
-  data: Partial<Omit<ZoneWriteInput, 'cameraId'>>,
+  data: Partial<ZoneWriteInput>,
 ): Promise<ZoneRecord> {
   return apiClient.put<ZoneRecord>(`/zones/${encodeURIComponent(id)}`, data);
 }
@@ -96,7 +98,11 @@ export async function deleteZone(id: string): Promise<void> {
   await apiClient.delete<undefined>(`/zones/${encodeURIComponent(id)}`);
 }
 
-export async function getAreaCameraSnapshot(): Promise<string> {
-  const response = await apiClient.get<{ image: string }>('/cameras/BAI-KIEM/snapshot');
+export async function getCameraSnapshot(cameraId: string = 'BAI-KIEM'): Promise<string> {
+  const response = await apiClient.get<{ image: string }>(`/cameras/${encodeURIComponent(cameraId)}/snapshot`);
   return response.image;
+}
+
+export async function getAreaCameraSnapshot(): Promise<string> {
+  return getCameraSnapshot('BAI-KIEM');
 }

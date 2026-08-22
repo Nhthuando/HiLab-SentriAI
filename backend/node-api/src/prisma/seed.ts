@@ -1,7 +1,7 @@
 /**
- * prisma/seed.ts — Initial Database Seed for SentriAI
+ * prisma/seed.ts — Comprehensive Initial Database Seed for SentriAI
  *
- * Seeds standard object labels and camera zones into PostgreSQL Neon DB.
+ * Seeds registered vehicles, object labels, and camera zones (BAI-KIEM & GATE-01) into PostgreSQL Neon DB.
  */
 import dotenv from 'dotenv';
 import path from 'path';
@@ -14,14 +14,33 @@ dotenv.config();
 import { prisma } from './client';
 
 async function seed() {
-  console.log('Seeding initial object labels and zones into Neon Database...');
+  console.log('Seeding initial data into Neon Database...');
 
-  // 1. Seed Object Labels
+  // 1. Seed Registered Vehicles (VS-GATE-LIVE)
+  const vehicles = [
+    { plateNumber: '15R-158.45', status: 'KNOWN', note: 'Xe container Hải Phòng' },
+    { plateNumber: '29A-123.45', status: 'KNOWN', note: 'Xe văn phòng Hà Nội' },
+    { plateNumber: '51C-888.99', status: 'STRANGER', note: 'Xe lạ chưa khai báo' },
+    { plateNumber: '7XYZ123', status: 'KNOWN', note: 'Xe chuyên gia quốc tế' },
+    { plateNumber: 'ABC-1234', status: 'KNOWN', note: 'Xe đối tác vận tải' },
+  ];
+
+  for (const v of vehicles) {
+    await prisma.registeredVehicle.upsert({
+      where: { plateNumber: v.plateNumber },
+      update: {},
+      create: v,
+    });
+  }
+  console.log(`[Seed] Seeded ${vehicles.length} registered vehicles.`);
+
+  // 2. Seed Object Labels (VS-SETTINGS-LABEL / VS-AREA-VIOLATION)
   const labels = [
-    { baseClass: 'truck', vietnameseName: 'Container' },
+    { baseClass: 'container', vietnameseName: 'Container' },
     { baseClass: 'truck', vietnameseName: 'Xe tải' },
-    { baseClass: 'truck', vietnameseName: 'Xe nâng' },
-    { baseClass: 'truck', vietnameseName: 'Xe cẩu' },
+    { baseClass: 'forklift', vietnameseName: 'Xe nâng' },
+    { baseClass: 'forklift', vietnameseName: 'Xe cẩu' },
+    { baseClass: 'personnel_carrier', vietnameseName: 'Xe chở người' },
     { baseClass: 'car', vietnameseName: 'Xe con' },
     { baseClass: 'motorcycle', vietnameseName: 'Xe máy' },
     { baseClass: 'bicycle', vietnameseName: 'Xe đạp' },
@@ -37,7 +56,7 @@ async function seed() {
   }
   console.log(`[Seed] Seeded ${labels.length} object labels.`);
 
-  // 2. Seed Camera Zones
+  // 3. Seed Camera Zones (VS-SETTINGS-ZONE / VS-GATE-LIVE / VS-AREA-VIOLATION)
   const zones = [
     // BAI-KIEM Zones
     {

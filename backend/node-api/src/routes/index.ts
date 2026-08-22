@@ -5,19 +5,26 @@
  * - /api/v1/health
  * - /api/v1/vehicles      (VS-SETTINGS-VEHICLE)
  * - /api/v1/zones         (VS-SETTINGS-ZONE)
+ * - /api/v1/cameras       (VS-SETTINGS-ZONE)
  * - /api/v1/labels        (VS-SETTINGS-LABEL)
+ * - /api/v1/samples       (VS-SETTINGS-LABEL)
+ * - /api/v1/upload        (VS-SETTINGS-LABEL)
  * - /api/v1/events/gate   (VS-GATE-LIVE)
  * - /api/v1/events/area   (VS-AREA-VIOLATION)
- * - /api/v1/qa            (VS-QA-CHAT)
- * - /api/v1/analytics     (VS-KPI-ANALYTICS)
- * - /api/v1/clips         (VS-QA-CHAT / Media stream)
  */
 import { Router } from 'express';
-import { areaEventsRouter } from './areaEvents';
 import { camerasRouter } from './cameras';
+import { eventsRouter } from './events';
+import { areaEventsRouter } from './areaEvents';
 import { healthRouter } from './health';
+import { labelsRouter } from './labels';
+import { samplesRouter } from './samples';
 import { testErrorRouter } from './testError';
+import { uploadRouter } from './upload';
+import { vehiclesRouter } from './vehicles';
 import { zonesRouter } from './zones';
+import { trainingDatasetsRouter } from './trainingDatasets';
+import { trainingJobsRouter } from './trainingJobs';
 
 const apiRouter = Router();
 
@@ -27,19 +34,24 @@ apiRouter.use('/health', healthRouter);
 // Mount Test Error router for API contract verification
 apiRouter.use('/test-error', testErrorRouter);
 
-// Mount VS-AREA-VIOLATION events router
-apiRouter.use('/events/area', areaEventsRouter);
+// Mount Registered Vehicles CRUD (VS-SETTINGS-VEHICLE)
+apiRouter.use('/vehicles', vehiclesRouter);
 
-// Mount VS-SETTINGS-ZONE routes (BAI-KIEM only)
+// Mount Zones & Cameras (VS-SETTINGS-ZONE)
 apiRouter.use('/zones', zonesRouter);
 apiRouter.use('/cameras', camerasRouter);
 
-// Downstream feature routes will be mounted here by their respective vertical slices
-// e.g.:
-// apiRouter.use('/vehicles', vehiclesRouter);
-// apiRouter.use('/labels', labelsRouter);
-// apiRouter.use('/events/gate', gateEventsRouter);
-// apiRouter.use('/qa', qaRouter);
-// apiRouter.use('/analytics', analyticsRouter);
+// Mount Object Labels & Annotation Samples (VS-SETTINGS-LABEL)
+apiRouter.use('/labels', labelsRouter);
+apiRouter.use('/samples', samplesRouter);
+apiRouter.use('/upload', uploadRouter);
+apiRouter.use('/training/datasets', trainingDatasetsRouter);
+apiRouter.use('/training/jobs', trainingJobsRouter);
+
+// Mount area events first so the paginated response contract wins over the legacy route.
+apiRouter.use('/events/area', areaEventsRouter);
+
+// Mount Monitoring Events (VS-GATE-LIVE, VS-AREA-VIOLATION)
+apiRouter.use('/events', eventsRouter);
 
 export { apiRouter };

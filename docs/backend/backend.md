@@ -2,6 +2,21 @@
 
 > Maintained by backend workers for integration handoff to frontend and team orchestrators.
 
+## 0. FDN-TRAINING-PERSISTENCE — verified training-data foundation
+
+- **Status**: `backend_verified` on 2026-08-20 against the user-confirmed Neon development/test database.
+- **Public API**: no endpoint is introduced by this foundation. Existing `POST /api/v1/samples/batch` accepts only a server-registered imported image/video source, records media kind and selected video-frame timestamp, and stores a normalised bbox. `GET /api/v1/samples` converts the bbox back to canvas percentages for the existing UI.
+- **Persistence rules**: legacy samples without source provenance remain intact but cannot be exported for training; no frame or source is inferred. The database permits exactly one active custom augmentation, keeps base YOLO outside the version table, and rejects incomplete video provenance or an active/rejected model without evaluation.
+- **Verification**: Prisma schema validation/migration deploy, Node build, REST contract suite, and a create/read/delete sample-provenance fixture all passed. The fixture was removed after the check.
+
+## 0.1 Object-detection training runtime — partial handoff
+
+- **OpenAPI contract**: `backend/node-api/openapi/training.yaml`.
+- **Ready API flow**: `GET /training/datasets/readiness` → `POST /training/datasets/export` → `POST /training/jobs` → `POST /training/jobs/{id}/start`; jobs and versions are listed through `GET /training/jobs` and `GET /training/jobs/versions`.
+- **Safety contract**: export copies verified source media into an immutable snapshot and separates train/validation by source; a job creates `CANDIDATE` only after checksum and held-out quality gate pass. `REJECTED` versions cannot activate. `POST /training/jobs/versions/{id}/use` activates only a custom augmentation, and `POST /training/jobs/versions/return` disables it while base YOLO remains live.
+- **Camera contract**: a training runner starts only when monitors are idle and stops at the next guarded batch if a camera becomes active; it then records `PAUSED_GPU` and retries later. The Area worker loads only the active custom artifact and otherwise retains base detections.
+- **Known verification boundary**: no actual labelled training dataset exists yet, so GPU training, held-out metrics and active-candidate FPS have not been run or claimed as passed.
+
 ## 1. VS-AREA-VIOLATION — Giám sát khu vực (Camera BAI-KIEM)
 
 - **Status**: Stabilized implementation; formal verification pending

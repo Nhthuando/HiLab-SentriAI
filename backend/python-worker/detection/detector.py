@@ -1,7 +1,7 @@
 """
-detection.detector — YOLOv8 Object Detection Pipeline
+detection.detector — Ultralytics YOLO Object Detection Pipeline
 
-Loads lightweight YOLOv8-nano model, runs inference on 640x480 frames,
+Loads the configured lightweight YOLO model, runs inference on video frames,
 and maps COCO classes to domain Vietnamese labels.
 """
 import logging
@@ -13,6 +13,7 @@ import numpy as np
 from ultralytics import YOLO
 
 logger = logging.getLogger("sentriai.detection")
+DEFAULT_YOLO_MODEL = "yolo11n.pt"
 
 # Vietnamese domain translation mapping for COCO classes
 COCO_VIETNAMESE_MAPPING: Dict[str, str] = {
@@ -32,17 +33,30 @@ COCO_VIETNAMESE_MAPPING: Dict[str, str] = {
     "handbag": "Túi xách",
     "suitcase": "Vali",
     "forklift": "Xe nâng",
+    "container handler": "Xe nâng",
+    "reach stacker": "Xe nâng",
+    "container": "Container",
+    "shipping container": "Container",
+    "personnel carrier": "Xe chở người",
+    "utility vehicle": "Xe chở người",
+    "golf cart": "Xe chở người",
 }
 
 
 class YoloDetector:
     def __init__(
         self,
-        model_path: str = "yolov8n.pt",
+        model_path: Optional[str] = None,
         conf_threshold: float = 0.25,
         target_classes: Optional[List[str]] = None,
     ):
-        self.model_path = self._resolve_model_path(model_path)
+        configured_model = (
+            model_path
+            or os.environ.get("SENTRIAI_BASE_YOLO_MODEL")
+            or os.environ.get("YOLO_MODEL_PATH")
+            or DEFAULT_YOLO_MODEL
+        )
+        self.model_path = self._resolve_model_path(configured_model)
         self.conf_threshold = conf_threshold
         self.target_classes = target_classes or ["car", "truck", "motorcycle", "bus", "person", "bicycle"]
         self.model: Optional[YOLO] = None
@@ -75,14 +89,18 @@ class YoloDetector:
         return model_path
 
     def _load_model(self) -> None:
-        """Load YOLO model."""
+        """Load YOLO model and assign GPU device."""
         try:
-            device_str = "cuda:0" if self.device == 0 else "cpu"
-            logger.info("Loading YOLO model from %s on %s...", self.model_path, device_str)
+            import torch
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            self.device = "cpu"
+
+        try:
+            logger.info("Loading YOLO model from %s on %s...", self.model_path, self.device)
             self.model = YOLO(self.model_path)
-            if self.device == 0:
-                self.model.to(device_str)
-            logger.info("YOLO model loaded successfully.")
+            self.model.to(self.device)
+            logger.info("YOLO model loaded successfully on %s.", self.device)
         except Exception as exc:
             logger.error("Failed to load YOLO model: %s", exc)
             raise

@@ -2,13 +2,14 @@
 stream.pipeline — Real-Time Camera AI Inference Pipeline
 
 Coordinates StreamReader, YoloDetector, CircularBuffer, and StreamEmitter
-in an asynchronous real-time processing loop per camera stream.
+with decoupled background AI inference for smooth high-FPS video streaming.
 """
 import asyncio
 import base64
+import concurrent.futures
 import logging
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -26,9 +27,9 @@ class CameraPipeline:
         self,
         camera_id: str,
         source: Optional[str] = None,
-        target_fps: float = 10.0,
-        resolution: Tuple[int, int] = (640, 480),
-        jpeg_quality: int = 70,
+        target_fps: float = 20.0,
+        resolution: Tuple[int, int] = (854, 480),
+        jpeg_quality: int = 75,
         emitter: Optional[StreamEmitter] = None,
         detector: Optional[YoloDetector] = None,
     ):
@@ -47,6 +48,10 @@ class CameraPipeline:
         self.buffer = CircularBuffer(max_seconds=12.0, target_fps=target_fps)
         self.emitter = emitter or StreamEmitter()
 
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self._cached_detections: List[Dict[str, Any]] = []
+        self._ai_busy = False
+
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self.frame_count = 0
@@ -54,31 +59,42 @@ class CameraPipeline:
         self._last_fps_calc = time.time()
         self._fps_counter = 0
 
+    async def _run_ai_background(self, frame: np.ndarray) -> None:
+        if self._ai_busy:
+            return
+        self._ai_busy = True
+        try:
+            loop = asyncio.get_event_loop()
+            self._cached_detections = await loop.run_in_executor(
+                self._executor, self.detector.detect, frame
+            )
+        except Exception as exc:
+            logger.debug("[%s] AI detection error: %s", self.camera_id, exc)
+        finally:
+            self._ai_busy = False
+
     def process_single_frame(self) -> Dict[str, Any]:
-        """
-        Process a single frame synchronously (read -> detect -> buffer -> encode).
-        Useful for unit tests and snapshot generation.
-        """
+        """Process single frame quickly."""
         success, frame = self.reader.read_frame()
         if not success or frame is None:
             return {"success": False, "detections": []}
 
         now = time.time()
-        # 1. Run YOLO object detection
-        detections = self.detector.detect(frame)
-
-        # 2. Store in circular buffer (for 10s clip generation)
         self.buffer.append(frame, now)
+        self.frame_count += 1
 
-        # 3. Encode JPEG frame to base64
+        # Trigger AI every 3 frames in background
+        if self.frame_count % 3 == 0 and not self._ai_busy:
+            asyncio.create_task(self._run_ai_background(frame.copy()))
+
+        # Encode JPEG frame to base64
         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
         ret, buf = cv2.imencode(".jpg", frame, encode_params)
         if not ret:
-            return {"success": False, "detections": detections}
+            return {"success": False, "detections": self._cached_detections}
 
         b64_str = f"data:image/jpeg;base64,{base64.b64encode(buf.tobytes()).decode('ascii')}"
 
-        self.frame_count += 1
         self._fps_counter += 1
         elapsed = now - self._last_fps_calc
         if elapsed >= 1.0:
@@ -92,7 +108,7 @@ class CameraPipeline:
             "timestamp": int(now * 1000),
             "frame": frame,
             "image_base64": b64_str,
-            "detections": detections,
+            "detections": self._cached_detections,
             "fps": self.fps_measured or self.target_fps,
         }
 
@@ -104,11 +120,9 @@ class CameraPipeline:
         while self._running:
             start_t = time.time()
             try:
-                # Run frame processing in executor if heavy, or directly
-                result = await asyncio.to_thread(self.process_single_frame)
+                result = self.process_single_frame()
 
-                if result["success"]:
-                    # Emit frame packet to Node.js proxy via WebSocket
+                if result.get("success"):
                     await self.emitter.emit_frame(
                         camera_id=self.camera_id,
                         image_base64=result["image_base64"],
@@ -125,14 +139,12 @@ class CameraPipeline:
         logger.info("[%s] Camera pipeline loop ended.", self.camera_id)
 
     def start(self) -> None:
-        """Start the background pipeline task."""
         if self._running:
             return
         self._running = True
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
-        """Stop the background pipeline task and release resources."""
         self._running = False
         if self._task:
             try:
@@ -140,20 +152,7 @@ class CameraPipeline:
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self._task.cancel()
             self._task = None
-
+        self._executor.shutdown(wait=False)
         self.reader.release()
         await self.emitter.close()
         logger.info("[%s] Camera pipeline stopped cleanly.", self.camera_id)
-
-    def is_running(self) -> bool:
-        return self._running
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Return operational stats for this camera stream."""
-        return {
-            "camera_id": self.camera_id,
-            "running": self._running,
-            "frame_count": self.frame_count,
-            "fps": self.fps_measured,
-            "buffered_frames": self.buffer.get_frame_count(),
-        }
