@@ -12,12 +12,24 @@ websockets>=13.0,<17.0
 opencv-python>=4.10.0.84
 # ultralytics YOLO; requires numpy>=1.23; use latest stable for Python 3.14 compat
 ultralytics>=8.2.100
+# ByteTrack dependency; keep explicit to prevent Ultralytics runtime auto-install/restart warnings.
+lap==0.5.13
+
+# --- GPU runtime used by the production V9 worker on Windows/Python 3.12 ---
+# Keep this index so a clean install does not silently fall back to CPU-only PyTorch.
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124; sys_platform == "win32" and python_version == "3.12"
+torchvision==0.21.0+cu124; sys_platform == "win32" and python_version == "3.12"
 
 # --- OCR (choose one, both listed for flexibility) ---
 # PaddleOCR requires paddlepaddle; install separately on target machine:
 #   pip install paddlepaddle paddleocr
 # EasyOCR (simpler install, works without paddlepaddle):
 easyocr>=1.7.1
+
+# fast-alpr imports ONNX Runtime directly, so keep both explicit for reproducible installs.
+fast-alpr==0.4.0
+onnxruntime==1.29.0
 
 # --- Geometry ---
 Shapely>=2.0.6
