@@ -240,6 +240,13 @@ def _validate_violation_id(violation_id: str) -> str:
         raise HTTPException(status_code=422, detail="violation_id must be a UUID") from exc
 
 
+def _validate_activity_id(activity_id: str) -> str:
+    try:
+        return str(uuid.UUID(activity_id))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="activity_id must be a UUID") from exc
+
+
 @app.post("/cameras/{camera_id}/violations/{violation_id}/clip")
 async def request_violation_clip(camera_id: str, violation_id: str):
     pipeline = _area_clip_pipeline(camera_id)
@@ -255,6 +262,24 @@ async def get_violation_clip(camera_id: str, violation_id: str):
     state = await pipeline.clip_service.get_state(_validate_violation_id(violation_id))
     if state is None:
         raise HTTPException(status_code=404, detail="Area violation not found")
+    return state
+
+
+@app.post("/cameras/{camera_id}/activities/{activity_id}/clip")
+async def request_activity_clip(camera_id: str, activity_id: str):
+    pipeline = _area_clip_pipeline(camera_id)
+    state = await pipeline.activity_clip_service.request(_validate_activity_id(activity_id))
+    if state is None:
+        raise HTTPException(status_code=404, detail="Area activity not found")
+    return state
+
+
+@app.get("/cameras/{camera_id}/activities/{activity_id}/clip")
+async def get_activity_clip(camera_id: str, activity_id: str):
+    pipeline = _area_clip_pipeline(camera_id)
+    state = await pipeline.activity_clip_service.get_state(_validate_activity_id(activity_id))
+    if state is None:
+        raise HTTPException(status_code=404, detail="Area activity not found")
     return state
 
 

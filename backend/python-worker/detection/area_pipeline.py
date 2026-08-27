@@ -32,7 +32,7 @@ from db.repositories import (
     touch_area_activity_collection,
 )
 from detection.area_event_queue import AreaEventQueue, RetryableAreaTransitionError
-from detection.event_clip_service import EventClipGenerator, EventClipService
+from detection.event_clip_service import ActivityClipStore, EventClipGenerator, EventClipService
 from detection.tracked_detector import TrackedYoloDetector
 from stream.emitter import StreamEmitter
 from stream.reader import StreamReader
@@ -110,6 +110,7 @@ class AreaPipeline:
         record_violation_clips: bool = True,
         rolling_archive: Optional[RollingArchive] = None,
         clip_service: Optional[EventClipService] = None,
+        activity_clip_service: Optional[EventClipService] = None,
     ):
         self.camera_id = camera_id
         self.target_fps = target_fps
@@ -180,6 +181,13 @@ class AreaPipeline:
             generator=EventClipGenerator(self.clips_dir),
             archive=self.rolling_archive,
             queue_limit=int(os.getenv("AREA_CLIP_QUEUE_LIMIT", "8")),
+        )
+        self.activity_clip_service = activity_clip_service or EventClipService(
+            camera_id=self.camera_id,
+            generator=EventClipGenerator(self.clips_dir),
+            archive=self.rolling_archive,
+            queue_limit=int(os.getenv("AREA_CLIP_QUEUE_LIMIT", "8")),
+            store=ActivityClipStore(),
         )
 
         self._running = False
@@ -475,6 +483,7 @@ class AreaPipeline:
             await self._event_queue.reset_generation(self._runtime_generation)
             await self._activity_queue.reset_generation(self._runtime_generation)
             await self.clip_service.reset()
+            await self.activity_clip_service.reset()
 
             deleted_records = await self.persistence.delete_all(self.camera_id)
             await self.activity_persistence.delete_all(self.camera_id)
@@ -865,6 +874,7 @@ class AreaPipeline:
         self._event_queue.start()
         self._activity_queue.start()
         self.clip_service.start()
+        self.activity_clip_service.start()
         if self.rolling_archive is not None:
             self.rolling_archive.start()
         self.zone_sync.start()
@@ -897,6 +907,7 @@ class AreaPipeline:
                 logger.warning("[%s] Activity heartbeat failed during shutdown: %s", self.camera_id, exc)
             self._activity_heartbeat_task = None
         await self.clip_service.stop()
+        await self.activity_clip_service.stop()
         if self.rolling_archive is not None:
             await self.rolling_archive.stop()
 

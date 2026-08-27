@@ -25,6 +25,10 @@ import { vehiclesRouter } from './vehicles';
 import { zonesRouter } from './zones';
 import { trainingDatasetsRouter } from './trainingDatasets';
 import { trainingJobsRouter } from './trainingJobs';
+import { qaRouter } from './qa';
+import { chatRouter } from './chat';
+import { clipsRouter } from './clips';
+import { areaActivitiesRouter } from './areaActivities';
 
 const apiRouter = Router();
 
@@ -47,6 +51,10 @@ apiRouter.use('/samples', samplesRouter);
 apiRouter.use('/upload', uploadRouter);
 apiRouter.use('/training/datasets', trainingDatasetsRouter);
 apiRouter.use('/training/jobs', trainingJobsRouter);
+apiRouter.use('/qa', qaRouter);
+apiRouter.use('/chat', chatRouter);
+apiRouter.use('/clips', clipsRouter);
+apiRouter.use('/area-activities', areaActivitiesRouter);
 
 // Mount area events first so the paginated response contract wins over the legacy route.
 apiRouter.use('/events/area', areaEventsRouter);

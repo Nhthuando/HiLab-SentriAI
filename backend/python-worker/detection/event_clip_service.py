@@ -15,8 +15,13 @@ from typing import Any, Mapping, Optional
 import imageio_ffmpeg
 
 from db.repositories import (
+    claim_area_activity_clip,
     claim_violation_clip,
+    get_area_activity_session,
     get_zone_violation,
+    mark_area_activity_clip_failed,
+    mark_area_activity_clip_generating,
+    mark_area_activity_clip_ready,
     mark_violation_clip_failed,
     mark_violation_clip_generating,
     mark_violation_clip_ready,
@@ -24,6 +29,44 @@ from db.repositories import (
 from stream.rolling_archive import RollingArchive
 
 logger = logging.getLogger("sentriai.detection.event_clip")
+
+
+class ViolationClipStore:
+    id_field = "violationId"
+
+    async def get(self, event_id: str):
+        return await get_zone_violation(event_id)
+
+    async def claim(self, event_id: str):
+        return await claim_violation_clip(event_id)
+
+    async def mark_generating(self, event_id: str):
+        return await mark_violation_clip_generating(event_id)
+
+    async def mark_ready(self, event_id: str, clip_path: str):
+        return await mark_violation_clip_ready(event_id, clip_path)
+
+    async def mark_failed(self, event_id: str, status: str, error: str):
+        return await mark_violation_clip_failed(event_id, status, error)
+
+
+class ActivityClipStore:
+    id_field = "activityId"
+
+    async def get(self, event_id: str):
+        return await get_area_activity_session(event_id)
+
+    async def claim(self, event_id: str):
+        return await claim_area_activity_clip(event_id)
+
+    async def mark_generating(self, event_id: str):
+        return await mark_area_activity_clip_generating(event_id)
+
+    async def mark_ready(self, event_id: str, clip_path: str):
+        return await mark_area_activity_clip_ready(event_id, clip_path)
+
+    async def mark_failed(self, event_id: str, status: str, error: str):
+        return await mark_area_activity_clip_failed(event_id, status, error)
 
 
 @dataclass(frozen=True)
@@ -257,10 +300,12 @@ class EventClipService:
         generator: EventClipGenerator,
         archive: Optional[RollingArchive] = None,
         queue_limit: int = 8,
+        store: Optional[Any] = None,
     ) -> None:
         self.camera_id = camera_id
         self.generator = generator
         self.archive = archive
+        self.store = store or ViolationClipStore()
         self._queue: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=max(1, int(queue_limit)))
         self._worker: Optional[asyncio.Task[None]] = None
         self._jobs: set[str] = set()
@@ -297,25 +342,24 @@ class EventClipService:
         if was_running:
             self.start()
 
-    @staticmethod
-    def _state(record: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    def _state(self, record: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
         if not record:
             return None
         status = str(record.get("clip_status") or ("READY" if record.get("clip_path") else "NOT_REQUESTED"))
         clip_path = record.get("clip_path") if status == "READY" else None
         return {
-            "violationId": str(record.get("id")),
+            self.store.id_field: str(record.get("id")),
             "status": status,
             "clipUrl": f"/data/clips/{Path(str(clip_path)).name}" if clip_path else None,
             "message": record.get("clip_error"),
         }
 
-    async def get_state(self, violation_id: str) -> Optional[dict[str, Any]]:
-        return self._state(await get_zone_violation(violation_id))
+    async def get_state(self, event_id: str) -> Optional[dict[str, Any]]:
+        return self._state(await self.store.get(event_id))
 
-    async def request(self, violation_id: str) -> Optional[dict[str, Any]]:
+    async def request(self, event_id: str) -> Optional[dict[str, Any]]:
         async with self._request_lock:
-            record = await get_zone_violation(violation_id)
+            record = await self.store.get(event_id)
             if not record or str(record.get("camera_id")) != self.camera_id:
                 return None
             current = self._state(record)
@@ -325,25 +369,25 @@ class EventClipService:
                 cached = self.generator.clips_dir / Path(str(clip_path)).name if clip_path else None
                 if cached and cached.is_file() and cached.stat().st_size > 1024:
                     return current
-                await mark_violation_clip_failed(violation_id, "FAILED", "Cached clip file is missing")
+                await self.store.mark_failed(event_id, "FAILED", "Cached clip file is missing")
             elif current["status"] in {"QUEUED", "GENERATING"}:
-                if violation_id in self._jobs:
+                if event_id in self._jobs:
                     return current
                 # Recover a request left behind by a previous worker process.
-                await mark_violation_clip_failed(violation_id, "FAILED", "Previous clip job was interrupted")
+                await self.store.mark_failed(event_id, "FAILED", "Previous clip job was interrupted")
             elif current["status"] == "EXPIRED":
                 return current
 
-            claimed = await claim_violation_clip(violation_id)
+            claimed = await self.store.claim(event_id)
             if claimed is None:
-                return await self.get_state(violation_id)
+                return await self.get_state(event_id)
             self.start()
             try:
-                self._queue.put_nowait(violation_id)
-                self._jobs.add(violation_id)
+                self._queue.put_nowait(event_id)
+                self._jobs.add(event_id)
             except asyncio.QueueFull:
-                failed = await mark_violation_clip_failed(
-                    violation_id,
+                failed = await self.store.mark_failed(
+                    event_id,
                     "FAILED",
                     "Clip queue is full; try again",
                 )
@@ -353,14 +397,14 @@ class EventClipService:
     async def _run(self) -> None:
         generation = self._generation
         while True:
-            violation_id = await self._queue.get()
-            if violation_id is None:
+            event_id = await self._queue.get()
+            if event_id is None:
                 self._queue.task_done()
                 return
             try:
                 if generation != self._generation:
                     continue
-                record = await mark_violation_clip_generating(violation_id)
+                record = await self.store.mark_generating(event_id)
                 if not record:
                     continue
                 source_kind = str(record.get("source_kind") or "UNAVAILABLE")
@@ -374,21 +418,21 @@ class EventClipService:
                 if generation != self._generation:
                     continue
                 if result.status == "READY" and result.clip_path:
-                    await mark_violation_clip_ready(violation_id, result.clip_path)
+                    await self.store.mark_ready(event_id, result.clip_path)
                 else:
-                    await mark_violation_clip_failed(
-                        violation_id,
+                    await self.store.mark_failed(
+                        event_id,
                         "EXPIRED" if result.status == "EXPIRED" else "FAILED",
                         result.error or "Clip generation failed",
                     )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("Clip job failed for %s: %s", violation_id, type(exc).__name__)
+                logger.warning("Clip job failed for %s: %s", event_id, type(exc).__name__)
                 try:
-                    await mark_violation_clip_failed(violation_id, "FAILED", "Clip generation failed")
+                    await self.store.mark_failed(event_id, "FAILED", "Clip generation failed")
                 except Exception:
                     pass
             finally:
-                self._jobs.discard(violation_id)
+                self._jobs.discard(event_id)
                 self._queue.task_done()
