@@ -632,6 +632,240 @@ async def close_stale_open_violations(
         return 0
 
 
+# Area activity sessions (all detectable labels inside BAI-KIEM zones)
+
+async def create_area_activity_session(
+    session_id: Union[str, uuid.UUID],
+    camera_id: str,
+    zone_id: Union[str, uuid.UUID],
+    zone_name: str,
+    object_label: str,
+    canonical_class: str,
+    policy_result: str,
+    entered_at: datetime,
+    last_seen_at: datetime,
+    track_id: Optional[int],
+    entry_point: Dict[str, float],
+    source_kind: str,
+    source_ref: Optional[str],
+    source_position_seconds: Optional[float],
+    source_timestamp: Optional[datetime],
+    event_fingerprint: Optional[str],
+    violation_id: Optional[Union[str, uuid.UUID]] = None,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    """Insert one OPEN track-zone session; local replay signatures are idempotent."""
+    if policy_result not in {"ALLOWED", "VIOLATION"}:
+        raise ValueError("policy_result must be ALLOWED or VIOLATION")
+    if source_kind not in {"LOCAL_FILE", "LIVE", "UNAVAILABLE"}:
+        raise ValueError("source_kind must be LOCAL_FILE, LIVE, or UNAVAILABLE")
+    executor = _get_executor(conn_or_pool)
+    sid = uuid.UUID(session_id) if isinstance(session_id, str) else session_id
+    zid = uuid.UUID(zone_id) if isinstance(zone_id, str) else zone_id
+    vid = uuid.UUID(violation_id) if isinstance(violation_id, str) else violation_id
+    now = datetime.now(timezone.utc)
+    row = await executor.fetchrow(
+        """
+        INSERT INTO area_activity_sessions (
+            id, camera_id, zone_id, zone_name, object_label, canonical_class,
+            policy_result, session_status, entered_at, last_seen_at, track_id,
+            entry_point, source_kind, source_ref, source_position_seconds,
+            source_timestamp, event_fingerprint, violation_id, clip_status,
+            created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9, $10,
+                $11::jsonb, $12, $13, $14, $15, $16, $17,
+                'NOT_REQUESTED', $18, $18)
+        ON CONFLICT (event_fingerprint) WHERE event_fingerprint IS NOT NULL
+        DO UPDATE SET
+            last_seen_at = GREATEST(area_activity_sessions.last_seen_at, EXCLUDED.last_seen_at),
+            updated_at = EXCLUDED.updated_at,
+            violation_id = COALESCE(area_activity_sessions.violation_id, EXCLUDED.violation_id)
+        RETURNING *
+        """,
+        sid,
+        camera_id,
+        zid,
+        zone_name,
+        object_label,
+        canonical_class,
+        policy_result,
+        entered_at,
+        last_seen_at,
+        track_id,
+        json.dumps(entry_point, separators=(",", ":")),
+        source_kind,
+        source_ref,
+        source_position_seconds,
+        source_timestamp,
+        event_fingerprint,
+        vid,
+        now,
+    )
+    return _record_to_dict(row)
+
+
+async def close_area_activity_session(
+    session_id: Union[str, uuid.UUID],
+    exited_at: datetime,
+    duration_seconds: int,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    """Close one session at its last confirmed inside observation."""
+    executor = _get_executor(conn_or_pool)
+    sid = uuid.UUID(session_id) if isinstance(session_id, str) else session_id
+    row = await executor.fetchrow(
+        """
+        UPDATE area_activity_sessions
+        SET session_status = 'CLOSED', last_seen_at = $2, exited_at = $2,
+            duration_seconds = GREATEST(0, $3), updated_at = $4
+        WHERE id = $1
+        RETURNING *
+        """,
+        sid,
+        exited_at,
+        int(duration_seconds),
+        datetime.now(timezone.utc),
+    )
+    return _record_to_dict(row)
+
+
+async def delete_area_activity_sessions(
+    camera_id: str,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> int:
+    executor = _get_executor(conn_or_pool)
+    result = await executor.execute(
+        "DELETE FROM area_activity_sessions WHERE camera_id = $1",
+        camera_id,
+    )
+    try:
+        return int(result.rsplit(" ", 1)[-1])
+    except (AttributeError, ValueError):
+        return 0
+
+
+async def touch_area_activity_collection(
+    camera_id: str,
+    observed_at: Optional[datetime] = None,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    """Create the coverage marker and refresh it at most once per minute."""
+    executor = _get_executor(conn_or_pool)
+    observed = observed_at or datetime.now(timezone.utc)
+    row = await executor.fetchrow(
+        """
+        INSERT INTO area_activity_collection_state (
+            camera_id, started_at, last_observed_at, updated_at
+        ) VALUES ($1, $2, $2, $2)
+        ON CONFLICT (camera_id) DO UPDATE
+        SET last_observed_at = EXCLUDED.last_observed_at,
+            updated_at = EXCLUDED.updated_at
+        WHERE area_activity_collection_state.last_observed_at
+              <= EXCLUDED.last_observed_at - INTERVAL '60 seconds'
+        RETURNING *
+        """,
+        camera_id,
+        observed,
+    )
+    return _record_to_dict(row)
+
+
+async def get_area_activity_session(
+    session_id: Union[str, uuid.UUID],
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    executor = _get_executor(conn_or_pool)
+    sid = uuid.UUID(session_id) if isinstance(session_id, str) else session_id
+    return _record_to_dict(await executor.fetchrow(
+        "SELECT * FROM area_activity_sessions WHERE id = $1",
+        sid,
+    ))
+
+
+async def claim_area_activity_clip(
+    session_id: Union[str, uuid.UUID],
+    requested_at: Optional[datetime] = None,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    executor = _get_executor(conn_or_pool)
+    sid = uuid.UUID(session_id) if isinstance(session_id, str) else session_id
+    requested = requested_at or datetime.now(timezone.utc)
+    return _record_to_dict(await executor.fetchrow(
+        """
+        UPDATE area_activity_sessions
+        SET clip_status = 'QUEUED', clip_requested_at = $2,
+            clip_error = NULL, updated_at = $2
+        WHERE id = $1 AND clip_status IN ('NOT_REQUESTED', 'FAILED', 'EXPIRED')
+        RETURNING *
+        """,
+        sid,
+        requested,
+    ))
+
+
+async def mark_area_activity_clip_generating(
+    session_id: Union[str, uuid.UUID],
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    executor = _get_executor(conn_or_pool)
+    sid = uuid.UUID(session_id) if isinstance(session_id, str) else session_id
+    return _record_to_dict(await executor.fetchrow(
+        """
+        UPDATE area_activity_sessions
+        SET clip_status = 'GENERATING', clip_error = NULL, updated_at = $2
+        WHERE id = $1 AND clip_status = 'QUEUED'
+        RETURNING *
+        """,
+        sid,
+        datetime.now(timezone.utc),
+    ))
+
+
+async def mark_area_activity_clip_ready(
+    session_id: Union[str, uuid.UUID],
+    clip_path: str,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    executor = _get_executor(conn_or_pool)
+    sid = uuid.UUID(session_id) if isinstance(session_id, str) else session_id
+    return _record_to_dict(await executor.fetchrow(
+        """
+        UPDATE area_activity_sessions
+        SET clip_status = 'READY', clip_path = $2, clip_error = NULL, updated_at = $3
+        WHERE id = $1
+        RETURNING *
+        """,
+        sid,
+        clip_path,
+        datetime.now(timezone.utc),
+    ))
+
+
+async def mark_area_activity_clip_failed(
+    session_id: Union[str, uuid.UUID],
+    status: str,
+    error: str,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    if status not in {"FAILED", "EXPIRED"}:
+        raise ValueError("status must be FAILED or EXPIRED")
+    executor = _get_executor(conn_or_pool)
+    sid = uuid.UUID(session_id) if isinstance(session_id, str) else session_id
+    return _record_to_dict(await executor.fetchrow(
+        """
+        UPDATE area_activity_sessions
+        SET clip_status = $2, clip_path = NULL, clip_error = $3, updated_at = $4
+        WHERE id = $1
+        RETURNING *
+        """,
+        sid,
+        status,
+        error[:2000],
+        datetime.now(timezone.utc),
+    ))
+
+
 async def get_active_custom_model(
     conn_or_pool: Optional[DbExecutor] = None,
 ) -> Optional[Dict[str, Any]]:

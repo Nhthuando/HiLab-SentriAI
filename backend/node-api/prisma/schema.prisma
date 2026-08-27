@@ -76,6 +76,7 @@ model Zone {
   updatedAt     DateTime        @default(now()) @updatedAt @db.Timestamptz() @map("updated_at")
 
   violations ZoneViolation[]
+  activities AreaActivitySession[]
 
   @@unique([cameraId, name], name: "uq_zones_camera_name")
   @@index([cameraId, isActive], name: "idx_zones_camera_active")
@@ -117,6 +118,53 @@ model ZoneViolation {
   // CHECK chk_zone_violations_status: status IN ('OPEN', 'CLOSED')
   // CHECK chk_zone_violations_duration: duration_seconds IS NULL OR duration_seconds >= 0
   // Added as raw SQL in migration
+}
+
+model AreaActivitySession {
+  id                    String    @id @default(uuid()) @db.Uuid
+  cameraId              String    @db.VarChar(50) @map("camera_id")
+  zoneId                String?   @db.Uuid @map("zone_id")
+  zoneName              String    @db.VarChar(100) @map("zone_name")
+  objectLabel           String    @db.VarChar(100) @map("object_label")
+  canonicalClass        String    @db.VarChar(100) @map("canonical_class")
+  policyResult          String    @db.VarChar(20) @map("policy_result")
+  sessionStatus         String    @default("OPEN") @db.VarChar(20) @map("session_status")
+  enteredAt             DateTime  @db.Timestamptz() @map("entered_at")
+  lastSeenAt            DateTime  @db.Timestamptz() @map("last_seen_at")
+  exitedAt              DateTime? @db.Timestamptz() @map("exited_at")
+  durationSeconds       Int?      @map("duration_seconds")
+  trackId               Int?      @map("track_id")
+  entryPoint            Json      @map("entry_point")
+  sourceKind            String    @db.VarChar(20) @map("source_kind")
+  sourceRef             String?   @db.VarChar(1000) @map("source_ref")
+  sourcePositionSeconds Float?    @db.Real @map("source_position_seconds")
+  sourceTimestamp       DateTime? @db.Timestamptz() @map("source_timestamp")
+  eventFingerprint      String?   @db.VarChar(64) @map("event_fingerprint")
+  violationId           String?   @unique @db.Uuid @map("violation_id")
+  clipPath              String?   @db.VarChar(500) @map("clip_path")
+  clipStatus            String    @default("NOT_REQUESTED") @db.VarChar(20) @map("clip_status")
+  clipRequestedAt       DateTime? @db.Timestamptz() @map("clip_requested_at")
+  clipError             String?   @db.Text @map("clip_error")
+  createdAt             DateTime  @default(now()) @db.Timestamptz() @map("created_at")
+  updatedAt             DateTime  @default(now()) @updatedAt @db.Timestamptz() @map("updated_at")
+
+  zone Zone? @relation(fields: [zoneId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([enteredAt(sort: Desc)], name: "idx_area_activity_entered_desc")
+  @@index([canonicalClass, enteredAt(sort: Desc)], name: "idx_area_activity_class_entered")
+  @@index([zoneId, enteredAt(sort: Desc)], name: "idx_area_activity_zone_entered")
+  @@index([policyResult, enteredAt(sort: Desc)], name: "idx_area_activity_policy_entered")
+  @@index([sessionStatus, lastSeenAt(sort: Desc)], name: "idx_area_activity_open_last_seen")
+  @@map("area_activity_sessions")
+}
+
+model AreaActivityCollectionState {
+  cameraId      String   @id @db.VarChar(50) @map("camera_id")
+  startedAt     DateTime @db.Timestamptz() @map("started_at")
+  lastObservedAt DateTime @db.Timestamptz() @map("last_observed_at")
+  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamptz() @map("updated_at")
+
+  @@map("area_activity_collection_state")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
