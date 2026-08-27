@@ -15,10 +15,7 @@ import type {
   ObjectKind
 } from './types';
 import {
-  INITIAL_ZONES,
-  INITIAL_QA_MESSAGES,
-  QA_KNOWLEDGE_BASE,
-  QA_FALLBACK
+  INITIAL_ZONES
 } from './mockData';
 
 import { Header } from './components/Header';
@@ -38,6 +35,9 @@ import {
   zoneRecordToView,
 } from './api/zones';
 import { getVehicles } from './api/vehicles';
+import { askQA } from './api/qa';
+import { clearChatHistory, getChatHistory } from './api/chat';
+import { ApiError } from './api/client';
 
 const LEGACY_DEMO_SOURCE_IDS = new Set(['src1', 'src2']);
 
@@ -99,7 +99,10 @@ export const App: React.FC = () => {
     return [];
   });
   const [annSamples, setAnnSamples] = useState<AnnotationSample[]>([]);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_QA_MESSAGES);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isChatHistoryLoading, setIsChatHistoryLoading] = useState(true);
+  const [isChatSending, setIsChatSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   const handleUpdateSources = useCallback((updated: AnnotationSource[]) => {
     setAnnSources(updated);
@@ -446,29 +449,87 @@ export const App: React.FC = () => {
     return true;
   };
 
-  // Chat Q&A handler
-  const handleSendMessage = (text: string) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    getChatHistory()
+      .then((history) => {
+        if (cancelled) return;
+        setChatMessages(history.map((message) => ({
+          id: message.id,
+          role: message.role === 'assistant' ? 'ai' : 'user',
+          text: message.text,
+          timestamp: message.createdAt,
+          clip: message.clip,
+          evidence: message.evidence,
+        })));
+        setChatError(null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn('Failed to load Q&A chat history:', error);
+        setChatError('Không thể tải lịch sử chat, vui lòng thử lại.');
+      })
+      .finally(() => {
+        if (!cancelled) setIsChatHistoryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const getQaErrorMessage = (error: unknown): string => {
+    if (error instanceof ApiError && error.status === 504) {
+      return 'AI phản hồi quá chậm, vui lòng thử lại';
+    }
+    if (error instanceof ApiError && error.status === 503) {
+      return 'AI đang không khả dụng, vui lòng thử lại';
+    }
+    return 'Không thể kết nối Trợ lý AI, vui lòng thử lại';
+  };
+
+  // Chat Q&A handlers
+  const handleSendMessage = async (text: string) => {
+    if (isChatSending) return;
     const userMsg: ChatMessage = {
       id: 'user-' + Date.now(),
       role: 'user',
       text,
-      timestamp: clockStr
+      timestamp: new Date().toISOString()
     };
 
-    const queryLower = text.toLowerCase();
-    const match = QA_KNOWLEDGE_BASE.find((item) =>
-      item.keys.some((k) => queryLower.includes(k))
-    ) || QA_FALLBACK;
+    setChatMessages((prev) => [...prev, userMsg]);
+    setChatError(null);
+    setIsChatSending(true);
+    try {
+      const response = await askQA(text);
+      setChatMessages((prev) => [...prev, {
+        id: response.id,
+        role: 'ai',
+        text: response.text,
+        timestamp: response.createdAt,
+        clip: response.clip,
+        evidence: response.evidence,
+      }]);
+    } catch (error) {
+      console.warn('Q&A request failed:', error);
+      setChatError(getQaErrorMessage(error));
+    } finally {
+      setIsChatSending(false);
+    }
+  };
 
-    const aiMsg: ChatMessage = {
-      id: 'ai-' + Date.now(),
-      role: 'ai',
-      text: match.text,
-      clip: match.clip,
-      timestamp: clockStr
-    };
-
-    setChatMessages((prev) => [...prev, userMsg, aiMsg]);
+  const handleClearChat = async () => {
+    if (isChatSending) return;
+    setChatError(null);
+    try {
+      await clearChatHistory();
+      setChatMessages([]);
+    } catch (error) {
+      console.warn('Failed to clear Q&A chat history:', error);
+      setChatError('Không thể xóa lịch sử chat, vui lòng thử lại.');
+    }
   };
 
   const acceptAreaAlert = (notification: FloatingNotification): boolean => {
@@ -836,7 +897,10 @@ export const App: React.FC = () => {
           <AIQAChat
             messages={chatMessages}
             onSendMessage={handleSendMessage}
-            onClearChat={() => setChatMessages(INITIAL_QA_MESSAGES)}
+            onClearChat={handleClearChat}
+            isHistoryLoading={isChatHistoryLoading}
+            isSending={isChatSending}
+            error={chatError}
           />
         )}
       </main>

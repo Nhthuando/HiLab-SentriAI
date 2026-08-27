@@ -8,4 +8,6 @@ export * from './zones';
 export * from './labels';
 export * from './events';
 export * from './qa';
+export * from './chat';
+export * from './areaActivities';
 export * from './analytics';

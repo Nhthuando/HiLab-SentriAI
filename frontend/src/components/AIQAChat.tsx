@@ -1,15 +1,88 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { ChatMessage } from '../types';
+import type { ActivityEvidence, ChatMessage } from '../types';
+import { resolveMediaUrl } from '../api/client';
+import { useDeferredEvidenceClip } from '../hooks/useDeferredEvidenceClip';
 
 interface AIQAChatProps {
   messages: ChatMessage[];
-  onSendMessage: (text: string) => void;
-  onClearChat?: () => void;
+  onSendMessage: (text: string) => Promise<void>;
+  onClearChat?: () => Promise<void>;
+  isHistoryLoading: boolean;
+  isSending: boolean;
+  error: string | null;
 }
 
-export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onClearChat }) => {
+function renderAssistantText(text: string): React.ReactNode {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={`${index}-${part}`}>{part.slice(2, -2)}</strong>;
+    }
+    return <React.Fragment key={`${index}-${part}`}>{part}</React.Fragment>;
+  });
+}
+
+const ActivityEvidenceCard: React.FC<{ initial: ActivityEvidence }> = ({ initial }) => {
+  const { evidence, request, requestError, isBusy } = useDeferredEvidenceClip(initial);
+  const canRetry = evidence.canRequestClip && ['NOT_REQUESTED', 'FAILED', 'EXPIRED'].includes(evidence.clipStatus);
+  const clipId = evidence.clipStatus === 'READY' ? evidence.clipId : null;
+
+  return (
+    <div className="glass-panel" style={{ marginTop: '10px', borderRadius: '14px', overflow: 'hidden', maxWidth: '480px', border: '1px solid var(--line2)' }}>
+      {clipId ? (
+        <div style={{ aspectRatio: '16/9', background: '#06080b' }}>
+          <video
+            controls
+            preload="none"
+            src={resolveMediaUrl(`/api/v1/clips/${encodeURIComponent(clipId)}/stream`)}
+            aria-label={`Clip hoạt động: ${evidence.title}`}
+            style={{ width: '100%', height: '100%', display: 'block', objectFit: 'contain' }}
+          />
+        </div>
+      ) : (
+        <div style={{ padding: '18px', background: 'linear-gradient(135deg, color-mix(in srgb, var(--ok) 9%, var(--card)), var(--card))' }}>
+          <div style={{ fontSize: '12px', color: 'var(--ink2)', marginBottom: '6px' }}>{evidence.cam} · {evidence.from}–{evidence.to}</div>
+          <div style={{ fontWeight: 650, color: 'var(--ink)', marginBottom: '12px' }}>{evidence.title}</div>
+          {canRetry ? (
+            <button
+              type="button"
+              onClick={() => void request()}
+              disabled={isBusy}
+              title="Video chỉ được tạo sau khi bấm nút này"
+              style={{ border: '1px solid color-mix(in srgb, var(--ok) 55%, var(--line2))', borderRadius: '8px', padding: '7px 13px', background: 'color-mix(in srgb, var(--ok) 14%, var(--raise))', color: 'var(--ink)', cursor: 'pointer', fontWeight: 650 }}
+            >
+              ▶ {evidence.clipStatus === 'NOT_REQUESTED' ? 'Xem video' : 'Thử tạo lại video'}
+            </button>
+          ) : isBusy ? (
+            <div role="status" style={{ color: 'var(--ink2)', fontSize: '12px' }}>Đang tạo video 10 giây…</div>
+          ) : (
+            <div style={{ color: 'var(--ink3)', fontSize: '12px' }}>{evidence.message || 'Không thể tạo video cho lượt hoạt động này.'}</div>
+          )}
+          {(requestError || evidence.message) && (
+            <div role="alert" style={{ marginTop: '9px', color: 'var(--p0)', fontSize: '11.5px' }}>{requestError || evidence.message}</div>
+          )}
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px' }}>
+        <span style={{ flex: 1, fontSize: '12px', color: 'var(--ink2)' }}>{evidence.title}</span>
+        {clipId && (
+          <a href={resolveMediaUrl(`/api/v1/clips/${encodeURIComponent(clipId)}/download`)} download style={{ color: 'var(--acc)', fontSize: '11.5px', fontWeight: 650, textDecoration: 'none' }}>
+            Tải clip 10s
+          </a>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export const AIQAChat: React.FC<AIQAChatProps> = ({
+  messages,
+  onSendMessage,
+  onClearChat,
+  isHistoryLoading,
+  isSending,
+  error,
+}) => {
   const [inputVal, setInputVal] = useState<string>('');
-  const [isPlayingClipId, setIsPlayingClipId] = useState<string | null>(null);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -22,8 +95,8 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
 
   const handleSend = () => {
     const trimmed = inputVal.trim();
-    if (!trimmed) return;
-    onSendMessage(trimmed);
+    if (!trimmed || isSending || isHistoryLoading) return;
+    void onSendMessage(trimmed);
     setInputVal('');
   };
 
@@ -42,7 +115,7 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, isSending, error]);
 
   return (
     <div
@@ -56,17 +129,19 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
       }}
     >
       {/* Top Action Bar if user wants to clear or see message count */}
-      {messages.length > 2 && onClearChat && (
+      {messages.length > 0 && onClearChat && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
           <button
-            onClick={onClearChat}
+            onClick={() => void onClearChat()}
+            disabled={isSending}
             style={{
               fontSize: '11.5px',
               fontWeight: 500,
               color: 'var(--ink3)',
               backgroundColor: 'transparent',
               border: 'none',
-              cursor: 'pointer',
+              cursor: isSending ? 'not-allowed' : 'pointer',
+              opacity: isSending ? 0.55 : 1,
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
@@ -95,6 +170,72 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
           padding: '6px 4px'
         }}
       >
+        {isHistoryLoading && (
+          <div
+            role="status"
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '10px',
+              color: 'var(--ink3)',
+              fontSize: '13px',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: '16px',
+                height: '16px',
+                border: '2px solid var(--line2)',
+                borderTopColor: 'var(--acc)',
+                borderRadius: '50%',
+                animation: 'qa-spin 0.8s linear infinite',
+              }}
+            />
+            Đang tải lịch sử chat…
+          </div>
+        )}
+
+        {!isHistoryLoading && messages.length === 0 && (
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              textAlign: 'center',
+              padding: '28px 18px',
+            }}
+          >
+            <span
+              style={{
+                width: '46px',
+                height: '46px',
+                borderRadius: '14px',
+                background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 8px 24px rgba(59, 130, 246, 0.3)',
+                marginBottom: '14px',
+              }}
+            >
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2">
+                <path d="M12 3v4M12 17v4M3 12h4M17 12h4" />
+              </svg>
+            </span>
+            <strong style={{ color: 'var(--ink)', fontSize: '15px', marginBottom: '6px' }}>
+              Hỏi về dữ liệu camera đã lưu
+            </strong>
+            <span style={{ color: 'var(--ink3)', fontSize: '13px', maxWidth: '420px', lineHeight: 1.6 }}>
+              Chọn câu hỏi gợi ý hoặc nhập biển số, khu vực và khoảng thời gian cần tra cứu.
+            </span>
+          </div>
+        )}
+
         {messages.map((m) => {
           const isUser = m.role === 'user';
 
@@ -185,10 +326,11 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
                   padding: '14px 18px',
                   borderRadius: '4px 16px 16px 16px',
                   color: 'var(--ink)',
-                  boxShadow: 'var(--shadow-sm)'
+                  boxShadow: 'var(--shadow-sm)',
+                  whiteSpace: 'pre-wrap',
                 }}
               >
-                {m.text}
+                {renderAssistantText(m.text)}
               </div>
 
               {/* Video Clip Card if available */}
@@ -213,96 +355,19 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
                       overflow: 'hidden'
                     }}
                   >
-                    {/* Simulated Background */}
-                    <div
+                    <video
+                      controls
+                      preload="none"
+                      src={resolveMediaUrl(m.clip.streamUrl)}
+                      aria-label={`Clip đối chứng: ${m.clip.title}`}
                       style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        height: '56%',
-                        background: 'linear-gradient(#0c1015, #050709)',
-                        backgroundImage: 'repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 13%)'
+                        width: '100%',
+                        height: '100%',
+                        display: 'block',
+                        objectFit: 'contain',
+                        backgroundColor: '#06080b',
                       }}
                     />
-
-                    {/* Simulated Object Thumbnail */}
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '28%',
-                        top: '36%',
-                        width: '44%',
-                        height: '46%',
-                        background: `linear-gradient(160deg, ${m.clip.tint}, #10141b)`,
-                        borderRadius: '6px',
-                        border: '1px solid rgba(255,255,255,0.1)'
-                      }}
-                    />
-
-                    {/* Bounding Box on Target */}
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '27%',
-                        top: '35%',
-                        width: '46%',
-                        height: '48%',
-                        border: `2px solid ${m.clip.boxColor}`,
-                        boxShadow: `0 0 14px ${m.clip.boxColor}66`
-                      }}
-                    >
-                      <span
-                        style={{
-                          position: 'absolute',
-                          left: '-1px',
-                          top: '-20px',
-                          backgroundColor: m.clip.boxColor,
-                          color: '#000000',
-                          fontSize: '9.5px',
-                          fontWeight: 700,
-                          padding: '2px 8px',
-                          borderRadius: '4px',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        {m.clip.boxLabel}
-                      </span>
-                    </div>
-
-                    {/* Play Button Overlay */}
-                    <button
-                      onClick={() => setIsPlayingClipId(isPlayingClipId === m.id ? null : m.id)}
-                      title={isPlayingClipId === m.id ? 'Tạm dừng clip' : 'Xem đoạn clip 10s'}
-                      style={{
-                        position: 'absolute',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        width: '46px',
-                        height: '46px',
-                        borderRadius: '50%',
-                        backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                        backdropFilter: 'blur(8px)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                        border: '1.8px solid rgba(255, 255, 255, 0.75)',
-                        boxShadow: '0 4px 16px rgba(0,0,0,0.6)'
-                      }}
-                    >
-                      {isPlayingClipId === m.id ? (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="#fff">
-                          <rect x="6" y="4" width="4" height="16" />
-                          <rect x="14" y="4" width="4" height="16" />
-                        </svg>
-                      ) : (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="#fff">
-                          <path d="M8 5v14l11-7z" />
-                        </svg>
-                      )}
-                    </button>
 
                     {/* Camera Name Tag */}
                     <div
@@ -377,7 +442,7 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
                             left: 0,
                             top: 0,
                             bottom: 0,
-                            width: isPlayingClipId === m.id ? '75%' : '32%',
+                            width: '32%',
                             backgroundColor: 'var(--acc)',
                             borderRadius: '3px',
                             transition: 'width 1.5s linear'
@@ -388,7 +453,7 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
                         <div
                           style={{
                             position: 'absolute',
-                            left: isPlayingClipId === m.id ? '75%' : '32%',
+                            left: '32%',
                             top: '50%',
                             width: '11px',
                             height: '11px',
@@ -409,8 +474,9 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
                       <span style={{ fontSize: '12px', color: 'var(--ink)', flex: 1, fontWeight: 500 }}>
                         {m.clip.title}
                       </span>
-                      <button
-                        onClick={() => alert(`Bắt đầu tải đoạn video 10s (${m.clip?.title})...`)}
+                      <a
+                        href={resolveMediaUrl(m.clip.downloadUrl)}
+                        download
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -423,21 +489,75 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
                           backgroundColor: 'var(--raise)',
                           color: 'var(--ink)',
                           cursor: 'pointer',
-                          fontFamily: 'inherit'
+                          fontFamily: 'inherit',
+                          textDecoration: 'none',
                         }}
                       >
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
                         </svg>
                         Tải clip 10s
-                      </button>
+                      </a>
                     </div>
                   </div>
+                </div>
+              )}
+              {m.evidence && <ActivityEvidenceCard initial={m.evidence} />}
+              {!m.clip && !m.evidence && (
+                <div style={{ marginTop: '7px', color: 'var(--ink3)', fontSize: '11.5px' }}>
+                  Không có clip
                 </div>
               )}
             </div>
           );
         })}
+
+        {isSending && (
+          <div
+            role="status"
+            className="animate-msg glass-card"
+            style={{
+              alignSelf: 'flex-start',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '9px',
+              color: 'var(--ink2)',
+              fontSize: '12.5px',
+              padding: '11px 14px',
+              borderRadius: '4px 16px 16px 16px',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: '13px',
+                height: '13px',
+                border: '2px solid var(--line2)',
+                borderTopColor: 'var(--acc)',
+                borderRadius: '50%',
+                animation: 'qa-spin 0.8s linear infinite',
+              }}
+            />
+            Trợ lý AI đang tra cứu dữ liệu…
+          </div>
+        )}
+
+        {error && (
+          <div
+            role="alert"
+            style={{
+              alignSelf: 'stretch',
+              color: 'var(--p0)',
+              backgroundColor: 'color-mix(in srgb, var(--p0) 9%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--p0) 32%, transparent)',
+              borderRadius: '10px',
+              padding: '10px 12px',
+              fontSize: '12.5px',
+            }}
+          >
+            {error}
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
@@ -448,7 +568,8 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
           {suggestedQuestions.map((query, i) => (
             <button
               key={i}
-              onClick={() => onSendMessage(query)}
+              onClick={() => void onSendMessage(query)}
+              disabled={isSending || isHistoryLoading}
               style={{
                 fontSize: '12px',
                 fontWeight: 500,
@@ -457,7 +578,8 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
                 border: '1px solid var(--line2)',
                 backgroundColor: 'var(--card)',
                 color: 'var(--ink2)',
-                cursor: 'pointer',
+                cursor: isSending || isHistoryLoading ? 'not-allowed' : 'pointer',
+                opacity: isSending || isHistoryLoading ? 0.55 : 1,
                 fontFamily: 'inherit',
                 transition: 'all 0.15s ease'
               }}
@@ -494,6 +616,7 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
             value={inputVal}
             onChange={(e) => setInputVal(e.target.value)}
             onKeyDown={handleKeyDown}
+            disabled={isSending || isHistoryLoading}
             placeholder="Hỏi về sự kiện camera… vd: hôm nay có bao nhiêu xe lạ vào?"
             style={{
               flex: 1,
@@ -508,27 +631,43 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({ messages, onSendMessage, onC
           />
           <button
             onClick={handleSend}
-            disabled={!inputVal.trim()}
+            disabled={!inputVal.trim() || isSending || isHistoryLoading}
             style={{
               width: '38px',
               height: '38px',
               flex: 'none',
               borderRadius: '10px',
               border: 'none',
-              background: inputVal.trim()
+              background: inputVal.trim() && !isSending && !isHistoryLoading
                 ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)'
                 : 'var(--raise)',
               color: '#ffffff',
-              cursor: inputVal.trim() ? 'pointer' : 'not-allowed',
+              cursor: inputVal.trim() && !isSending && !isHistoryLoading ? 'pointer' : 'not-allowed',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: inputVal.trim() ? '0 2px 10px rgba(59, 130, 246, 0.4)' : 'none'
+              boxShadow: inputVal.trim() && !isSending && !isHistoryLoading
+                ? '0 2px 10px rgba(59, 130, 246, 0.4)'
+                : 'none'
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-              <path d="m22 2-7 20-4-9-9-4z" />
-            </svg>
+            {isSending ? (
+              <span
+                aria-hidden="true"
+                style={{
+                  width: '14px',
+                  height: '14px',
+                  border: '2px solid rgba(255,255,255,0.35)',
+                  borderTopColor: '#ffffff',
+                  borderRadius: '50%',
+                  animation: 'qa-spin 0.8s linear infinite',
+                }}
+              />
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <path d="m22 2-7 20-4-9-9-4z" />
+              </svg>
+            )}
           </button>
         </div>
       </div>

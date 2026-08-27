@@ -336,6 +336,10 @@ a:hover {
   }
 }
 
+@keyframes qa-spin {
+  to { transform: rotate(360deg); }
+}
+
 @keyframes alertSlideIn {
   from {
     opacity: 0;

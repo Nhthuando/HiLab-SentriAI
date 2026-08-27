@@ -168,6 +168,8 @@ export type MockTrainingStatus =
   | 'failed';
 
 export interface VideoClipInfo {
+  eventId: string;
+  eventType: 'gate' | 'violation';
   cam: string;
   from: string;
   to: string;
@@ -175,14 +177,30 @@ export interface VideoClipInfo {
   boxColor: string;
   boxLabel: string;
   tint: string;
+  streamUrl: string;
+  downloadUrl: string;
+}
+
+export interface ActivityEvidence {
+  type: 'area_activity';
+  eventId: string;
+  title: string;
+  cam: string;
+  from: string;
+  to: string;
+  clipStatus: AreaClipStatus;
+  canRequestClip: boolean;
+  clipId: string | null;
+  message?: string;
 }
 
 export interface ChatMessage {
   id: string;
   role: 'user' | 'ai';
   text: string;
-  timestamp?: string;
+  timestamp: string;
   clip?: VideoClipInfo;
+  evidence?: ActivityEvidence;
 }
 
 export interface FloatingNotification {
