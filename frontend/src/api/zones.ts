@@ -135,3 +135,17 @@ export async function getCameraSnapshot(cameraId: string = 'BAI-KIEM'): Promise<
 export async function getAreaCameraSnapshot(): Promise<string> {
   return getCameraSnapshot('BAI-KIEM');
 }
+
+export interface CameraPlaybackStatus {
+  seekable: boolean;
+  positionMs: number;
+  durationMs: number;
+}
+
+export async function getCameraPlayback(cameraId: string = 'GATE-01'): Promise<CameraPlaybackStatus> {
+  return apiClient.get<CameraPlaybackStatus>(`/cameras/${encodeURIComponent(cameraId)}/playback`);
+}
+
+export async function seekCamera(cameraId: string, positionMs: number): Promise<CameraPlaybackStatus> {
+  return apiClient.post<CameraPlaybackStatus>(`/cameras/${encodeURIComponent(cameraId)}/seek`, { positionMs });
+}

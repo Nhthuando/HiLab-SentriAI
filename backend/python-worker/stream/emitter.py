@@ -64,10 +64,13 @@ class StreamEmitter:
         fps: float = 10.0,
         zones: Optional[List[Dict[str, Any]]] = None,
         source_reset: bool = False,
+        timecode: Optional[str] = None,
+        frame_width: Optional[int] = None,
+        frame_height: Optional[int] = None,
     ) -> bool:
         """
         Send a video frame with bounding box detections to Node.js feed channel.
-        Optionally includes active zone polygon metadata.
+        Optionally includes active zone polygon metadata and video timecode.
         """
         path = f"/ws/publish/feed/{camera_id}"
         payload: Dict[str, Any] = {
@@ -78,6 +81,11 @@ class StreamEmitter:
             "fps": round(fps, 1),
             "detections": detections,
         }
+        if timecode is not None:
+            payload["timecode"] = timecode
+        if frame_width is not None and frame_height is not None:
+            payload["frameWidth"] = frame_width
+            payload["frameHeight"] = frame_height
         if zones is not None:
             payload["zones"] = zones
         if source_reset:

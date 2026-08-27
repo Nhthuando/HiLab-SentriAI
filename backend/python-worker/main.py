@@ -13,6 +13,7 @@ from typing import Any, Dict
 
 import cv2
 from fastapi import Body, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -39,6 +40,14 @@ logger = logging.getLogger("sentriai.worker")
 pipelines: Dict[str, Any] = {}
 
 
+class SeekRequest(BaseModel):
+    positionMs: int
+
+
+class CameraConfigUpdate(BaseModel):
+    minConfidence: float
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup ---
@@ -59,14 +68,14 @@ async def lifespan(app: FastAPI):
     gate_source = os.getenv("GATE_CAMERA_URL") or os.getenv("VIDEO_GATE_PATH") or "./data/samples/gate_sample.mp4"
     area_source = os.getenv("AREA_CAMERA_URL") or os.getenv("VIDEO_AREA_PATH") or "./data/samples/area_sample.mp4"
 
-    gate_target_fps = float(os.getenv("GATE_TARGET_FPS", "25.0"))
+    gate_target_fps = float(os.getenv("GATE_TARGET_FPS", "15.0"))
     area_target_fps = float(os.getenv("AREA_TARGET_FPS", "25.0"))
 
     gate_pipeline = GatePipeline(
         camera_id="GATE-01",
         source=gate_source,
         target_fps=gate_target_fps,
-        resolution=(1280, 720),
+        resolution=(1600, 900),
     )
     area_pipeline = AreaPipeline(
         camera_id="BAI-KIEM",
@@ -114,11 +123,16 @@ async def health():
     db_ok = await check_db_health()
     stats = {}
     for cam_id, p in pipelines.items():
+        detector = getattr(p, "detector", None)
+        lpr_reader = getattr(p, "lpr_reader", None)
         stats[cam_id] = {
             "fps": getattr(p, "fps_measured", 0.0) or getattr(p, "target_fps", 15.0),
             "frame_count": getattr(p, "frame_count", 0),
             "connected": getattr(getattr(p, "reader", None), "is_connected", True),
             "active": bool(getattr(p, "_active", False)),
+            "resolution": list(getattr(p, "resolution", (0, 0))),
+            "detector": detector.runtime_info() if hasattr(detector, "runtime_info") else None,
+            "lpr": lpr_reader.runtime_info() if hasattr(lpr_reader, "runtime_info") else None,
         }
     return {
         "status": "ok",
@@ -160,7 +174,9 @@ async def get_camera_playback(camera_id: str):
     pipeline = pipelines.get(cid)
     if not pipeline:
         raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
-    return {"cameraId": cid, **pipeline.get_playback_state()}
+    seconds_state = pipeline.get_playback_state()
+    milliseconds_state = pipeline.reader.get_playback_status()
+    return {"cameraId": cid, **seconds_state, **milliseconds_state}
 
 
 @app.post("/cameras/{camera_id}/playback")
@@ -312,6 +328,72 @@ async def get_snapshot(camera_id: str):
         raise HTTPException(status_code=500, detail="Failed to encode snapshot image")
 
     return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
+@app.post("/cameras/{camera_id}/seek")
+async def seek_camera(camera_id: str, body: SeekRequest):
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    if hasattr(pipeline, "reset_tracking_state"):
+        pipeline.reset_tracking_state()
+    else:
+        pipeline.tracker.tracks.clear()
+    return pipeline.reader.seek_ms(body.positionMs)
+
+
+@app.get("/cameras/{camera_id}/config")
+async def get_camera_config(camera_id: str):
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    if not hasattr(pipeline, "min_confidence"):
+        raise HTTPException(status_code=400, detail="Confidence configuration is only supported for gate cameras")
+    return {
+        "cameraId": cid,
+        "minConfidence": getattr(pipeline, "min_confidence", 0.70),
+    }
+
+
+@app.post("/cameras/{camera_id}/config")
+async def update_camera_config(camera_id: str, body: CameraConfigUpdate):
+    cid = camera_id.strip().upper()
+    if cid in ["GATE", "GATE1", "GATE_01"]:
+        cid = "GATE-01"
+    elif cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+
+    pipeline = pipelines.get(cid)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    if not hasattr(pipeline, "update_min_confidence"):
+        raise HTTPException(status_code=400, detail="Confidence configuration is only supported for gate cameras")
+
+    if not 0.50 <= body.minConfidence <= 0.95:
+        raise HTTPException(status_code=422, detail="minConfidence must be between 0.50 and 0.95")
+    try:
+        val = pipeline.update_min_confidence(body.minConfidence)
+    except OSError as exc:
+        logger.error("[%s] Failed to persist camera configuration: %s", cid, exc)
+        raise HTTPException(status_code=500, detail="Could not persist camera configuration") from exc
+    logger.info("[%s] Updated min_confidence threshold to %.2f (%.0f%%)", cid, val, val * 100)
+
+    return {
+        "cameraId": cid,
+        "minConfidence": getattr(pipeline, "min_confidence", 0.70),
+    }
 
 
 if __name__ == "__main__":

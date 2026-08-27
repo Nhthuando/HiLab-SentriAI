@@ -236,7 +236,7 @@ class StreamReader:
 
         frames_needed = elapsed * self.source_fps
         skip_needed = int(max(0.0, frames_needed - 1.0))
-        max_skip = max(1, int(round(self.source_fps / max(1.0, float(self.target_fps)))))
+        max_skip = min(3, max(1, int(round(self.source_fps / max(1.0, float(self.target_fps))))))
         skip_count = min(skip_needed, max_skip)
         for _ in range(skip_count):
             if not self.cap.grab():
@@ -425,6 +425,32 @@ class StreamReader:
             cv2.LINE_AA,
         )
         return frame
+
+    def get_timecode(self) -> str:
+        """Return current video playback timecode MM:SS (or real-time clock)."""
+        if self.is_local_file:
+            total_sec = max(0, int(self.get_playback_state().get("positionSeconds", 0.0)))
+            mins = total_sec // 60
+            secs = total_sec % 60
+            return f"{mins:02d}:{secs:02d}"
+        return time.strftime("%H:%M:%S")
+
+    def get_playback_status(self) -> dict:
+        state = self.get_playback_state()
+        return {
+            "seekable": bool(state.get("seekable", False)),
+            "positionMs": int(float(state.get("positionSeconds", 0.0)) * 1000),
+            "durationMs": int(float(state.get("durationSeconds", 0.0)) * 1000),
+        }
+
+    def seek_ms(self, position_ms: float) -> dict:
+        state = self.request_seek(max(0.0, float(position_ms)) / 1000.0)
+        self._frame_step_accumulator = 0.0
+        return {
+            "seekable": bool(state.get("seekable", False)),
+            "positionMs": int(float(state.get("positionSeconds", 0.0)) * 1000),
+            "durationMs": int(float(state.get("durationSeconds", 0.0)) * 1000),
+        }
 
     def release(self) -> None:
         """Release underlying OpenCV resources."""

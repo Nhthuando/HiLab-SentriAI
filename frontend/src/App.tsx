@@ -15,12 +15,7 @@ import type {
   ObjectKind
 } from './types';
 import {
-  INITIAL_VEHICLES,
-  INITIAL_LABELS,
-  INITIAL_GATE_EVENTS,
   INITIAL_ZONES,
-  INITIAL_ANN_SOURCES,
-  INITIAL_ANN_SAMPLES,
   INITIAL_QA_MESSAGES,
   QA_KNOWLEDGE_BASE,
   QA_FALLBACK
@@ -42,6 +37,17 @@ import {
   getZones,
   zoneRecordToView,
 } from './api/zones';
+import { getVehicles } from './api/vehicles';
+
+const LEGACY_DEMO_SOURCE_IDS = new Set(['src1', 'src2']);
+
+function withoutLegacyDemoSources(sources: AnnotationSource[]): AnnotationSource[] {
+  return sources.filter((source) => !(source.isDefault === true && LEGACY_DEMO_SOURCE_IDS.has(source.id)));
+}
+
+function isUnsavedAnnotationSource(source: AnnotationSource): boolean {
+  return source.id.startsWith('imported-') || Boolean(source.img?.startsWith('data:'));
+}
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('mon');
@@ -63,9 +69,9 @@ export const App: React.FC = () => {
   });
 
   // Domain states
-  const [vehicles, setVehicles] = useState<Vehicle[]>(INITIAL_VEHICLES);
-  const [labels, setLabels] = useState<Record<string, 'quen' | 'la'>>(INITIAL_LABELS);
-  const [gateEvents, setGateEvents] = useState<GateEvent[]>(INITIAL_GATE_EVENTS);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [labels, setLabels] = useState<Record<string, 'quen' | 'la'>>({});
+  const [gateEvents, setGateEvents] = useState<GateEvent[]>([]);
   const [zonesByCam, setZonesByCam] = useState<Record<string, PolygonZone[]>>(() => ({
     'GATE-01': INITIAL_ZONES['GATE-01'] || [],
     'BAI-KIEM': [],
@@ -81,14 +87,18 @@ export const App: React.FC = () => {
       const saved = localStorage.getItem('sentriai_user_media_sources');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+        if (Array.isArray(parsed)) {
+          const cleaned = withoutLegacyDemoSources(parsed as AnnotationSource[]);
+          if (cleaned.length !== parsed.length) {
+            localStorage.setItem('sentriai_user_media_sources', JSON.stringify(cleaned));
+          }
+          return cleaned;
         }
       }
     } catch {}
-    return INITIAL_ANN_SOURCES;
+    return [];
   });
-  const [annSamples, setAnnSamples] = useState<AnnotationSample[]>(INITIAL_ANN_SAMPLES);
+  const [annSamples, setAnnSamples] = useState<AnnotationSample[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_QA_MESSAGES);
 
   const handleUpdateSources = useCallback((updated: AnnotationSource[]) => {
@@ -193,14 +203,35 @@ export const App: React.FC = () => {
       )
     );
 
-    // Sync to PostgreSQL DB via API
-    try {
-      const { updateVehicleStatus } = await import('./api/vehicles');
-      await updateVehicleStatus(plate, nextStatus);
-    } catch (err) {
-      console.warn('API error toggling vehicle status:', err);
-    }
+    // VehicleLabelTab owns the API mutation. This callback keeps the shared
+    // Gate label state responsive without sending a duplicate PATCH request.
   };
+
+  useEffect(() => {
+    let active = true;
+    const refreshVehicles = () => {
+      getVehicles()
+        .then((records) => {
+          if (!active) return;
+          setVehicles(records);
+          setLabels(Object.fromEntries(records.map((vehicle) => [
+            vehicle.plate,
+            vehicle.status === 'KNOWN' ? 'quen' : 'la',
+          ])));
+        })
+        .catch(() => {
+          if (!active) return;
+          setVehicles([]);
+          setLabels({});
+        });
+    };
+    refreshVehicles();
+    const timer = window.setInterval(refreshVehicles, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const [snapshotImageByCam, setSnapshotImageByCam] = useState<Record<string, string | null>>({
     'BAI-KIEM': null,
@@ -300,10 +331,10 @@ export const App: React.FC = () => {
 
       getMediaSources()
         .then((media) => {
-          if (Array.isArray(media) && media.length > 0) {
+          if (Array.isArray(media)) {
             setAnnSources((prev) => {
-              const map = new Map(INITIAL_ANN_SOURCES.map((s) => [s.id, s]));
-              prev.forEach((p) => map.set(p.id, p));
+              const localDrafts = withoutLegacyDemoSources(prev).filter(isUnsavedAnnotationSource);
+              const map = new Map(localDrafts.map((source) => [source.id, source]));
               media.forEach((m) => map.set(m.id, m));
               const merged = Array.from(map.values());
               try {
@@ -317,7 +348,7 @@ export const App: React.FC = () => {
 
       getAnnotationSamples()
         .then((samples) => {
-          if (Array.isArray(samples) && samples.length > 0) {
+          if (Array.isArray(samples)) {
             setAnnSamples((prev) => {
               const existingIds = new Set(samples.map((s) => s.id));
               const unsavedDrafts = prev.filter((p) => p.session === 1 && !existingIds.has(p.id));
@@ -327,22 +358,6 @@ export const App: React.FC = () => {
         })
         .catch((err) => console.warn('Could not fetch samples from API:', err));
 
-      // Fetch registered vehicles from API
-      import('./api/vehicles').then(({ getVehicles }) => {
-        getVehicles()
-          .then((data) => {
-            if (Array.isArray(data)) {
-              setVehicles(data);
-              const labelMap: Record<string, 'quen' | 'la'> = {};
-              data.forEach((v: any) => {
-                labelMap[v.plate || v.plateNumber] =
-                  v.status === 'KNOWN' || v.status === 'quen' ? 'quen' : 'la';
-              });
-              setLabels(labelMap);
-            }
-          })
-          .catch((err) => console.warn('Could not fetch vehicles from API:', err));
-      });
     });
   }, [loadObjectLabels]);
 
@@ -645,7 +660,6 @@ export const App: React.FC = () => {
         {/* Tab 1: Giám sát cổng */}
         {activeTab === 'mon' && (
           <GateMonitor
-            clock={clockStr}
             zones={zonesByCam['GATE-01'] || []}
             events={gateEvents}
             labels={labels}

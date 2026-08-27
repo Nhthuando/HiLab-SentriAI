@@ -28,6 +28,7 @@ backend/data/crops/*.png
 backend/data/samples/
 backend/data/uploads/
 backend/data/user_media.json
+backend/data/config/*.json
 
 # Runtime-generated training data and experiment outputs (server-managed, never source)
 backend/data/training/
@@ -55,6 +56,7 @@ backend/python-worker/models/*.onnx
 .DS_Store
 Thumbs.db
 .vscode/settings.json
+.tmp/
 *.swp
 
 improve.md

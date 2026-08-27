@@ -15,6 +15,8 @@
   - 2026-08-17T16:45:00+07:00 | none -> waiting_backend | planned | team1-plan
   - 2026-08-18T22:15:00+07:00 | waiting_backend -> in_progress | backend verified, integrating UI | team1-frontend
   - 2026-08-18T22:16:00+07:00 | in_progress -> frontend_verified | API client, CRUD, toggle, sort/filter verified | team1-frontend
+  - 2026-08-25T00:00:00+07:00 | frontend_verified -> in_progress | adding persistent bulk-selection actions and vehicle-table pagination | team1-frontend
+  - 2026-08-26T14:56:00+07:00 | in_progress -> frontend_verified | sticky bulk-selection row and 10-row pagination verified by TypeScript/Vite build | team1-frontend
 
 ## Inputs and dependencies
 
@@ -55,6 +57,8 @@
 - [x] Mock data completely removed, real API integrated
 - [x] The flow uses the verified real API; no required production path remains mocked.
 - [x] Required automated integrated evidence is fresh (build exits 0 in 146ms).
+- [x] Bulk delete actions remain visible in a dedicated sticky row with the selected count.
+- [x] Vehicle settings paginate at 10 rows per page and preserve cross-page selections.
 
 ## Expected files and seams
 
@@ -96,5 +100,6 @@
   - `frontend/src/api/vehicles.ts`
   - `frontend/src/components/Settings/VehicleLabelTab.tsx`
 - Decisions/assumptions: Maintained backward compatible props while defaulting to live backend queries.
+- 2026-08-26 evidence: `npm.cmd run build` passed after pagination and persistent bulk-action changes; live API returned the complete 200-row demo window consumed by the paginated table.
 - Blocker: none
 - Exact next action: Proceed to next slice VS-SETTINGS-LABEL

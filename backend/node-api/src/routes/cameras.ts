@@ -1,6 +1,5 @@
 import { Request, Response, Router } from 'express';
 import { sendError, sendSuccess } from '../utils/response';
-import { AREA_CAMERA_ID } from './zones';
 
 const camerasRouter = Router();
 
@@ -17,27 +16,31 @@ function normalizeCameraId(raw: string): string {
   return upper;
 }
 
-camerasRouter.get('/:id/snapshot', async (req: Request, res: Response) => {
+function validatedCameraId(req: Request, res: Response): string | null {
   const cameraId = normalizeCameraId(req.params.id);
   if (!SUPPORTED_CAMERAS.has(cameraId)) {
-    return sendError(res, 400, 'VALIDATION_ERROR', `Camera '${req.params.id}' is not supported. Valid cameras: BAI-KIEM, GATE-01`);
+    sendError(res, 400, 'VALIDATION_ERROR', `Camera '${req.params.id}' is not supported. Valid cameras: BAI-KIEM, GATE-01`);
+    return null;
   }
+  return cameraId;
+}
+
+camerasRouter.get('/:id/snapshot', async (req: Request, res: Response) => {
+  const cameraId = validatedCameraId(req, res);
+  if (!cameraId) return;
 
   try {
     const upstream = await fetch(
       `${getPythonWorkerHttpUrl()}/cameras/${encodeURIComponent(cameraId)}/snapshot`,
       { signal: AbortSignal.timeout(5000) },
     );
-
     if (!upstream.ok) {
       return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' is unavailable`);
     }
-
     const contentType = upstream.headers.get('content-type') || '';
     if (!contentType.startsWith('image/')) {
       return sendError(res, 502, 'CAMERA_SNAPSHOT_INVALID', 'Camera returned an invalid snapshot');
     }
-
     const image = Buffer.from(await upstream.arrayBuffer()).toString('base64');
     return sendSuccess(res, { image: `data:${contentType};base64,${image}` });
   } catch (error) {
@@ -47,10 +50,8 @@ camerasRouter.get('/:id/snapshot', async (req: Request, res: Response) => {
 });
 
 camerasRouter.get('/:id/playback', async (req: Request, res: Response) => {
-  const cameraId = normalizeCameraId(req.params.id);
-  if (!SUPPORTED_CAMERAS.has(cameraId)) {
-    return sendError(res, 400, 'VALIDATION_ERROR', `Camera '${req.params.id}' is not supported. Valid cameras: BAI-KIEM, GATE-01`);
-  }
+  const cameraId = validatedCameraId(req, res);
+  if (!cameraId) return;
 
   try {
     const upstream = await fetch(
@@ -58,21 +59,23 @@ camerasRouter.get('/:id/playback', async (req: Request, res: Response) => {
       { signal: AbortSignal.timeout(5000) },
     );
     if (!upstream.ok) {
-      return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' is unavailable`);
+      return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' playback is unavailable`);
     }
     return sendSuccess(res, await upstream.json());
   } catch (error) {
-    console.error(`[camerasRouter] Failed to load playback state for ${cameraId}:`, error);
-    return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' is unavailable`);
+    console.error(`[camerasRouter] Failed to load playback for ${cameraId}:`, error);
+    return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' playback is unavailable`);
   }
 });
 
 camerasRouter.get('/:id/playback/preview', async (req: Request, res: Response) => {
-  const cameraId = normalizeCameraId(req.params.id);
+  const cameraId = validatedCameraId(req, res);
   const positionSeconds = Number(req.query.positionSeconds);
-  if (!SUPPORTED_CAMERAS.has(cameraId) || !Number.isFinite(positionSeconds) || positionSeconds < 0) {
-    return sendError(res, 400, 'VALIDATION_ERROR', 'A non-negative positionSeconds is required for BAI-KIEM or GATE-01');
+  if (!cameraId) return;
+  if (!Number.isFinite(positionSeconds) || positionSeconds < 0) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'A non-negative positionSeconds is required');
   }
+
   try {
     const upstream = await fetch(
       `${getPythonWorkerHttpUrl()}/cameras/${encodeURIComponent(cameraId)}/playback/preview?positionSeconds=${encodeURIComponent(String(positionSeconds))}`,
@@ -94,10 +97,11 @@ camerasRouter.get('/:id/playback/preview', async (req: Request, res: Response) =
 });
 
 camerasRouter.post('/:id/playback', async (req: Request, res: Response) => {
-  const cameraId = normalizeCameraId(req.params.id);
+  const cameraId = validatedCameraId(req, res);
   const positionSeconds = Number(req.body?.positionSeconds);
-  if (!SUPPORTED_CAMERAS.has(cameraId) || !Number.isFinite(positionSeconds) || positionSeconds < 0) {
-    return sendError(res, 400, 'VALIDATION_ERROR', 'A non-negative positionSeconds is required for BAI-KIEM or GATE-01');
+  if (!cameraId) return;
+  if (!Number.isFinite(positionSeconds) || positionSeconds < 0) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'A non-negative positionSeconds is required');
   }
 
   try {
@@ -117,6 +121,77 @@ camerasRouter.post('/:id/playback', async (req: Request, res: Response) => {
   } catch (error) {
     console.error(`[camerasRouter] Failed to seek ${cameraId}:`, error);
     return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' cannot seek`);
+  }
+});
+
+camerasRouter.post('/:id/seek', async (req: Request, res: Response) => {
+  const cameraId = validatedCameraId(req, res);
+  const positionMs = Number(req.body?.positionMs);
+  if (!cameraId) return;
+  if (!Number.isFinite(positionMs) || positionMs < 0) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'A non-negative positionMs is required');
+  }
+
+  try {
+    const upstream = await fetch(
+      `${getPythonWorkerHttpUrl()}/cameras/${encodeURIComponent(cameraId)}/seek`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ positionMs }),
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+    if (!upstream.ok) {
+      return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' seek is unavailable`);
+    }
+    return sendSuccess(res, await upstream.json());
+  } catch (error) {
+    console.error(`[camerasRouter] Failed to seek ${cameraId}:`, error);
+    return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' seek is unavailable`);
+  }
+});
+
+camerasRouter.get('/:id/config', async (req: Request, res: Response) => {
+  const cameraId = validatedCameraId(req, res);
+  if (!cameraId) return;
+
+  try {
+    const upstream = await fetch(
+      `${getPythonWorkerHttpUrl()}/cameras/${encodeURIComponent(cameraId)}/config`,
+      { signal: AbortSignal.timeout(5000) },
+    );
+    if (!upstream.ok) {
+      return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' config is unavailable`);
+    }
+    return sendSuccess(res, await upstream.json());
+  } catch (error) {
+    console.error(`[camerasRouter] Failed to load config for ${cameraId}:`, error);
+    return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' config is unavailable`);
+  }
+});
+
+camerasRouter.post('/:id/config', async (req: Request, res: Response) => {
+  const cameraId = validatedCameraId(req, res);
+  if (!cameraId) return;
+
+  try {
+    const upstream = await fetch(
+      `${getPythonWorkerHttpUrl()}/cameras/${encodeURIComponent(cameraId)}/config`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body || {}),
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+    if (!upstream.ok) {
+      return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' config update is unavailable`);
+    }
+    return sendSuccess(res, await upstream.json());
+  } catch (error) {
+    console.error(`[camerasRouter] Failed to update config for ${cameraId}:`, error);
+    return sendError(res, 503, 'CAMERA_UNAVAILABLE', `Camera '${cameraId}' config update is unavailable`);
   }
 });
 

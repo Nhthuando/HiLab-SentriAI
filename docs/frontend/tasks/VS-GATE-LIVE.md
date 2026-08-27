@@ -15,6 +15,10 @@
   - 2026-08-17T16:45:00+07:00 | none -> waiting_backend | planned | team1-plan
   - 2026-08-18T22:22:00+07:00 | waiting_backend -> in_progress | backend verified, integrating UI | team1-frontend
   - 2026-08-18T22:24:00+07:00 | in_progress -> frontend_verified | live feed WS, LPR HUD, hover sync & clip modal verified | team1-frontend
+  - 2026-08-21T02:05:00+07:00 | frontend_verified -> in_progress | verifying gate event panel against the new minimum-confidence setting | team1-frontend
+  - 2026-08-21T02:34:00+07:00 | in_progress -> frontend_verified | camera config API and threshold-to-event-panel flow verified | team1-frontend
+
+  - 2026-08-21T10:22:00+07:00 | frontend_verified -> frontend_verified | confidence thumb percentage and responsive settings layout verified | team1-frontend
 
 ## Inputs and dependencies
 
@@ -57,6 +61,8 @@
 - [x] Mock data replaced with real API data from verified backend
 - [x] The flow uses the verified real API; no required production path remains mocked.
 - [x] Required automated integrated evidence is fresh (build exits 0 in 343ms).
+- [x] Settings loads and saves the GATE-01 minimum confidence through the real camera config API.
+- [x] The gate event panel receives only persisted WebSocket events, so below-threshold detections do not appear as new rows.
 
 ## Expected files and seams
 
@@ -85,6 +91,19 @@
   - Exit/result: 0 (Built in 343ms, 0 errors)
   - Fresh: yes
   - Summary: GateMonitor integrated with `useCameraFeed`, `getGateEvents`, real-time WS push, HUD hover sync, and 10s clip modal.
+  - Evidence ID: EVD-FE-GATE-LIVE-02
+  - Command/procedure: `npm.cmd run build` plus real `GET/POST /api/v1/cameras/GATE-01/config`
+  - Context: Settings threshold integration with running Node API and Python worker
+  - Exit/result: 0 (Vite production build passed; 70% -> 83% -> worker restart retained 83%; restored to 70%)
+  - Fresh: yes
+  - Summary: The setting is connected to the backend event gate and survives worker restart; the panel continues to consume only emitted gate events.
+
+  - Evidence ID: EVD-FE-GATE-LIVE-03
+  - Command/procedure: `npm.cmd run build`, Node `npm.cmd run typecheck`, and 1440x1000 headless Chrome screenshot
+  - Context: Vehicle-label settings confidence control
+  - Exit/result: 0 (TypeScript/Vite build passed; percentage bubble aligned with the 70% range thumb without overlap)
+  - Fresh: yes
+  - Summary: Users can read the exact configured percentage directly on the slider while the existing save/API flow remains unchanged.
 
 ## User acceptance and delivery
 
@@ -100,6 +119,8 @@
   - `frontend/src/components/GateMonitor.tsx`
   - `frontend/src/types.ts`
   - `frontend/src/api/events.ts`
+  - `frontend/src/api/cameras.ts`
+  - `frontend/src/components/Settings/VehicleLabelTab.tsx`
 - Decisions/assumptions: Provided 10s MP4 clip modal preview with direct media URL streaming.
 - Blocker: none
 - Exact next action: Update backend/frontend plan indexes and master plan

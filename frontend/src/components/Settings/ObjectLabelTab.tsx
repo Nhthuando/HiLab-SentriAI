@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import type { ObjectLabel, ObjectKind, AnnotationSource, AnnotationSample } from '../../types';
-import { getMediaSources, uploadMediaSource, deleteMediaSource } from '../../api/labels';
+import { uploadMediaSource, deleteMediaSource } from '../../api/labels';
 import { resolveMediaUrl } from '../../api/client';
 import { ObjectTrainingPanel } from './ObjectTrainingPanel';
 
@@ -52,7 +52,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   onSaveSamples,
   apiError,
 }) => {
-  const [activeSourceId, setActiveSourceId] = useState<string>(annSources[0]?.id || 'src1');
+  const [activeSourceId, setActiveSourceId] = useState<string>(annSources[0]?.id || '');
   const [selectedLabelId, setSelectedLabelId] = useState<string>(objLabels[0]?.id || 'l8');
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
 
@@ -101,37 +101,26 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
 
   // Sync with prop annSources
   useEffect(() => {
-    if (Array.isArray(annSources) && annSources.length > 0) {
-      setSources(annSources);
-    }
+    setSources(Array.isArray(annSources) ? annSources : []);
   }, [annSources]);
+
+  useEffect(() => {
+    if (sources.length === 0) {
+      setActiveSourceId('');
+      setSelectedSampleId(null);
+      return;
+    }
+    if (!sources.some((source) => source.id === activeSourceId)) {
+      setActiveSourceId(sources[0].id);
+      setSelectedSampleId(null);
+    }
+  }, [activeSourceId, sources]);
 
   useEffect(() => {
     if (!objLabels.some((label) => label.id === selectedLabelId)) {
       setSelectedLabelId(objLabels[0]?.id || '');
     }
   }, [objLabels, selectedLabelId]);
-
-  // Load persistent media sources from backend on mount once
-  useEffect(() => {
-    let isMounted = true;
-    const loadMedia = async () => {
-      try {
-        const data = await getMediaSources();
-        if (isMounted && Array.isArray(data) && data.length > 0) {
-          setSources((prev) => {
-            const map = new Map(prev.map((s) => [s.id, s]));
-            data.forEach((d) => map.set(d.id, d));
-            return Array.from(map.values());
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to fetch media sources from API:', err);
-      }
-    };
-    loadMedia();
-    return () => { isMounted = false; };
-  }, []);
 
   // Helper to extract first frame from video as thumbnail Data URL
   const extractVideoThumbnail = (file: File): Promise<string> => {
@@ -243,8 +232,8 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     setSources(remaining);
     if (onUpdateSources) onUpdateSources(remaining);
 
-    if (activeSourceId === target.id && remaining.length > 0) {
-      setActiveSourceId(remaining[0].id);
+    if (activeSourceId === target.id) {
+      setActiveSourceId(remaining[0]?.id || '');
     }
 
     // Remove samples belonging to deleted source
@@ -252,8 +241,8 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     setSavedSuccessMsg(`✓ Đã xóa "${target.name}"`);
   };
 
-  const currentSource = sources.find((s) => s.id === activeSourceId) || sources[0] || annSources[0];
-  const isVideo = currentSource.kind === 'video' || (typeof currentSource.img === 'string' && (currentSource.img.endsWith('.mp4') || currentSource.img.includes('video/')));
+  const currentSource = sources.find((s) => s.id === activeSourceId) || sources[0] || null;
+  const isVideo = currentSource?.kind === 'video' || (typeof currentSource?.img === 'string' && (currentSource.img.endsWith('.mp4') || currentSource.img.includes('video/')));
   const selectedLabel = objLabels.find((l) => l.id === selectedLabelId);
 
   const getLabelColor = (labelId: string) => {
@@ -353,7 +342,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
 
   // Canvas Mouse Down: Start Drawing or Deselect (Auto-pause video on draw)
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !currentSource) return;
 
     // Auto pause video when user starts drawing boxes
     if (isVideo && videoRef.current && !videoRef.current.paused) {
@@ -490,7 +479,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     if (!dragRef.current) return;
 
     if (dragRef.current.mode === 'draw' && draftBox) {
-      if (draftBox.w >= 2 && draftBox.h >= 2 && selectedLabelId) {
+      if (currentSource && draftBox.w >= 2 && draftBox.h >= 2 && selectedLabelId) {
         const newSampleId = 's' + Date.now() + Math.random().toString(36).substring(2, 6);
         onAddSample({
           id: newSampleId,
@@ -561,7 +550,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   };
 
   // Filter boxes for current source
-  const visibleBoxes = annSamples.filter((s) => s.srcId === currentSource.id);
+  const visibleBoxes = currentSource ? annSamples.filter((s) => s.srcId === currentSource.id) : [];
 
   const selectedSample = annSamples.find((s) => s.id === selectedSampleId) || null;
 
@@ -789,12 +778,35 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
             overflow: 'hidden',
             border: '1px solid var(--line)',
             boxShadow: 'var(--shadow-lg)',
-            cursor: 'crosshair',
+            cursor: currentSource ? 'crosshair' : 'default',
             userSelect: 'none'
           }}
         >
           {/* Video element if video, or image if static graphic */}
-          {isVideo ? (
+          {!currentSource ? (
+            <div
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '10px',
+                color: 'var(--ink3)',
+                background: 'var(--bg-subtle)',
+                pointerEvents: 'none',
+              }}
+            >
+              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              <strong style={{ color: 'var(--ink2)', fontSize: '13px' }}>Chưa có ảnh hoặc video</strong>
+              <span style={{ fontSize: '11px' }}>Tải dữ liệu của bạn lên để bắt đầu gán mẫu.</span>
+            </div>
+          ) : isVideo ? (
             <video
               ref={videoRef}
               key={currentSource.id + '-' + currentSource.img}
@@ -845,26 +857,28 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
           <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(5, 8, 12, 0.1)', pointerEvents: 'none' }} />
 
           {/* Feed Badge */}
-          <div
-            className="glass-panel"
-            style={{
-              position: 'absolute',
-              left: '12px',
-              top: '12px',
-              color: 'var(--ink)',
-              fontSize: '10.5px',
-              padding: '4px 10px',
-              borderRadius: '6px',
-              fontFamily: 'var(--font-mono)',
-              pointerEvents: 'none',
-              zIndex: 10
-            }}
-          >
-            {currentSource.name} {isVideo ? `· ${formatTime(currentTime)} / ${formatTime(duration)}` : ''}
-          </div>
+          {currentSource && (
+            <div
+              className="glass-panel"
+              style={{
+                position: 'absolute',
+                left: '12px',
+                top: '12px',
+                color: 'var(--ink)',
+                fontSize: '10.5px',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontFamily: 'var(--font-mono)',
+                pointerEvents: 'none',
+                zIndex: 10
+              }}
+            >
+              {currentSource.name} {isVideo ? `· ${formatTime(currentTime)} / ${formatTime(duration)}` : ''}
+            </div>
+          )}
 
           {/* Crosshair Guide Lines */}
-          {crosshairPos && (
+          {currentSource && crosshairPos && (
             <>
               <div
                 style={{

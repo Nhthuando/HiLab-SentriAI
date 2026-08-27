@@ -82,6 +82,23 @@ vehiclesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
       _count: { id: true },
       _max: { eventTimestamp: true },
     });
+    const recentCrops = plates.length > 0
+      ? await prisma.gateEvent.findMany({
+          where: {
+            licensePlate: { in: plates },
+            cropPath: { not: null },
+          },
+          orderBy: { eventTimestamp: 'desc' },
+          distinct: ['licensePlate'],
+          select: { licensePlate: true, cropPath: true },
+        })
+      : [];
+    const cropMap = new Map<string, string>();
+    for (const event of recentCrops) {
+      if (event.cropPath && !cropMap.has(event.licensePlate)) {
+        cropMap.set(event.licensePlate, event.cropPath);
+      }
+    }
 
     const statsMap = new Map<string, { count: number; maxTimestamp: Date | null }>();
     for (const stat of gateStats) {
@@ -120,11 +137,48 @@ vehiclesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
         type: inferredType,
         visits,
         last: formattedLast,
+        lastSeenAt: new Date(lastDate).toISOString(),
         tint: r.status === 'KNOWN' ? '#10b981' : '#f43f5e',
+        cropPath: cropMap.get(r.plateNumber) || null,
       };
     });
 
     return sendSuccess(res, formatted);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+vehiclesRouter.post('/bulk-delete', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const plates = Array.isArray(req.body.plates)
+      ? req.body.plates.map((plate: unknown) => normalizePlate(String(plate))).filter(Boolean)
+      : [];
+    if (plates.length === 0 || plates.length > 200) {
+      throw new BadRequestError('plates must contain between 1 and 200 plate numbers');
+    }
+    const result = await prisma.registeredVehicle.deleteMany({
+      where: { plateNumber: { in: plates } },
+    });
+    return sendSuccess(res, { deleted: result.count });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+vehiclesRouter.post('/reset-demo', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (process.env.NODE_ENV === 'production') {
+      throw new BadRequestError('Demo reset is disabled in production');
+    }
+    const [events, vehicles] = await prisma.$transaction([
+      prisma.gateEvent.deleteMany({}),
+      prisma.registeredVehicle.deleteMany({}),
+    ]);
+    return sendSuccess(res, {
+      deletedEvents: events.count,
+      deletedVehicles: vehicles.count,
+    });
   } catch (err) {
     return next(err);
   }
@@ -231,6 +285,7 @@ const handleUpdate = async (req: Request, res: Response, next: NextFunction) => 
       type: inferredType,
       visits: 1,
       last: 'Vừa xong',
+      lastSeenAt: updated.updatedAt.toISOString(),
       tint: updated.status === 'KNOWN' ? '#10b981' : '#f43f5e',
     };
 

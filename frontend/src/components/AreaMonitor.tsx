@@ -408,13 +408,13 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                   {isPaused ? 'TẠM DỪNG' : (isOnline ? 'TRỰC TIẾP' : 'MẤT KẾT NỐI')}
                 </span>
                 <span style={{ color: 'var(--line2)' }}>|</span>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: '#ffffff' }}>BAI-KIEM · Bãi kiểm bốc dỡ</span>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink)' }}>BAI-KIEM · Bãi kiểm bốc dỡ</span>
                 <span
                   style={{
                     fontSize: '10.5px',
                     fontFamily: 'var(--font-mono)',
-                    color: isPaused ? '#f59e0b' : 'var(--ink3)',
-                    backgroundColor: isPaused ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255,255,255,0.06)',
+                    color: isPaused ? 'var(--p1)' : 'var(--ink3)',
+                    backgroundColor: isPaused ? 'var(--p1q)' : 'var(--raise)',
                     padding: '2px 6px',
                     borderRadius: '4px',
                   }}
@@ -437,8 +437,8 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                     padding: '4px 10px',
                     borderRadius: '6px',
                     border: isPaused ? '1px solid var(--p1)' : '1px solid var(--line2)',
-                    backgroundColor: isPaused ? 'rgba(245, 158, 11, 0.25)' : 'rgba(255, 255, 255, 0.1)',
-                    color: isPaused ? 'var(--p1)' : '#ffffff',
+                    backgroundColor: isPaused ? 'var(--p1q)' : 'var(--raise)',
+                    color: isPaused ? 'var(--p1)' : 'var(--ink)',
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
                   }}
@@ -651,7 +651,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                 }}
                 title="Lùi 10 giây"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.06)',
+                  background: 'var(--raise)',
                   border: '1px solid var(--line2)',
                   color: 'var(--ink2)',
                   borderRadius: '6px',
@@ -668,7 +668,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
               <button
                 onClick={togglePause}
                 style={{
-                  background: isPaused ? 'rgba(245, 158, 11, 0.25)' : 'var(--acc)',
+                  background: isPaused ? 'var(--p1q)' : 'var(--acc)',
                   border: isPaused ? '1px solid var(--p1)' : 'none',
                   color: isPaused ? 'var(--p1)' : '#ffffff',
                   borderRadius: '6px',
@@ -693,7 +693,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                 }}
                 title="Tua 10 giây"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.06)',
+                  background: 'var(--raise)',
                   border: '1px solid var(--line2)',
                   color: 'var(--ink2)',
                   borderRadius: '6px',

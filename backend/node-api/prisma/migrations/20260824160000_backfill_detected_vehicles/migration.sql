@@ -1,0 +1,4 @@
+-- Intentionally left empty.
+-- Historical gate events are not imported into registered_vehicles because
+-- OCR results may contain incorrect plates. New successful gate events still
+-- register recognized plates through the application flow.

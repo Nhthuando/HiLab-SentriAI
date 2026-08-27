@@ -109,6 +109,8 @@ async def create_gate_event(
     confidence: float,
     crop_path: Optional[str] = None,
     clip_path: Optional[str] = None,
+    zone_name: Optional[str] = None,
+    video_timecode: Optional[str] = None,
     event_timestamp: Optional[datetime] = None,
     conn_or_pool: Optional[DbExecutor] = None,
 ) -> Dict[str, Any]:
@@ -119,12 +121,14 @@ async def create_gate_event(
     now = datetime.now(timezone.utc)
     ts = event_timestamp or now
     rec_id = uuid.uuid4()
+    normalized_plate = license_plate.strip().upper()
+
     query = """
         INSERT INTO gate_events (
-            id, camera_id, lane, license_plate, status,
+            id, camera_id, lane, zone_name, video_timecode, license_plate, status,
             confidence, crop_path, clip_path, timestamp, created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING *
     """
     row = await executor.fetchrow(
@@ -132,7 +136,9 @@ async def create_gate_event(
         rec_id,
         camera_id,
         lane,
-        license_plate.strip().upper(),
+        zone_name,
+        video_timecode,
+        normalized_plate,
         status,
         float(confidence),
         crop_path,
@@ -140,6 +146,25 @@ async def create_gate_event(
         ts,
         now,
     )
+    if row is None:
+        return {}  # type: ignore
+
+    # Settings mirrors readable persisted journal events only. UNKNOWN remains
+    # in the journal for KPI/manual review and is never a label candidate.
+    if normalized_plate != "UNKNOWN":
+        await executor.execute(
+            """
+            INSERT INTO registered_vehicles (id, plate_number, status, note, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (plate_number) DO NOTHING
+            """,
+            uuid.uuid4(),
+            normalized_plate,
+            status,
+            "Tự động thêm từ nhật ký nhận diện GATE-01",
+            now,
+            now,
+        )
     return _record_to_dict(row)  # type: ignore
 
 

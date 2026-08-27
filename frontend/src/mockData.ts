@@ -3,8 +3,6 @@ import type {
   GateEvent,
   AreaEvent,
   PolygonZone,
-  AnnotationSource,
-  AnnotationSample,
   ChatMessage
 } from './types';
 
@@ -64,16 +62,6 @@ export const INITIAL_ZONES: Record<string, PolygonZone[]> = {
     }
   ]
 };
-
-export const INITIAL_ANN_SOURCES: AnnotationSource[] = [
-  { id: 'src1', name: 'baikiem-cam-01.jpg', kind: 'img', img: '/assets/cam-baikiem.png', isDefault: true },
-  { id: 'src2', name: 'gate-lan-in-06-15.jpg', kind: 'img', img: '/assets/cam-gate.png', isDefault: true },
-];
-
-export const INITIAL_ANN_SAMPLES: AnnotationSample[] = [
-  { id: 's1', labelId: 'l3', srcId: 'src1', x: 22, y: 40, w: 22, h: 40 },
-  { id: 's2', labelId: 'l8', srcId: 'src1', x: 46, y: 44, w: 4.5, h: 9 }
-];
 
 export const INITIAL_QA_MESSAGES: ChatMessage[] = [
   {

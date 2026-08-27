@@ -1,5 +1,5 @@
 # SentriAI Python Worker — Dependencies
-# Architecture §6.3: Python 3.11+, FastAPI, uvicorn, OpenCV, ultralytics YOLO, asyncpg, Shapely
+# Architecture §6.3: Python 3.11+, FastAPI, uvicorn, OpenCV, ultralytics (YOLO11), asyncpg, Shapely
 # NOTE: Tested on Python 3.14.4 (Windows). numpy>=2.5 required for Python 3.14 cp314 wheel.
 
 # --- Web framework (AI process server) ---
@@ -10,8 +10,8 @@ websockets>=13.0,<17.0
 # --- Computer vision / AI ---
 # opencv-python: use >=4.10 for Python 3.14 compatibility (no strict pin to allow wheel resolution)
 opencv-python>=4.10.0.84
-# ultralytics YOLO; requires numpy>=1.23; use latest stable for Python 3.14 compat
-ultralytics>=8.2.100
+# ultralytics: YOLO11 with a bounded major version for repeatable production behavior
+ultralytics>=8.3.0,<9.0.0
 # ByteTrack dependency; keep explicit to prevent Ultralytics runtime auto-install/restart warnings.
 lap==0.5.13
 

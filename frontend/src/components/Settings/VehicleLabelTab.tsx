@@ -1,7 +1,16 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
 import type { Vehicle } from '../../types';
-import { getVehicles, updateVehicleStatus, registerVehicle } from '../../api/vehicles';
+import {
+  deleteVehicles,
+  getVehicles,
+  registerVehicle,
+  resetDemoData,
+  updateVehicleStatus,
+} from '../../api/vehicles';
+import { getCameraConfig, updateCameraConfig } from '../../api/cameras';
+import { getCropImageUrl } from '../../api/events';
 
 interface VehicleLabelTabProps {
   vehicles?: Vehicle[];
@@ -12,6 +21,8 @@ interface VehicleLabelTabProps {
 type SortField = 'visits' | 'last' | 'plate' | null;
 type SortDirection = 'asc' | 'desc';
 type StatusFilter = 'all' | 'quen' | 'la';
+type ToastTone = 'success' | 'danger';
+const VEHICLES_PER_PAGE = 10;
 
 interface ToastItem {
   id: string;
@@ -26,13 +37,17 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
 }) => {
   const [vehicleList, setVehicleList] = useState<Vehicle[]>(initialVehicles || []);
   const [labelMap, setLabelMap] = useState<Record<string, 'quen' | 'la'>>(initialLabels || {});
+  const [filterLabelMap, setFilterLabelMap] = useState<Record<string, 'quen' | 'la'>>(initialLabels || {});
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
+  // Confidence Threshold for Gate Event Logging
+  const [minConfidence, setMinConfidence] = useState<number>(70);
+  const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
+
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [typeFilter, setTypeFilter] = useState<string>('all');
-  const [sortField, setSortField] = useState<SortField>(null);
+  const [sortField, setSortField] = useState<SortField>('last');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   // Register vehicle modal
@@ -41,6 +56,11 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
   const [newStatus, setNewStatus] = useState<'KNOWN' | 'STRANGER'>('KNOWN');
   const [newNote, setNewNote] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [selectedCrop, setSelectedCrop] = useState<{ plate: string; url: string } | null>(null);
+  const [selectedPlates, setSelectedPlates] = useState<Set<string>>(new Set());
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [pendingDeletePlates, setPendingDeletePlates] = useState<string[] | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const addToast = (msg: string, type: 'to-known' | 'to-stranger' | 'error' | 'success') => {
     const id = 'toast-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
@@ -59,10 +79,10 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
   };
 
   // Fetch from real API
-  const loadVehicles = useCallback(async () => {
-    setIsLoading(true);
+  const loadVehicles = useCallback(async (silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
-      const data = await getVehicles();
+      const data = await getVehicles({ limit: 200 });
       if (Array.isArray(data)) {
         setVehicleList(data);
         const map: Record<string, 'quen' | 'la'> = {};
@@ -77,22 +97,43 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
         setVehicleList(initialVehicles);
       }
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }, [initialVehicles]);
 
   useEffect(() => {
-    loadVehicles();
+    void loadVehicles();
+    const vehicleTimer = window.setInterval(() => void loadVehicles(true), 5000);
+    // Load camera GATE-01 confidence configuration
+    getCameraConfig('GATE-01')
+      .then((cfg) => {
+        if (cfg && cfg.minConfidence !== undefined) {
+          setMinConfidence(Math.round(cfg.minConfidence * 100));
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not load camera config from API:', err);
+      });
+    return () => window.clearInterval(vehicleTimer);
   }, [loadVehicles]);
 
-  // Distinct vehicle types
-  const uniqueTypes = useMemo(() => {
-    const set = new Set<string>();
-    vehicleList.forEach((v) => {
-      if (v.type) set.add(v.type);
-    });
-    return Array.from(set);
-  }, [vehicleList]);
+  const handleSaveConfidence = async (val?: number) => {
+    const valueToSave = val !== undefined ? val : minConfidence;
+    setIsSavingConfig(true);
+    try {
+      await updateCameraConfig('GATE-01', { minConfidence: valueToSave / 100.0 });
+      showToast(`✓ Đã lưu ngưỡng độ chính xác nhận diện: ${valueToSave}%`);
+    } catch (err) {
+      console.error('Failed to update confidence config:', err);
+      showToast('Lỗi khi lưu cấu hình độ chính xác!', 'danger');
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
+
+  const showToast = (message: string, tone: ToastTone = 'success') => {
+    addToast(message, tone === 'danger' ? 'error' : 'success');
+  };
 
   // Handle column header sort toggle
   const handleSort = (field: SortField) => {
@@ -131,6 +172,9 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
     } catch (err: any) {
       // Rollback on error
       setLabelMap((prev) => ({ ...prev, [plate]: currentStatus }));
+      if (externalToggle) {
+        externalToggle(plate);
+      }
       addToast(`⚠ Lỗi khi cập nhật trạng thái: ${err.message || 'Không kết nối được server'}`, 'error');
     }
   };
@@ -159,6 +203,55 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
     }
   };
 
+  const requestDelete = (plates: string[]) => {
+    const uniquePlates = Array.from(new Set(plates.filter(Boolean)));
+    if (uniquePlates.length > 0) setPendingDeletePlates(uniquePlates);
+  };
+
+  const handleConfirmDelete = async () => {
+    const plates = pendingDeletePlates || [];
+    if (plates.length === 0) return;
+    setIsDeleting(true);
+    try {
+      await deleteVehicles(plates);
+      setVehicleList((current) => current.filter((vehicle) => !plates.includes(vehicle.plate)));
+      setLabelMap((current) => {
+        const next = { ...current };
+        plates.forEach((plate) => delete next[plate]);
+        return next;
+      });
+      setSelectedPlates(new Set());
+      setPendingDeletePlates(null);
+      const listedPlates = plates.slice(0, 3).join(', ');
+      const remainingCount = Math.max(0, plates.length - 3);
+      showToast(
+        `Đã xóa biển số ${listedPlates}${remainingCount > 0 ? `,...+${remainingCount}` : ''}`,
+        'danger',
+      );
+    } catch (err: any) {
+      showToast(err.message || 'Không thể xóa biển số đã chọn', 'danger');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleResetDemo = async () => {
+    if (!window.confirm('Xóa toàn bộ nhật ký nhận diện và danh sách gắn nhãn của phiên demo local?')) return;
+    setIsDeleting(true);
+    try {
+      await resetDemoData();
+      setVehicleList([]);
+      setLabelMap({});
+      setSelectedPlates(new Set());
+      showToast('✓ Đã đặt lại dữ liệu demo');
+      window.setTimeout(() => window.location.reload(), 500);
+    } catch (err: any) {
+      showToast(err.message || 'Không thể đặt lại dữ liệu demo', 'danger');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   // Filter and sort vehicles
   const filteredVehicles = useMemo(() => {
     let result = [...vehicleList];
@@ -169,29 +262,25 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
       result = result.filter(
         (v) =>
           v.plate.toLowerCase().includes(q) ||
-          v.type.toLowerCase().includes(q) ||
           v.last.toLowerCase().includes(q)
       );
     }
 
     // 2. Status filter
     if (statusFilter !== 'all') {
-      result = result.filter((v) => (labelMap[v.plate] || 'la') === statusFilter);
+      result = result.filter((v) => (filterLabelMap[v.plate] || 'la') === statusFilter);
     }
 
-    // 3. Vehicle type filter
-    if (typeFilter !== 'all') {
-      result = result.filter((v) => v.type === typeFilter);
-    }
-
-    // 4. Column Header Sorting
+    // 3. Column Header Sorting
     if (sortField) {
       result.sort((a, b) => {
         if (sortField === 'visits') {
           return sortDirection === 'desc' ? b.visits - a.visits : a.visits - b.visits;
         }
         if (sortField === 'last') {
-          return sortDirection === 'desc' ? b.last.localeCompare(a.last) : a.last.localeCompare(b.last);
+          const aTime = a.lastSeenAt ? Date.parse(a.lastSeenAt) : 0;
+          const bTime = b.lastSeenAt ? Date.parse(b.lastSeenAt) : 0;
+          return sortDirection === 'desc' ? bTime - aTime : aTime - bTime;
         }
         if (sortField === 'plate') {
           return sortDirection === 'desc' ? b.plate.localeCompare(a.plate) : a.plate.localeCompare(b.plate);
@@ -201,7 +290,26 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
     }
 
     return result;
-  }, [vehicleList, labelMap, searchQuery, statusFilter, typeFilter, sortField, sortDirection]);
+  }, [vehicleList, filterLabelMap, searchQuery, statusFilter, sortField, sortDirection]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredVehicles.length / VEHICLES_PER_PAGE));
+  const paginatedVehicles = useMemo(() => {
+    const start = (currentPage - 1) * VEHICLES_PER_PAGE;
+    return filteredVehicles.slice(start, start + VEHICLES_PER_PAGE);
+  }, [currentPage, filteredVehicles]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, pageCount));
+  }, [pageCount]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, sortField, sortDirection]);
+
+  const changeStatusFilter = (nextFilter: StatusFilter) => {
+    setFilterLabelMap({ ...labelMap });
+    setStatusFilter(nextFilter);
+  };
 
   // Render sort arrow indicator
   const renderSortIndicator = (field: SortField) => {
@@ -349,6 +457,171 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
         </button>
       </div>
 
+      {/* Gate Recognition Confidence Threshold Setting Card */}
+      <div
+        style={{
+          margin: '16px 22px 8px 22px',
+          padding: '16px 18px',
+          borderRadius: '12px',
+          backgroundColor: 'rgba(255, 255, 255, 0.02)',
+          border: '1px solid var(--line)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+          background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.05) 0%, rgba(0, 0, 0, 0.0) 100%)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--accq)',
+                color: 'var(--acc)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '16px',
+              }}
+            >
+              🎯
+            </div>
+            <div>
+              <div style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--ink)' }}>
+                Ngưỡng độ chính xác tối thiểu ghi nhận sự kiện (Giám sát Cổng)
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--ink2)', marginTop: '2px' }}>
+                Chỉ các biển số đạt tỉ lệ chính xác từ mức này trở lên mới được lưu vào hệ thống và hiển thị ở danh sách bên phải.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 12px',
+                borderRadius: '8px',
+                backgroundColor: minConfidence >= 85 ? 'var(--okq)' : minConfidence >= 70 ? 'var(--accq)' : 'var(--p0q)',
+                border: `1px solid ${minConfidence >= 85 ? 'var(--ok)' : minConfidence >= 70 ? 'var(--acc)' : 'var(--p0)'}`,
+                color: minConfidence >= 85 ? 'var(--ok)' : minConfidence >= 70 ? 'var(--acc)' : 'var(--p0)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '14px',
+                fontWeight: 700,
+              }}
+            >
+              <span>{minConfidence}%</span>
+              <span style={{ fontSize: '11px', fontWeight: 500, opacity: 0.85 }}>
+                {minConfidence >= 85 ? '• Khắt khe' : minConfidence >= 70 ? '• Khuyên dùng' : '• Nhạy'}
+              </span>
+            </div>
+
+            <button
+              onClick={() => handleSaveConfidence(minConfidence)}
+              disabled={isSavingConfig}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '7px',
+                border: 'none',
+                backgroundColor: 'var(--acc)',
+                color: '#ffffff',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                opacity: isSavingConfig ? 0.7 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+              }}
+            >
+              {isSavingConfig ? 'Đang lưu...' : 'Lưu cấu hình'}
+            </button>
+          </div>
+        </div>
+
+        {/* Slider & Quick Presets */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', paddingTop: '4px' }}>
+          <div style={{ flex: '1 1 280px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink3)' }}>50%</span>
+            <div style={{ position: 'relative', flex: 1, paddingTop: '24px' }}>
+              <span
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: `calc(${((minConfidence - 50) / 45) * 100}% + ${8 - ((minConfidence - 50) / 45) * 16}px)`,
+                  transform: 'translateX(-50%)',
+                  minWidth: '38px',
+                  padding: '2px 6px',
+                  borderRadius: '5px',
+                  backgroundColor: minConfidence >= 85 ? 'var(--ok)' : 'var(--acc)',
+                  color: '#ffffff',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  textAlign: 'center',
+                  pointerEvents: 'none',
+                }}
+              >
+                {minConfidence}%
+              </span>
+              <input
+                type="range"
+                min="50"
+                max="95"
+                step="1"
+                value={minConfidence}
+                aria-label="Ngưỡng độ chính xác tối thiểu"
+                aria-valuetext={`${minConfidence}%`}
+                onChange={(e) => setMinConfidence(Number(e.target.value))}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  margin: 0,
+                  cursor: 'pointer',
+                  accentColor: minConfidence >= 85 ? 'var(--ok)' : 'var(--acc)',
+                }}
+              />
+            </div>
+            <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink3)' }}>95%</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '11.5px', color: 'var(--ink3)', marginRight: '4px' }}>Mức nhanh:</span>
+            {[
+              { val: 60, label: '60% (Nhạy)' },
+              { val: 70, label: '70% (Chuẩn)' },
+              { val: 80, label: '80% (Cao)' },
+              { val: 85, label: '85% (Nghiêm ngặt)' },
+            ].map((preset) => (
+              <button
+                key={preset.val}
+                onClick={() => {
+                  setMinConfidence(preset.val);
+                  handleSaveConfidence(preset.val);
+                }}
+                style={{
+                  padding: '3px 8px',
+                  borderRadius: '5px',
+                  border: `1px solid ${minConfidence === preset.val ? 'var(--acc)' : 'var(--line)'}`,
+                  backgroundColor: minConfidence === preset.val ? 'var(--accq)' : 'transparent',
+                  color: minConfidence === preset.val ? 'var(--acc)' : 'var(--ink2)',
+                  fontSize: '11px',
+                  fontWeight: minConfidence === preset.val ? 600 : 400,
+                  cursor: 'pointer',
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* Filter & Search Toolbar */}
       <div
         style={{
@@ -386,7 +659,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Tìm theo biển số, loại xe, thời gian…"
+            placeholder="Tìm theo biển số, thời gian…"
             style={{
               width: '100%',
               backgroundColor: 'var(--bg)',
@@ -431,7 +704,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
             }}
           >
             <button
-              onClick={() => setStatusFilter('all')}
+              onClick={() => changeStatusFilter('all')}
               style={{
                 fontSize: '11.5px',
                 fontWeight: 600,
@@ -446,7 +719,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
               Tất cả
             </button>
             <button
-              onClick={() => setStatusFilter('quen')}
+              onClick={() => changeStatusFilter('quen')}
               style={{
                 fontSize: '11.5px',
                 fontWeight: 600,
@@ -461,7 +734,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
               ✓ Xe quen
             </button>
             <button
-              onClick={() => setStatusFilter('la')}
+              onClick={() => changeStatusFilter('la')}
               style={{
                 fontSize: '11.5px',
                 fontWeight: 600,
@@ -478,34 +751,26 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
           </div>
         </div>
 
-        {/* Filter by Vehicle Type */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ fontSize: '11.5px', color: 'var(--ink3)', fontWeight: 600 }}>Loại xe:</span>
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            style={{
-              backgroundColor: 'var(--bg)',
-              border: '1px solid var(--line2)',
-              borderRadius: '9px',
-              padding: '6px 12px',
-              fontSize: '12px',
-              color: typeFilter === 'all' ? 'var(--ink2)' : 'var(--ink)',
-              fontWeight: 600,
-              outline: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            <option value="all">Tất cả loại xe ({uniqueTypes.length})</option>
-            {uniqueTypes.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </div>
-
         <div style={{ flex: 1 }} />
+
+        <button
+          type="button"
+          onClick={handleResetDemo}
+          disabled={isDeleting}
+          title="Chỉ khả dụng trong môi trường demo local"
+          style={{
+            border: '1px solid var(--line2)',
+            backgroundColor: 'transparent',
+            color: 'var(--ink2)',
+            borderRadius: '7px',
+            padding: '6px 10px',
+            fontSize: '11.5px',
+            fontWeight: 600,
+            cursor: isDeleting ? 'wait' : 'pointer',
+          }}
+        >
+          Đặt lại demo
+        </button>
 
         {/* Result Counter & Refresh */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -537,11 +802,55 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
         </div>
       </div>
 
+      {selectedPlates.size > 0 && (
+        <div
+          role="status"
+          style={{
+            position: 'sticky',
+            top: '76px',
+            zIndex: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: '9px 22px',
+            borderBottom: '1px solid var(--line)',
+            backgroundColor: 'var(--panel)',
+            boxShadow: '0 4px 10px rgba(0,0,0,0.08)',
+          }}
+        >
+          <span style={{ color: 'var(--ink2)', fontSize: '12.5px', fontWeight: 600 }}>
+            Đã chọn {selectedPlates.size} biển số
+          </span>
+          <button
+            type="button"
+            onClick={() => requestDelete(Array.from(selectedPlates))}
+            disabled={isDeleting}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '7px',
+              border: '1px solid var(--p0)',
+              backgroundColor: 'var(--p0q)',
+              color: 'var(--p0)',
+              borderRadius: '7px',
+              padding: '7px 11px',
+              fontSize: '11.5px',
+              fontWeight: 700,
+              cursor: isDeleting ? 'wait' : 'pointer',
+            }}
+          >
+            <Trash2 size={14} aria-hidden="true" />
+            Xóa các biển số đã chọn
+          </button>
+        </div>
+      )}
+
       {/* Table Header with Sort Arrows */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '70px 1.3fr 1fr 1fr 1fr 140px',
+          gridTemplateColumns: '34px 70px 1.4fr 0.7fr 1fr 190px',
           padding: 'var(--table-py, 12px) var(--table-px, 22px)',
           borderBottom: '1px solid var(--line)',
           fontSize: '11.5px',
@@ -551,6 +860,23 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
           letterSpacing: '0.04em',
         }}
       >
+        <div>
+          <input
+            type="checkbox"
+            aria-label="Chọn tất cả biển số đang hiển thị"
+            checked={paginatedVehicles.length > 0 && paginatedVehicles.every((vehicle) => selectedPlates.has(vehicle.plate))}
+            onChange={(event) => {
+              setSelectedPlates((current) => {
+                const next = new Set(current);
+                paginatedVehicles.forEach((vehicle) => {
+                  if (event.target.checked) next.add(vehicle.plate);
+                  else next.delete(vehicle.plate);
+                });
+                return next;
+              });
+            }}
+          />
+        </div>
         <div>Ảnh</div>
 
         {/* Column 2: Biển số xe (Sortable) */}
@@ -569,9 +895,6 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
           <span>Biển số xe</span>
           {renderSortIndicator('plate')}
         </div>
-
-        {/* Column 3: Loại phương tiện */}
-        <div>Loại phương tiện</div>
 
         {/* Column 4: Lượt vào (Sortable) */}
         <div
@@ -629,7 +952,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
             </div>
           </div>
         ) : (
-          filteredVehicles.map((v) => {
+          paginatedVehicles.map((v) => {
             const isStranger = (labelMap[v.plate] || 'la') === 'la';
             const tagLabel = isStranger ? 'Xe lạ (Cảnh báo)' : 'Xe quen (Hợp lệ)';
             const tagColor = isStranger ? 'var(--p0)' : 'var(--ok)';
@@ -640,7 +963,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
                 key={v.plate}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '70px 1.3fr 1fr 1fr 1fr 140px',
+                  gridTemplateColumns: '34px 70px 1.4fr 0.7fr 1fr 190px',
                   padding: 'var(--table-py, 12px) var(--table-px, 22px)',
                   borderBottom: '1px solid var(--line)',
                   alignItems: 'center',
@@ -651,6 +974,44 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
               >
                 <div>
+                  <input
+                    type="checkbox"
+                    aria-label={`Chọn biển số ${v.plate}`}
+                    checked={selectedPlates.has(v.plate)}
+                    onChange={(event) => {
+                      setSelectedPlates((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(v.plate);
+                        else next.delete(v.plate);
+                        return next;
+                      });
+                    }}
+                  />
+                </div>
+                <div>
+                  {v.cropPath ? (
+                    <button
+                      type="button"
+                      title={`Xem ảnh crop biển số ${v.plate}`}
+                      onClick={() => setSelectedCrop({ plate: v.plate, url: getCropImageUrl(v.cropPath) })}
+                      style={{
+                        width: '54px',
+                        height: '34px',
+                        padding: 0,
+                        borderRadius: '7px',
+                        border: '1px solid var(--line2)',
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        backgroundColor: 'var(--raise)',
+                      }}
+                    >
+                      <img
+                        src={getCropImageUrl(v.cropPath)}
+                        alt={`Biển số ${v.plate}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                    </button>
+                  ) : (
                   <div
                     style={{
                       width: '54px',
@@ -667,8 +1028,9 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
                       fontWeight: 700,
                     }}
                   >
-                    CROP
+                    Chưa có
                   </div>
+                  )}
                 </div>
 
                 <div>
@@ -684,8 +1046,6 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
                     {v.plate}
                   </span>
                 </div>
-
-                <div style={{ color: 'var(--ink2)' }}>{v.type}</div>
 
                 <div>
                   <span
@@ -713,7 +1073,7 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
                   {v.last}
                 </div>
 
-                <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <button
                     onClick={() => handleToggle(v.plate)}
                     title={`Bấm để chuyển thành ${isStranger ? 'Xe quen' : 'Xe lạ'}`}
@@ -743,12 +1103,204 @@ export const VehicleLabelTab: React.FC<VehicleLabelTabProps> = ({
                     />
                     <span>{tagLabel}</span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => requestDelete([v.plate])}
+                    disabled={isDeleting}
+                    title={`Xóa biển số ${v.plate}`}
+                    aria-label={`Xóa biển số ${v.plate}`}
+                    onMouseEnter={(event) => {
+                      event.currentTarget.style.borderColor = 'var(--p0)';
+                      event.currentTarget.style.backgroundColor = 'var(--p0q)';
+                      event.currentTarget.style.color = 'var(--p0)';
+                    }}
+                    onMouseLeave={(event) => {
+                      event.currentTarget.style.borderColor = 'var(--line2)';
+                      event.currentTarget.style.backgroundColor = 'transparent';
+                      event.currentTarget.style.color = 'var(--ink3)';
+                    }}
+                    style={{
+                      width: '30px',
+                      height: '30px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flex: '0 0 30px',
+                      borderRadius: '7px',
+                      border: '1px solid var(--line2)',
+                      backgroundColor: 'transparent',
+                      color: 'var(--ink3)',
+                      cursor: isDeleting ? 'wait' : 'pointer',
+                    }}
+                  >
+                    <Trash2 size={15} aria-hidden="true" />
+                  </button>
                 </div>
               </div>
             );
           })
         )}
       </div>
+
+      {filteredVehicles.length > 0 && (
+        <div
+          aria-label="Phân trang danh sách biển số"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: '10px 22px',
+            borderTop: '1px solid var(--line)',
+            backgroundColor: 'var(--panel)',
+          }}
+        >
+          <span style={{ color: 'var(--ink3)', fontSize: '11.5px', fontFamily: 'var(--font-mono)' }}>
+            Trang {currentPage} / {pageCount} · {filteredVehicles.length} biển số
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              type="button"
+              title="Trang trước"
+              aria-label="Trang trước"
+              disabled={currentPage <= 1}
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              style={{
+                width: '32px', height: '32px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                border: '1px solid var(--line2)', borderRadius: '7px', backgroundColor: 'var(--raise)', color: 'var(--ink2)',
+                cursor: currentPage <= 1 ? 'not-allowed' : 'pointer', opacity: currentPage <= 1 ? 0.45 : 1,
+              }}
+            >
+              <ChevronLeft size={16} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              title="Trang sau"
+              aria-label="Trang sau"
+              disabled={currentPage >= pageCount}
+              onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}
+              style={{
+                width: '32px', height: '32px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                border: '1px solid var(--line2)', borderRadius: '7px', backgroundColor: 'var(--raise)', color: 'var(--ink2)',
+                cursor: currentPage >= pageCount ? 'not-allowed' : 'pointer', opacity: currentPage >= pageCount ? 0.45 : 1,
+              }}
+            >
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pendingDeletePlates && createPortal((
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-vehicle-title"
+          onClick={() => !isDeleting && setPendingDeletePlates(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 150,
+            backgroundColor: 'rgba(0,0,0,0.62)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            className="glass-panel"
+            onClick={(event) => event.stopPropagation()}
+            style={{ width: 'min(420px, 100%)', padding: '20px', borderRadius: '8px' }}
+          >
+            <div id="delete-vehicle-title" style={{ color: 'var(--ink)', fontSize: '16px', fontWeight: 700 }}>
+              Xác nhận xóa biển số
+            </div>
+            <div style={{ color: 'var(--ink2)', fontSize: '13px', lineHeight: 1.55, marginTop: '8px' }}>
+              {pendingDeletePlates.length === 1
+                ? `Bạn có chắc muốn xóa biển số ${pendingDeletePlates[0]} khỏi danh sách gắn nhãn?`
+                : `Bạn có chắc muốn xóa ${pendingDeletePlates.length} biển số đã chọn khỏi danh sách gắn nhãn?`}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '20px' }}>
+              <button
+                type="button"
+                onClick={() => setPendingDeletePlates(null)}
+                disabled={isDeleting}
+                style={{
+                  border: '1px solid var(--line2)',
+                  backgroundColor: 'transparent',
+                  color: 'var(--ink2)',
+                  borderRadius: '7px',
+                  padding: '8px 14px',
+                  cursor: isDeleting ? 'wait' : 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                style={{
+                  border: '1px solid var(--p0)',
+                  backgroundColor: 'var(--p0)',
+                  color: '#fff',
+                  borderRadius: '7px',
+                  padding: '8px 14px',
+                  cursor: isDeleting ? 'wait' : 'pointer',
+                  fontWeight: 700,
+                }}
+              >
+                {isDeleting ? 'Đang xóa...' : 'Xóa'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
+
+      {selectedCrop && createPortal((
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Ảnh crop biển số ${selectedCrop.plate}`}
+          onClick={() => setSelectedCrop(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 120,
+            backgroundColor: 'rgba(0,0,0,0.72)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+          }}
+        >
+          <div
+            className="glass-panel"
+            onClick={(event) => event.stopPropagation()}
+            style={{ width: 'min(680px, 100%)', padding: '12px', borderRadius: '8px' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <strong style={{ color: 'var(--ink)', fontFamily: 'var(--font-mono)' }}>{selectedCrop.plate}</strong>
+              <button
+                type="button"
+                onClick={() => setSelectedCrop(null)}
+                title="Đóng ảnh"
+                aria-label="Đóng ảnh"
+                style={{ border: 0, background: 'transparent', color: 'var(--ink)', cursor: 'pointer', fontSize: '20px' }}
+              >
+                ×
+              </button>
+            </div>
+            <img
+              src={selectedCrop.url}
+              alt={`Ảnh crop biển số ${selectedCrop.plate}`}
+              style={{ width: '100%', maxHeight: '70vh', objectFit: 'contain', display: 'block' }}
+            />
+          </div>
+        </div>
+      ), document.body)}
 
       {/* Modal: Đăng ký biển số mới */}
       {isAddModalOpen && (
