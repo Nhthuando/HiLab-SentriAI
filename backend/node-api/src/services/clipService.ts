@@ -30,6 +30,21 @@ export interface ClipReference {
   downloadUrl: string;
 }
 
+export type DeferredClipStatus = 'NOT_REQUESTED' | 'QUEUED' | 'GENERATING' | 'READY' | 'FAILED' | 'EXPIRED';
+
+export interface ActivityEvidence {
+  type: 'area_activity';
+  eventId: string;
+  title: string;
+  cam: string;
+  from: string;
+  to: string;
+  clipStatus: DeferredClipStatus;
+  canRequestClip: boolean;
+  clipId: string | null;
+  message?: string;
+}
+
 export function getClipsDirectory(): string {
   // __dirname is node-api/src/services in ts-node and node-api/dist/services after build.
   const backendDir = path.resolve(__dirname, '../../..');
@@ -145,8 +160,55 @@ export async function findEventClipRecord(
   return null;
 }
 
+export async function resolveActivityEvidence(
+  eventId: string,
+  client: PrismaClient = prisma,
+): Promise<ActivityEvidence | undefined> {
+  const activity = await client.areaActivitySession.findUnique({ where: { id: eventId } });
+  if (!activity) return undefined;
+  const violation = activity.violationId
+    ? await client.zoneViolation.findUnique({ where: { id: activity.violationId } })
+    : null;
+  const rawStatus = String(violation?.clipStatus ?? activity.clipStatus ?? 'NOT_REQUESTED') as DeferredClipStatus;
+  const clipId = violation?.id ?? activity.id;
+  const clipPath = violation?.clipPath ?? activity.clipPath;
+  const fileReady = rawStatus === 'READY' && Boolean(resolveStoredClipPath(clipPath));
+  const status: DeferredClipStatus = rawStatus === 'READY' && !fileReady ? 'FAILED' : rawStatus;
+  const clock = eventClock({
+    eventId: activity.id,
+    eventType: 'activity',
+    cameraId: activity.cameraId,
+    occurredAt: activity.enteredAt,
+    videoTimecode: activity.sourcePositionSeconds === null ? null : secondsLabel(activity.sourcePositionSeconds),
+    label: activity.objectLabel,
+    title: `${activity.objectLabel} · ${activity.zoneName}`,
+    clipPath,
+  });
+  return {
+    type: 'area_activity',
+    eventId: activity.id,
+    title: `${activity.objectLabel} · ${activity.zoneName}`,
+    cam: activity.cameraId,
+    from: clock.from,
+    to: clock.to,
+    clipStatus: status,
+    canRequestClip: Boolean(violation || activity.sourceKind !== 'UNAVAILABLE'),
+    clipId: fileReady ? clipId : null,
+    ...(status === 'FAILED' && rawStatus === 'READY'
+      ? { message: 'File video đã tạo không còn tồn tại. Bạn có thể thử tạo lại.' }
+      : activity.clipError ? { message: activity.clipError } : {}),
+  };
+}
+
 export function serializeClipReference(clip: ClipReference | undefined): string | null {
   return clip ? `${clip.eventType}:${clip.eventId}` : null;
+}
+
+export function serializeChatReference(
+  clip: ClipReference | undefined,
+  evidence: ActivityEvidence | undefined,
+): string | null {
+  return evidence ? `activity:${evidence.eventId}` : serializeClipReference(clip);
 }
 
 export async function hydrateClipReference(token: string | null, client: PrismaClient = prisma): Promise<ClipReference | undefined> {
@@ -155,4 +217,15 @@ export async function hydrateClipReference(token: string | null, client: PrismaC
   if (!match) return undefined;
   const record = await findEventClipRecord(match[2], match[1].toLowerCase() as ClipEventType, client);
   return record ? buildClipReference(record) ?? undefined : undefined;
+}
+
+export async function hydrateChatReference(
+  token: string | null,
+  client: PrismaClient = prisma,
+): Promise<{ clip?: ClipReference; evidence?: ActivityEvidence }> {
+  if (token?.toLowerCase().startsWith('activity:')) {
+    const match = /^activity:([0-9a-f-]{36})$/i.exec(token);
+    return match ? { evidence: await resolveActivityEvidence(match[1], client) } : {};
+  }
+  return { clip: await hydrateClipReference(token, client) };
 }

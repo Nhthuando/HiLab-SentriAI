@@ -12,10 +12,11 @@
     "test:ws": "ts-node src/tests/test_ws_proxy.ts",
     "test:api": "ts-node src/tests/test_api_contract.ts",
     "test:area-reset": "ts-node src/tests/test_area_event_reset.ts",
-    "test:area-clip": "ts-node src/tests/test_area_event_clip.ts"
+    "test:area-clip": "ts-node src/tests/test_area_event_clip.ts",
+    "test:qa": "ts-node src/tests/test_qa_chat.ts"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
+    "@google/genai": "^2.19.0",
     "@prisma/client": "^5.19.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

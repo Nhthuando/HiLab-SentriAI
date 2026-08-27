@@ -1,0 +1,202 @@
+openapi: 3.0.3
+info:
+  title: SentriAI Q&A API
+  version: 1.0.0
+  description: Verified contract target for VS-QA-CHAT. All JSON responses use the SentriAI envelope.
+  license:
+    name: Proprietary
+servers:
+  - url: http://localhost:3001/api/v1
+security: []
+paths:
+  /qa/query:
+    post:
+      operationId: askSavedEventQuestion
+      summary: Ask Gemini about saved Gate, violation, and Area activity events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              additionalProperties: false
+              properties:
+                query:
+                  type: string
+                  minLength: 1
+                  maxLength: 1000
+                  example: Hôm nay có bao nhiêu xe lạ vào?
+      responses:
+        '200':
+          description: Assistant answer generated from the fixed Prisma tool set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QAEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          description: Gemini API unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '504':
+          description: Gemini API exceeded the 15-second timeout
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /chat/history:
+    get:
+      operationId: getChatHistory
+      summary: Load persistent chat history in chronological order
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+          description: When present, returns the most recent N messages ordered oldest to newest.
+      responses:
+        '200':
+          description: Persistent messages
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data, timestamp]
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChatMessage' }
+                  timestamp: { type: string, format: date-time }
+        '400':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      operationId: clearChatHistory
+      summary: Clear all persistent chat history for the local single user
+      responses:
+        '204': { description: History cleared }
+  /clips/{id}/stream:
+    get:
+      operationId: streamEventClip
+      summary: Stream an available MP4 clip by saved event UUID
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+      responses:
+        '200':
+          description: MP4 stream with byte-range support
+          headers:
+            Accept-Ranges: { schema: { type: string, example: bytes } }
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /clips/{id}/download:
+    get:
+      operationId: downloadEventClip
+      summary: Download an available MP4 clip by saved event UUID
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+      responses:
+        '200':
+          description: MP4 attachment
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  parameters:
+    EventId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+      description: GateEvent, ZoneViolation, or AreaActivitySession UUID. The server resolves the event type without accepting a file path.
+  responses:
+    ValidationError:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: Event does not exist or its clip is unavailable
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  schemas:
+    ClipReference:
+      type: object
+      required: [eventId, eventType, cam, from, to, title, boxLabel, boxColor, tint, streamUrl, downloadUrl]
+      properties:
+        eventId: { type: string, format: uuid }
+        eventType: { type: string, enum: [gate, violation, activity] }
+        cam: { type: string }
+        from: { type: string, example: '10:30:00' }
+        to: { type: string, example: '10:30:10' }
+        title: { type: string }
+        boxLabel: { type: string }
+        boxColor: { type: string }
+        tint: { type: string }
+        streamUrl: { type: string, example: /api/v1/clips/00000000-0000-4000-8000-000000000000/stream }
+        downloadUrl: { type: string, example: /api/v1/clips/00000000-0000-4000-8000-000000000000/download }
+    QAAnswer:
+      type: object
+      required: [id, role, text, sources, executionTimeMs, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        role: { type: string, enum: [assistant] }
+        text: { type: string }
+        clip: { $ref: '#/components/schemas/ClipReference' }
+        evidence: { $ref: '#/components/schemas/ActivityEvidence' }
+        sources:
+          type: array
+          items: { type: string }
+        executionTimeMs: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+    QAEnvelope:
+      type: object
+      required: [success, data, timestamp]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/QAAnswer' }
+        timestamp: { type: string, format: date-time }
+    ChatMessage:
+      type: object
+      required: [id, role, text, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        role: { type: string, enum: [user, assistant] }
+        text: { type: string }
+        createdAt: { type: string, format: date-time }
+        clip: { $ref: '#/components/schemas/ClipReference' }
+        evidence: { $ref: '#/components/schemas/ActivityEvidence' }
+    ActivityEvidence:
+      type: object
+      required: [type, eventId, title, cam, from, to, clipStatus, canRequestClip, clipId]
+      properties:
+        type: { type: string, enum: [area_activity] }
+        eventId: { type: string, format: uuid }
+        title: { type: string }
+        cam: { type: string }
+        from: { type: string }
+        to: { type: string }
+        clipStatus: { type: string, enum: [NOT_REQUESTED, QUEUED, GENERATING, READY, FAILED, EXPIRED] }
+        canRequestClip: { type: boolean }
+        clipId: { type: string, format: uuid, nullable: true }
+        message: { type: string }
+    ErrorEnvelope:
+      type: object
+      required: [success, error, timestamp]
+      properties:
+        success: { type: boolean, enum: [false] }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}
+        timestamp: { type: string, format: date-time }

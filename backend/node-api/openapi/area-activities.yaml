@@ -1,0 +1,48 @@
+openapi: 3.0.3
+info:
+  title: SentriAI Area Activity API
+  version: 1.0.0
+  license:
+    name: Proprietary
+servers:
+  - url: http://localhost:3001/api/v1
+security: []
+paths:
+  /area-activities:
+    get:
+      operationId: listAreaActivities
+      summary: List saved BAI-KIEM track-zone activity metadata
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { in: query, name: offset, schema: { type: integer, minimum: 0 } }
+        - { in: query, name: zone_id, schema: { type: string, format: uuid } }
+        - { in: query, name: object_label, schema: { type: string } }
+        - { in: query, name: canonical_class, schema: { type: string } }
+        - { in: query, name: policy_result, schema: { type: string, enum: [ALLOWED, VIOLATION] } }
+        - { in: query, name: session_status, schema: { type: string, enum: [OPEN, CLOSED] } }
+        - { in: query, name: start, schema: { type: string, format: date-time } }
+        - { in: query, name: end, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Paginated activity metadata }
+        '400': { description: Invalid filter }
+  /area-activities/{id}/clip:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getAreaActivityClipStatus
+      summary: Read clip state without starting generation
+      responses:
+        '200': { description: Current state }
+        '404': { description: Activity not found }
+        '503': { description: Worker unavailable }
+    post:
+      operationId: requestAreaActivityClip
+      summary: Explicitly request a ten-second activity evidence clip
+      responses:
+        '200': { description: Existing or terminal state }
+        '202': { description: Clip job queued }
+        '404': { description: Activity not found }
+        '503': { description: Worker unavailable }
