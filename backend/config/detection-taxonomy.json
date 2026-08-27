@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "cocoClasses": {
+    "person": 0,
+    "bicycle": 1,
+    "car": 2,
+    "motorcycle": 3,
+    "bus": 5,
+    "truck": 7
+  },
+  "syntaxAliases": {
+    "reach stacker": "reach_stacker",
+    "reach-stacker": "reach_stacker",
+    "container truck": "container_truck",
+    "container-truck": "container_truck",
+    "mobile crane": "mobile_crane",
+    "shipping container": "shipping_container"
+  },
+  "recommendedDisplayNames": {
+    "person": "Người",
+    "bicycle": "Xe đạp",
+    "car": "Xe con",
+    "motorcycle": "Xe máy",
+    "bus": "Xe buýt",
+    "truck": "Xe tải",
+    "reach_stacker": "Xe nâng container",
+    "container_truck": "Xe đầu kéo container",
+    "forklift": "Xe nâng hàng",
+    "mobile_crane": "Xe cẩu tự hành",
+    "shipping_container": "Container tĩnh"
+  },
+  "legacyNameConstraints": {
+    "container": [],
+    "xe nâng": ["reach_stacker", "forklift"],
+    "xe cẩu": ["mobile_crane"]
+  }
+}

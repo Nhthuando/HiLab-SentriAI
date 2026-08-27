@@ -1,5 +1,10 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import type { PolygonZone, ObjectLabel } from '../../types';
+import type {
+  PolygonZone,
+  ObjectLabel,
+  ZoneMutationNotice,
+  ZoneMutationStatus,
+} from '../../types';
 import { useCameraFeed } from '../../hooks/useCameraFeed';
 
 interface ZoneEditorTabProps {
@@ -9,10 +14,13 @@ interface ZoneEditorTabProps {
   onUpdateZone: (camId: string, zoneId: string, patch: Partial<PolygonZone>) => void;
   onAddZone: (camId: string, newZone: PolygonZone) => Promise<PolygonZone>;
   onDeleteZone: (camId: string, zoneId: string) => void;
+  mutationStatusByZoneId?: Record<string, ZoneMutationStatus>;
+  mutationNotice?: ZoneMutationNotice | null;
   snapshotImageByCam?: Record<string, string | null>;
   snapshotImage?: string | null;
   isLoading: boolean;
   apiError: string | null;
+  labelRegistryStatus: 'loading' | 'ready' | 'error';
   onRetry: () => void;
   activeCameraId?: string;
   onChangeCamera?: (camId: string) => void;
@@ -37,21 +45,29 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
   onUpdateZone,
   onAddZone,
   onDeleteZone,
+  mutationStatusByZoneId = {},
+  mutationNotice,
   snapshotImageByCam,
   snapshotImage,
   isLoading,
   apiError,
+  labelRegistryStatus,
   onRetry,
   activeCameraId,
   onChangeCamera,
 }) => {
   const [camSel, setCamSel] = useState<string>(activeCameraId || 'GATE-01');
+  const canMutateZones = labelRegistryStatus === 'ready';
   const { frameImage } = useCameraFeed(camSel);
   const [tool, setTool] = useState<'select' | 'draw'>('select');
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [selectedVertexIdx, setSelectedVertexIdx] = useState<number | null>(null);
   const [zoneSearch, setZoneSearch] = useState<string>('');
   const [zoneNameDrafts, setZoneNameDrafts] = useState<Record<string, string>>({});
+  const registryLabelNames = useMemo(
+    () => new Set(objLabels.map((label) => label.name.toLocaleLowerCase())),
+    [objLabels],
+  );
 
   // Toast / notification message
   const [toastMsg, setToastMsg] = useState<string>('');
@@ -112,7 +128,10 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     onChangeCamera?.(newCamId);
   };
 
-  const currentZones = zonesByCam[camSel] || [];
+  const currentZones = useMemo(
+    () => zonesByCam[camSel] ?? [],
+    [zonesByCam, camSel],
+  );
   const canvasZones = dragPreview
     ? currentZones.map((zone) => (
       zone.id === dragPreview.zoneId
@@ -151,6 +170,13 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     }
   }, [apiError]);
 
+  useEffect(() => {
+    if (!mutationNotice) return;
+    setToastMsg(mutationNotice.message);
+    const timeout = window.setTimeout(() => setToastMsg(''), 2500);
+    return () => window.clearTimeout(timeout);
+  }, [mutationNotice]);
+
   // Auto-scroll right panel when a zone is selected on the left
   useEffect(() => {
     if (selectedZoneId && cardRefs.current[selectedZoneId]) {
@@ -176,6 +202,10 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
   // Delete Vertex Handle
   const handleDeleteVertex = useCallback(
     (zoneId: string, idx: number) => {
+      if (!canMutateZones) {
+        showToast('⚠ Danh mục nhãn chưa sẵn sàng; mọi thay đổi Zone đang bị khóa.');
+        return;
+      }
       const zone = currentZones.find((z) => z.id === zoneId);
       if (!zone) return;
       if (zone.points.length <= 3) {
@@ -188,14 +218,24 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
       const nextState = currentZones.map((z) => (z.id === zoneId ? { ...z, points: newPoints } : z));
       pushHistory(nextState);
       setSelectedVertexIdx(null);
-      showToast('✓ Đã xóa đỉnh thành công!');
     },
-    [currentZones, camSel, onUpdateZone, pushHistory]
+    [currentZones, camSel, onUpdateZone, pushHistory, canMutateZones]
   );
 
   // Delete entire Zone
   const handleDeleteZoneWithHistory = useCallback(
     (zoneId: string) => {
+      if (!canMutateZones) {
+        showToast('⚠ Danh mục nhãn chưa sẵn sàng; mọi thay đổi Zone đang bị khóa.');
+        return;
+      }
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      dragRef.current = null;
+      dragPreviewRef.current = null;
+      setDragPreview(null);
       onDeleteZone(camSel, zoneId);
       const nextState = currentZones.filter((z) => z.id !== zoneId);
       pushHistory(nextState);
@@ -203,13 +243,16 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
         setSelectedZoneId(null);
         setSelectedVertexIdx(null);
       }
-      showToast('✓ Đã xóa Zone thành công!');
     },
-    [currentZones, camSel, onDeleteZone, pushHistory, selectedZoneId]
+    [currentZones, camSel, onDeleteZone, pushHistory, selectedZoneId, canMutateZones]
   );
 
   // Undo action
   const handleUndo = useCallback(() => {
+    if (!canMutateZones) {
+      showToast('⚠ Danh mục nhãn chưa sẵn sàng; mọi thay đổi Zone đang bị khóa.');
+      return;
+    }
     if (tool === 'draw' && draftPoints.length > 0) {
       setDraftPoints((prev) => prev.slice(0, -1));
       return;
@@ -235,10 +278,14 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
       });
       setSelectedVertexIdx(null);
     }
-  }, [tool, draftPoints, historyIndex, history, currentZones, camSel, onUpdateZone, onAddZone, onDeleteZone]);
+  }, [tool, draftPoints, historyIndex, history, currentZones, camSel, onUpdateZone, onAddZone, onDeleteZone, canMutateZones]);
 
   // Redo action
   const handleRedo = useCallback(() => {
+    if (!canMutateZones) {
+      showToast('⚠ Danh mục nhãn chưa sẵn sàng; mọi thay đổi Zone đang bị khóa.');
+      return;
+    }
     if (historyIndex < history.length - 1) {
       isUndoRedoActionRef.current = true;
       const targetState = history[historyIndex + 1];
@@ -259,17 +306,21 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
       });
       setSelectedVertexIdx(null);
     }
-  }, [historyIndex, history, currentZones, camSel, onUpdateZone, onAddZone, onDeleteZone]);
+  }, [historyIndex, history, currentZones, camSel, onUpdateZone, onAddZone, onDeleteZone, canMutateZones]);
 
   // Complete zone drawing
   const handleFinishDraw = useCallback(async () => {
+    if (labelRegistryStatus !== 'ready') {
+      showToast('⚠ Chưa thể tạo Zone vì danh mục nhãn chưa sẵn sàng.');
+      return;
+    }
     if (draftPoints.length < 3) return;
     const newId = 'z' + Date.now();
     const newColor = PRESET_COLORS[currentZones.length % PRESET_COLORS.length];
 
     const defaultTypes: Record<string, number> = {};
     objLabels.forEach((l) => {
-      defaultTypes[l.name] = l.name === 'Container' || l.name === 'Xe nâng' || l.name === 'Xe tải' ? 1 : 0;
+      if (l.isDetectable) defaultTypes[l.name] = 0;
     });
 
     const newZone: PolygonZone = {
@@ -290,11 +341,12 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
       setTool('select');
       setDraftPoints([]);
       setDraftHover(null);
-      showToast('✓ Đã tạo Zone mới thành công!');
-    } catch {
-      showToast('⚠ Không thể lưu Zone mới. Hãy thử lại.');
+    } catch (error) {
+      if (!(error instanceof Error && error.message === 'ZONE_CREATE_CANCELLED')) {
+        // The mutation coordinator publishes the server-confirmed error message.
+      }
     }
-  }, [draftPoints, currentZones, objLabels, camSel, onAddZone, pushHistory]);
+  }, [draftPoints, currentZones, objLabels, camSel, onAddZone, pushHistory, labelRegistryStatus]);
 
   // Keyboard shortcut listener for Enter, Escape, Ctrl+Z, Ctrl+Y, Delete, Backspace
   useEffect(() => {
@@ -455,7 +507,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
     }
     const drag = dragRef.current;
     const preview = dragPreviewRef.current;
-    if (drag && drag.hasMoved && preview?.zoneId === drag.zoneId) {
+    if (canMutateZones && drag && drag.hasMoved && preview?.zoneId === drag.zoneId) {
       const nextState = currentZones.map((zone) => (
         zone.id === drag.zoneId ? { ...zone, points: preview.points } : zone
       ));
@@ -468,12 +520,24 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
   };
 
   const handleUpdateZoneProp = (zoneId: string, patch: Partial<PolygonZone>) => {
+    if (!canMutateZones) {
+      showToast('⚠ Danh mục nhãn chưa sẵn sàng; mọi thay đổi Zone đang bị khóa.');
+      return;
+    }
     onUpdateZone(camSel, zoneId, patch);
     const nextState = currentZones.map((z) => (z.id === zoneId ? { ...z, ...patch } : z));
     pushHistory(nextState);
   };
 
   const commitZoneName = useCallback((zoneId: string) => {
+    if (!canMutateZones) {
+      setZoneNameDrafts((previous) => {
+        const { [zoneId]: _discardedDraft, ...remainingDrafts } = previous;
+        return remainingDrafts;
+      });
+      showToast('⚠ Danh mục nhãn chưa sẵn sàng; đổi tên Zone đã bị hủy.');
+      return;
+    }
     const draftName = zoneNameDrafts[zoneId];
     if (draftName === undefined) return;
 
@@ -500,7 +564,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
       const { [zoneId]: _committedDraft, ...remainingDrafts } = previous;
       return remainingDrafts;
     });
-  }, [camSel, currentZones, onUpdateZone, pushHistory, zoneNameDrafts]);
+  }, [camSel, currentZones, onUpdateZone, pushHistory, zoneNameDrafts, canMutateZones]);
 
   const canUndo = (tool === 'draw' && draftPoints.length > 0) || historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
@@ -508,6 +572,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
 
   return (
     <div
+      aria-busy={labelRegistryStatus === 'loading'}
       style={{
         display: 'grid',
         gridTemplateColumns: 'minmax(0, 1.55fr) minmax(380px, 1fr)',
@@ -515,6 +580,13 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
         alignItems: 'start'
       }}
     >
+      {labelRegistryStatus !== 'ready' && (
+        <div role="alert" style={{ gridColumn: '1 / -1', border: '1px solid var(--p1)', background: 'var(--p1q)', color: 'var(--p1)', borderRadius: '10px', padding: '10px 12px', fontSize: '11.5px', lineHeight: 1.45 }}>
+          {labelRegistryStatus === 'loading'
+            ? 'Đang tải danh mục nhãn. Mọi thao tác lưu Zone tạm thời bị khóa.'
+            : 'Không tải được danh mục nhãn. Mọi thao tác tạo, sửa và xóa Zone đã bị khóa để bảo toàn targetLabels.'}
+        </div>
+      )}
       {/* Left: Feed & Controls */}
       <div>
         {/* Controls Toolbar */}
@@ -597,6 +669,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
             }}
           >
             <button
+              type="button"
               onClick={() => {
                 setTool('select');
                 setDraftPoints([]);
@@ -617,6 +690,9 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
               Chọn / Sửa
             </button>
             <button
+              type="button"
+              disabled={!canMutateZones}
+              aria-disabled={!canMutateZones}
               onClick={() => {
                 setTool('draw');
                 setSelectedZoneId(null);
@@ -628,10 +704,10 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                 padding: '6px 14px',
                 borderRadius: '8px',
                 border: 'none',
-                cursor: 'pointer',
+                cursor: canMutateZones ? 'pointer' : 'not-allowed',
                 fontFamily: 'inherit',
                 backgroundColor: tool === 'draw' ? 'var(--acc)' : 'transparent',
-                color: tool === 'draw' ? '#fff' : 'var(--ink2)'
+                color: canMutateZones ? (tool === 'draw' ? '#fff' : 'var(--ink2)') : 'var(--ink3)'
               }}
             >
               + Vẽ zone mới
@@ -650,7 +726,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
           >
             <button
               onClick={handleUndo}
-              disabled={!canUndo}
+              disabled={!canMutateZones || !canUndo}
               title="Hoàn tác (Ctrl+Z)"
               style={{
                 fontSize: '12px',
@@ -658,9 +734,9 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                 padding: '6px 10px',
                 borderRadius: '8px',
                 border: 'none',
-                cursor: canUndo ? 'pointer' : 'not-allowed',
+                cursor: canMutateZones && canUndo ? 'pointer' : 'not-allowed',
                 backgroundColor: 'transparent',
-                color: canUndo ? 'var(--ink)' : 'var(--ink3)',
+                color: canMutateZones && canUndo ? 'var(--ink)' : 'var(--ink3)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '5px'
@@ -674,7 +750,7 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
             </button>
             <button
               onClick={handleRedo}
-              disabled={!canRedo}
+              disabled={!canMutateZones || !canRedo}
               title="Làm lại (Ctrl+Y)"
               style={{
                 fontSize: '12px',
@@ -682,9 +758,9 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                 padding: '6px 10px',
                 borderRadius: '8px',
                 border: 'none',
-                cursor: canRedo ? 'pointer' : 'not-allowed',
+                cursor: canMutateZones && canRedo ? 'pointer' : 'not-allowed',
                 backgroundColor: 'transparent',
-                color: canRedo ? 'var(--ink)' : 'var(--ink3)',
+                color: canMutateZones && canRedo ? 'var(--ink)' : 'var(--ink3)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '5px'
@@ -1260,10 +1336,16 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
             displayedZones.map((z) => {
               const isSelected = selectedZoneId === z.id;
               const isColorPickerOpen = colorPickerZoneId === z.id;
+              const mutationStatus = mutationStatusByZoneId[z.id];
+              const targetLabelKeys = new Set((z.targetLabels || []).map((label) => label.toLocaleLowerCase()));
+              const unknownLegacyLabels = (z.targetLabels || []).filter(
+                (label) => !registryLabelNames.has(label.toLocaleLowerCase()),
+              );
 
               return (
                 <div
                   key={z.id}
+                  aria-busy={mutationStatus?.phase === 'saving' || mutationStatus?.phase === 'deleting'}
                   ref={(el) => {
                     cardRefs.current[z.id] = el;
                   }}
@@ -1427,6 +1509,27 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                       {z.points.length} đỉnh
                     </span>
 
+                    {mutationStatus && mutationStatus.phase !== 'saved' && (
+                      <span
+                        title={mutationStatus.message}
+                        style={{
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          color: mutationStatus.phase === 'error' ? 'var(--p0)' : 'var(--acc)',
+                          backgroundColor: mutationStatus.phase === 'error' ? 'var(--p0q)' : 'var(--acc-q)',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {mutationStatus.phase === 'saving'
+                          ? 'Đang lưu…'
+                          : mutationStatus.phase === 'deleting'
+                            ? 'Đang xóa…'
+                            : 'Lỗi lưu'}
+                      </span>
+                    )}
+
                     {/* Delete Zone Button */}
                     <button
                       onClick={(e) => {
@@ -1454,11 +1557,16 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                   <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '4px' }}>
                     {objLabels.map((obj) => {
                       const isAllowed = !!z.types[obj.name];
+                      const isLegacyReference = !obj.isDetectable && targetLabelKeys.has(obj.name.toLocaleLowerCase());
                       return (
                         <button
+                          type="button"
                           key={obj.id}
+                          disabled={!obj.isDetectable}
+                          aria-disabled={!obj.isDetectable}
                           onClick={(e) => {
                             e.stopPropagation();
+                            if (!obj.isDetectable) return;
                             handleUpdateZoneProp(z.id, {
                               types: {
                                 ...z.types,
@@ -1466,25 +1574,37 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                               }
                             });
                           }}
-                          title={`Bấm để ${isAllowed ? 'cấm' : 'cho phép'} ${obj.name}`}
+                          title={!obj.isDetectable
+                            ? `${obj.name}: ${obj.capabilityReason}`
+                            : `Bấm để ${isAllowed ? 'cấm' : 'cho phép'} ${obj.name}`}
                           style={{
                             fontSize: '10.5px',
                             fontWeight: 600,
                             padding: '3px 9px',
                             borderRadius: '16px',
-                            border: `1px solid ${isAllowed ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}`,
-                            backgroundColor: isAllowed ? 'var(--okq)' : 'var(--p0q)',
-                            color: isAllowed ? 'var(--ok)' : 'var(--p0)',
-                            cursor: 'pointer',
+                            border: `1px solid ${!obj.isDetectable ? 'var(--p1)' : isAllowed ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}`,
+                            backgroundColor: !obj.isDetectable ? 'var(--p1q)' : isAllowed ? 'var(--okq)' : 'var(--p0q)',
+                            color: !obj.isDetectable ? 'var(--p1)' : isAllowed ? 'var(--ok)' : 'var(--p0)',
+                            cursor: obj.isDetectable ? 'pointer' : 'not-allowed',
+                            opacity: obj.isDetectable ? 1 : 0.82,
                             fontFamily: 'inherit',
                             transition: 'all 0.15s ease'
                           }}
                         >
-                          {isAllowed ? `✓ ${obj.name}` : `✕ ${obj.name}`}
+                          {!obj.isDetectable
+                            ? `${isLegacyReference ? '⚠ Nhãn cũ' : '⊘ Chưa có model'} · ${obj.name}`
+                            : isAllowed ? `✓ ${obj.name}` : `✕ ${obj.name}`}
                         </button>
                       );
                     })}
                   </div>
+                  {(objLabels.some((label) => !label.isDetectable && targetLabelKeys.has(label.name.toLocaleLowerCase())) || unknownLegacyLabels.length > 0) && (
+                    <div role="note" style={{ marginTop: '7px', color: 'var(--p1)', fontSize: '10px', lineHeight: 1.4 }}>
+                      Zone này có tham chiếu nhãn cũ chưa nhận diện được
+                      {unknownLegacyLabels.length > 0 ? ` hoặc không còn trong registry: ${unknownLegacyLabels.join(', ')}` : ''}.
+                      {' '}Tham chiếu cũ được hiển thị để đối soát và sẽ không được đưa vào payload lưu mới.
+                    </div>
+                  )}
                 </div>
               );
             })

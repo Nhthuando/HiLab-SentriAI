@@ -71,6 +71,16 @@ async function runTests() {
       throw new Error(`Expected 201 Created, got ${createRes.status}: ${JSON.stringify(createRes.body)}`);
     }
     const labelId = createRes.body.data.id;
+    for (const field of [
+      'canonicalClass', 'detectionSource', 'isDetectable', 'activeModelVersion', 'capabilityReason', 'capabilityReasonCode',
+    ]) {
+      if (!(field in createRes.body.data)) {
+        throw new Error(`Created label response is missing capability field '${field}'`);
+      }
+    }
+    if (createRes.body.data.detectionSource !== 'COCO' || createRes.body.data.isDetectable !== true) {
+      throw new Error(`Expected truck label to use COCO, got ${JSON.stringify(createRes.body.data)}`);
+    }
     console.log('  [OK] Label created successfully (201 Created), id:', labelId);
 
     // 1b. Test Duplicate Label (409 Conflict)
@@ -98,6 +108,9 @@ async function runTests() {
     const found = listRes.body.data.find((l: any) => l.id === labelId);
     if (!found) {
       throw new Error(`Created label '${testLabelName}' not found in GET response`);
+    }
+    if (!('capabilityReasonCode' in found) || !('canonicalClass' in found)) {
+      throw new Error('GET /api/v1/labels did not include the capability contract');
     }
     console.log(`  [OK] GET /api/v1/labels returned ${listRes.body.data.length} labels, found created label`);
 

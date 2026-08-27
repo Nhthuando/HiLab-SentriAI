@@ -284,6 +284,10 @@ async def create_zone_violation(
     object_label: str,
     entered_at: Optional[datetime] = None,
     clip_path: Optional[str] = None,
+    source_kind: Optional[str] = None,
+    source_ref: Optional[str] = None,
+    source_position_seconds: Optional[float] = None,
+    source_timestamp: Optional[datetime] = None,
     violation_id: Optional[Union[str, uuid.UUID]] = None,
     conn_or_pool: Optional[DbExecutor] = None,
 ) -> Dict[str, Any]:
@@ -302,13 +306,27 @@ async def create_zone_violation(
     query = """
         INSERT INTO zone_violations (
             id, camera_id, zone_id, object_label, status,
-            entered_at, clip_path, created_at
+            entered_at, clip_path, source_kind, source_ref,
+            source_position_seconds, source_timestamp, clip_status, clip_error, created_at
         )
-        VALUES ($1, $2, $3, $4, 'OPEN', $5, $6, $7)
+        VALUES ($1, $2, $3, $4, 'OPEN', $5, $6, $7, $8, $9, $10,
+                CASE WHEN $6::varchar IS NULL THEN 'NOT_REQUESTED' ELSE 'READY' END,
+                NULL, $11)
         RETURNING *
     """
     row = await executor.fetchrow(
-        query, rec_id, camera_id, zid, object_label, ts, clip_path, now
+        query,
+        rec_id,
+        camera_id,
+        zid,
+        object_label,
+        ts,
+        clip_path,
+        source_kind,
+        source_ref,
+        source_position_seconds,
+        source_timestamp,
+        now,
     )
     return _record_to_dict(row)  # type: ignore
 
@@ -349,6 +367,22 @@ async def close_zone_violation(
     """
     updated_row = await executor.fetchrow(query, vid, exit_ts, dur, clip_path)
     return _record_to_dict(updated_row)
+
+
+async def delete_zone_violations(
+    camera_id: str,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> int:
+    """Delete Area violation history for one exact camera."""
+    executor = _get_executor(conn_or_pool)
+    result = await executor.execute(
+        "DELETE FROM zone_violations WHERE camera_id = $1",
+        camera_id,
+    )
+    try:
+        return int(result.rsplit(" ", 1)[-1])
+    except (AttributeError, ValueError):
+        return 0
 
 
 async def get_open_violations(
@@ -442,11 +476,108 @@ async def update_violation_clip_path(
     vid = uuid.UUID(violation_id) if isinstance(violation_id, str) else violation_id
     query = """
         UPDATE zone_violations
-        SET clip_path = $2
+        SET clip_path = $2,
+            clip_status = 'READY',
+            clip_error = NULL
         WHERE id = $1
         RETURNING *
     """
     row = await executor.fetchrow(query, vid, clip_path)
+    return _record_to_dict(row)
+
+
+async def get_zone_violation(
+    violation_id: Union[str, uuid.UUID],
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    """Fetch one violation by primary key for on-demand clip generation."""
+    executor = _get_executor(conn_or_pool)
+    vid = uuid.UUID(violation_id) if isinstance(violation_id, str) else violation_id
+    row = await executor.fetchrow("SELECT * FROM zone_violations WHERE id = $1", vid)
+    return _record_to_dict(row)
+
+
+async def claim_violation_clip(
+    violation_id: Union[str, uuid.UUID],
+    requested_at: Optional[datetime] = None,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    """Atomically claim a clip request; concurrent callers reuse existing state."""
+    executor = _get_executor(conn_or_pool)
+    vid = uuid.UUID(violation_id) if isinstance(violation_id, str) else violation_id
+    requested = requested_at or datetime.now(timezone.utc)
+    row = await executor.fetchrow(
+        """
+        UPDATE zone_violations
+        SET clip_status = 'QUEUED', clip_requested_at = $2, clip_error = NULL
+        WHERE id = $1 AND clip_status IN ('NOT_REQUESTED', 'FAILED')
+        RETURNING *
+        """,
+        vid,
+        requested,
+    )
+    return _record_to_dict(row)
+
+
+async def mark_violation_clip_generating(
+    violation_id: Union[str, uuid.UUID],
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    executor = _get_executor(conn_or_pool)
+    vid = uuid.UUID(violation_id) if isinstance(violation_id, str) else violation_id
+    row = await executor.fetchrow(
+        """
+        UPDATE zone_violations
+        SET clip_status = 'GENERATING', clip_error = NULL
+        WHERE id = $1 AND clip_status = 'QUEUED'
+        RETURNING *
+        """,
+        vid,
+    )
+    return _record_to_dict(row)
+
+
+async def mark_violation_clip_ready(
+    violation_id: Union[str, uuid.UUID],
+    clip_path: str,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    executor = _get_executor(conn_or_pool)
+    vid = uuid.UUID(violation_id) if isinstance(violation_id, str) else violation_id
+    row = await executor.fetchrow(
+        """
+        UPDATE zone_violations
+        SET clip_status = 'READY', clip_path = $2, clip_error = NULL
+        WHERE id = $1
+        RETURNING *
+        """,
+        vid,
+        clip_path,
+    )
+    return _record_to_dict(row)
+
+
+async def mark_violation_clip_failed(
+    violation_id: Union[str, uuid.UUID],
+    status: str,
+    error: str,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    if status not in {"FAILED", "EXPIRED"}:
+        raise ValueError("status must be FAILED or EXPIRED")
+    executor = _get_executor(conn_or_pool)
+    vid = uuid.UUID(violation_id) if isinstance(violation_id, str) else violation_id
+    row = await executor.fetchrow(
+        """
+        UPDATE zone_violations
+        SET clip_status = $2, clip_error = $3, clip_path = NULL
+        WHERE id = $1
+        RETURNING *
+        """,
+        vid,
+        status,
+        error[:2000],
+    )
     return _record_to_dict(row)
 
 

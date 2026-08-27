@@ -29,8 +29,10 @@ export interface TrainingJobResponse {
   modelVersion?: { id: string; status: 'CANDIDATE' | 'ACTIVE' | 'INACTIVE' | 'REJECTED' } | null;
 }
 
-export const getTrainingReadiness = () => apiRequest<TrainingReadinessResponse>('/training/datasets/readiness?profile=YARD_VEHICLE_V1');
-export const exportTrainingDataset = () => apiRequest<any>('/training/datasets/export', { method: 'POST', body: JSON.stringify({ profile: 'YARD_VEHICLE_V1' }) });
+export const CUSTOM_TRAINING_PROFILE = 'YARD_CUSTOM_V2';
+
+export const getTrainingReadiness = () => apiRequest<TrainingReadinessResponse>(`/training/datasets/readiness?profile=${CUSTOM_TRAINING_PROFILE}`);
+export const exportTrainingDataset = () => apiRequest<any>('/training/datasets/export', { method: 'POST', body: JSON.stringify({ profile: CUSTOM_TRAINING_PROFILE }) });
 export const createTrainingJob = (datasetId: string) => apiRequest<TrainingJobResponse>('/training/jobs', { method: 'POST', body: JSON.stringify({ datasetId, baseModel: 'yolo11n.pt' }) });
 export const startTrainingJob = (id: string) => apiRequest<{ id: string; status: string }>(`/training/jobs/${id}/start`, { method: 'POST' });
 export const listTrainingJobs = () => apiRequest<TrainingJobResponse[]>('/training/jobs');

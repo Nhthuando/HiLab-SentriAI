@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import type { ObjectLabel, AnnotationSource, AnnotationSample, TrainingReadiness } from '../../types';
+import type { ObjectLabel, ObjectKind, AnnotationSource, AnnotationSample } from '../../types';
 import { getMediaSources, uploadMediaSource, deleteMediaSource } from '../../api/labels';
 import { resolveMediaUrl } from '../../api/client';
 import { ObjectTrainingPanel } from './ObjectTrainingPanel';
@@ -9,16 +9,34 @@ interface ObjectLabelTabProps {
   annSources: AnnotationSource[];
   annSamples: AnnotationSample[];
   onUpdateSources?: (sources: AnnotationSource[]) => void;
-  onAddLabel: (name: string, baseClass: string, kind: 'xe' | 'nguoi', tint?: string) => void;
-  onRenameLabel: (id: string, newName: string, baseClass?: string, kind?: 'xe' | 'nguoi', tint?: string) => void;
+  onAddLabel: (name: string, baseClass: string, kind: ObjectKind, tint?: string) => void;
+  onRenameLabel: (id: string, newName: string, baseClass?: string, kind?: ObjectKind, tint?: string) => void;
   onDeleteLabel: (id: string) => void;
   onAddSample: (sample: Omit<AnnotationSample, 'id'> & { id?: string }) => void;
   onUpdateSample: (id: string, patch: Partial<AnnotationSample>) => void;
   onDeleteSample: (id: string) => void;
   onSaveSamples: () => Promise<boolean>;
+  apiError?: string | null;
 }
 
 type DragMode = 'draw' | 'move' | 'resize-tl' | 'resize-tr' | 'resize-bl' | 'resize-br';
+
+const BASE_CLASS_OPTIONS = [
+  { value: 'person', label: 'Người (person)' },
+  { value: 'bicycle', label: 'Xe đạp (bicycle)' },
+  { value: 'car', label: 'Xe con (car)' },
+  { value: 'motorcycle', label: 'Xe máy (motorcycle)' },
+  { value: 'bus', label: 'Xe buýt (bus)' },
+  { value: 'truck', label: 'Xe tải (truck)' },
+  { value: 'reach_stacker', label: 'Xe nâng container (reach_stacker)' },
+  { value: 'container_truck', label: 'Xe đầu kéo container (container_truck)' },
+  { value: 'forklift', label: 'Xe nâng hàng (forklift)' },
+  { value: 'mobile_crane', label: 'Xe cẩu tự hành (mobile_crane)' },
+  { value: 'shipping_container', label: 'Container tĩnh (shipping_container)' },
+] as const;
+
+const BASE_CLASS_VALUES = new Set<string>(BASE_CLASS_OPTIONS.map((option) => option.value));
+const CANONICAL_CLASS_PATTERN = /^[a-z][a-z0-9_]{1,49}$/;
 
 export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   objLabels,
@@ -31,7 +49,8 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   onAddSample,
   onUpdateSample,
   onDeleteSample,
-  onSaveSamples
+  onSaveSamples,
+  apiError,
 }) => {
   const [activeSourceId, setActiveSourceId] = useState<string>(annSources[0]?.id || 'src1');
   const [selectedLabelId, setSelectedLabelId] = useState<string>(objLabels[0]?.id || 'l8');
@@ -59,22 +78,12 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   const [labelModalOpen, setLabelModalOpen] = useState<boolean>(false);
   const [editingLabel, setEditingLabel] = useState<ObjectLabel | null>(null);
   const [modalName, setModalName] = useState<string>('');
-  const [modalKind, setModalKind] = useState<'xe' | 'nguoi'>('xe');
+  const [modalKind, setModalKind] = useState<ObjectKind>('xe');
   const [modalBaseClass, setModalBaseClass] = useState<string>('truck');
   const [modalTint, setModalTint] = useState<string>('#3b82f6');
 
-  const baseClassOptions = [
-    { value: 'person', label: 'Người' },
-    { value: 'forklift', label: 'Xe nâng / forklift' },
-    { value: 'container handler', label: 'Xe nâng container' },
-    { value: 'reach stacker', label: 'Xe nâng reach stacker' },
-    { value: 'container', label: 'Container' },
-    { value: 'personnel_carrier', label: 'Xe chở người' },
-    { value: 'truck', label: 'Xe tải' },
-    { value: 'car', label: 'Xe con' },
-    { value: 'bus', label: 'Xe buýt' },
-    { value: 'motorcycle', label: 'Xe máy' },
-  ];
+  const isCustomClassInput = !BASE_CLASS_VALUES.has(modalBaseClass);
+  const isCanonicalClassValid = CANONICAL_CLASS_PATTERN.test(modalBaseClass);
 
   const colorPalette = [
     '#3b82f6', // Classic Blue
@@ -96,6 +105,12 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
       setSources(annSources);
     }
   }, [annSources]);
+
+  useEffect(() => {
+    if (!objLabels.some((label) => label.id === selectedLabelId)) {
+      setSelectedLabelId(objLabels[0]?.id || '');
+    }
+  }, [objLabels, selectedLabelId]);
 
   // Load persistent media sources from backend on mount once
   useEffect(() => {
@@ -499,14 +514,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   };
 
   const pendingSessionCount = annSamples.filter((s) => s.session === 1).length;
-  const savedSamples = annSamples.filter((sample) => sample.session !== 1);
-  const readiness: TrainingReadiness = {
-    savedSamples: savedSamples.length,
-    labelsWithSamples: new Set(savedSamples.map((sample) => sample.labelId)).size,
-    sourceCount: new Set(savedSamples.map((sample) => sample.srcId)).size,
-    excludedSamples: 0,
-    isReady: savedSamples.length >= 20 && new Set(savedSamples.map((sample) => sample.labelId)).size >= 2,
-  };
+  const savedSampleCount = annSamples.filter((sample) => sample.session !== 1).length;
 
   const handleSave = async () => {
     if (pendingSessionCount === 0) return;
@@ -535,14 +543,14 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
     setEditingLabel(label);
     setModalName(label.name);
     setModalKind(label.kind);
-    setModalBaseClass(label.baseClass || (label.kind === 'nguoi' ? 'person' : 'truck'));
+    setModalBaseClass(label.baseClass);
     setModalTint(label.tint || '#3b82f6');
     setLabelModalOpen(true);
   };
 
   // Save Modal
   const handleSaveLabelModal = () => {
-    if (!modalName.trim()) return;
+    if (!modalName.trim() || !isCanonicalClassValid) return;
 
     if (editingLabel) {
       onRenameLabel(editingLabel.id, modalName.trim(), modalBaseClass, modalKind, modalTint);
@@ -559,9 +567,9 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
 
   return (
     <div
+      className="object-label-layout"
       style={{
         display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1.6fr) minmax(340px, 1fr)',
         gap: '18px',
         alignItems: 'start'
       }}
@@ -1336,21 +1344,30 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
 
           {/* List of Labels with Edit & Delete Actions */}
           <div style={{ maxHeight: '420px', overflowY: 'auto', padding: '6px' }}>
+            {apiError && (
+              <div role="alert" style={{ margin: '6px', padding: '10px 12px', borderRadius: '9px', border: '1px solid var(--p0)', backgroundColor: 'var(--p0q)', color: 'var(--p0)', fontSize: '11px', lineHeight: 1.45 }}>
+                {apiError}
+              </div>
+            )}
+            {!apiError && objLabels.length === 0 && (
+              <div role="status" style={{ margin: '6px', padding: '18px 12px', textAlign: 'center', color: 'var(--ink3)', fontSize: '11.5px', lineHeight: 1.5 }}>
+                Danh mục nhãn trên máy chủ đang trống. Hãy thêm nhãn đầu tiên để cấu hình nhận diện và zone.
+              </div>
+            )}
             {objLabels.map((o, idx) => {
               const isSelected = selectedLabelId === o.id;
               const isNguoi = o.kind === 'nguoi';
+              const isStatic = o.kind === 'tinh' || o.baseClass === 'shipping_container';
               const labelTint = o.tint || getLabelColor(o.id);
+              const capabilityLabel = o.detectionSource === 'COCO'
+                ? 'COCO'
+                : o.detectionSource === 'CUSTOM'
+                  ? `Custom · ${o.activeModelVersion || 'không rõ phiên bản'}`
+                  : 'Chưa có model nhận diện';
 
               return (
                 <div
                   key={o.id}
-                  onClick={() => {
-                    setSelectedLabelId(o.id);
-                    if (selectedSampleId) {
-                      onUpdateSample(selectedSampleId, { labelId: o.id });
-                      setSavedSuccessMsg(`✓ Đã gán nhãn "${o.name}" cho mẫu được chọn`);
-                    }
-                  }}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -1358,7 +1375,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                     padding: '10px 14px',
                     borderRadius: '10px',
                     marginBottom: '4px',
-                    cursor: 'pointer',
+                    cursor: 'default',
                     backgroundColor: isSelected ? 'var(--card-hover)' : 'transparent',
                     border: isSelected ? `1.5px solid ${labelTint}` : '1.5px solid transparent',
                     boxShadow: isSelected ? `0 2px 10px -2px ${labelTint}44` : 'none',
@@ -1371,7 +1388,18 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                     if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => {
+                      setSelectedLabelId(o.id);
+                      if (selectedSampleId) {
+                        onUpdateSample(selectedSampleId, { labelId: o.id });
+                        setSavedSuccessMsg(`✓ Đã gán nhãn "${o.name}" cho mẫu được chọn`);
+                      }
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1, padding: 0, border: 'none', background: 'transparent', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit' }}
+                  >
                     {/* Number key pill */}
                     <span
                       style={{
@@ -1398,30 +1426,48 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                       <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {o.name}
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px', flexWrap: 'wrap' }}>
                         <span
                           style={{
                             fontSize: '9.5px',
                             fontWeight: 600,
                             padding: '1px 6px',
                             borderRadius: '4px',
-                            backgroundColor: isNguoi ? 'var(--purpleq)' : 'var(--accq)',
-                            color: isNguoi ? 'var(--purple)' : 'var(--acc)'
+                            backgroundColor: isNguoi ? 'var(--purpleq)' : isStatic ? 'var(--raise)' : 'var(--accq)',
+                            color: isNguoi ? 'var(--purple)' : isStatic ? 'var(--ink2)' : 'var(--acc)'
                           }}
                         >
-                          {isNguoi ? 'Người' : 'Xe'}
+                          {isNguoi ? 'Người' : isStatic ? 'Vật thể tĩnh' : 'Xe'}
                         </span>
                         <span style={{ fontSize: '10.5px', color: 'var(--ink3)', fontFamily: 'var(--font-mono)' }}>
                           {o.samples} mẫu
                         </span>
+                        <span
+                          title={o.capabilityReason}
+                          style={{
+                            fontSize: '9.5px',
+                            fontWeight: 700,
+                            padding: '1px 6px',
+                            borderRadius: '999px',
+                            backgroundColor: o.isDetectable ? 'var(--okq)' : 'var(--p1q)',
+                            color: o.isDetectable ? 'var(--ok)' : 'var(--p1)',
+                          }}
+                        >
+                          {capabilityLabel}
+                        </span>
+                      </div>
+                      <div style={{ marginTop: '3px', color: 'var(--ink3)', fontSize: '9.5px', lineHeight: 1.35 }}>
+                        {o.capabilityReason}
                       </div>
                     </div>
-                  </div>
+                  </button>
 
                   {/* Actions: Edit & Delete */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 'none' }}>
                     {/* Edit Button */}
                     <button
+                      type="button"
+                      aria-label={`Chỉnh sửa nhãn ${o.name}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleOpenEditModal(o);
@@ -1456,6 +1502,8 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
 
                     {/* Delete Button */}
                     <button
+                      type="button"
+                      aria-label={`Xóa nhãn ${o.name}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         if (window.confirm(`Bạn có chắc muốn xóa nhãn "${o.name}"?`)) {
@@ -1544,12 +1592,13 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
           </div>
         </div>
 
-        <ObjectTrainingPanel readiness={readiness} />
+        <ObjectTrainingPanel refreshKey={savedSampleCount} />
       </div>
 
       {/* Modal: Thêm / Sửa Nhãn Đối Tượng */}
       {labelModalOpen && (
         <div
+          role="presentation"
           style={{
             position: 'fixed',
             inset: 0,
@@ -1565,6 +1614,9 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
         >
           <div
             className="glass-panel animate-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="object-label-dialog-title"
             style={{
               width: '100%',
               maxWidth: '440px',
@@ -1587,10 +1639,12 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                 backgroundColor: 'var(--panel)'
               }}
             >
-              <div style={{ fontSize: '14.5px', fontWeight: 700, color: 'var(--ink)' }}>
+              <div id="object-label-dialog-title" style={{ fontSize: '14.5px', fontWeight: 700, color: 'var(--ink)' }}>
                 {editingLabel ? `Chỉnh sửa nhãn: ${editingLabel.name}` : 'Thêm nhãn đối tượng mới'}
               </div>
               <button
+                type="button"
+                aria-label="Đóng hộp thoại nhãn đối tượng"
                 onClick={() => setLabelModalOpen(false)}
                 style={{
                   background: 'transparent',
@@ -1615,7 +1669,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                 <input
                   value={modalName}
                   onChange={(e) => setModalName(e.target.value)}
-                  placeholder="vd: Xe nâng reach stacker, Người mặc áo phản quang…"
+                  placeholder="vd: Xe nâng container, Người mặc áo phản quang…"
                   autoFocus
                   style={{
                     width: '100%',
@@ -1635,11 +1689,12 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                 <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink2)', display: 'block', marginBottom: '6px' }}>
                   Phân loại đối tượng:
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
                   <button
+                    type="button"
                     onClick={() => {
                       setModalKind('xe');
-                      if (modalBaseClass === 'person') setModalBaseClass('truck');
+                      if (modalBaseClass === 'person' || modalBaseClass === 'shipping_container') setModalBaseClass('truck');
                     }}
                     style={{
                       display: 'flex',
@@ -1661,6 +1716,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                   </button>
 
                   <button
+                    type="button"
                     onClick={() => {
                       setModalKind('nguoi');
                       setModalBaseClass('person');
@@ -1683,6 +1739,25 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                     <span>🚶</span>
                     <span>Người</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalKind('tinh');
+                      setModalBaseClass('shipping_container');
+                    }}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                      padding: '8px', borderRadius: '9px',
+                      border: modalKind === 'tinh' ? '2px solid var(--ink2)' : '1px solid var(--line2)',
+                      backgroundColor: 'var(--raise)',
+                      color: modalKind === 'tinh' ? 'var(--ink)' : 'var(--ink2)',
+                      fontWeight: 600, fontSize: '12.5px', cursor: 'pointer'
+                    }}
+                  >
+                    <span>▣</span>
+                    <span>Vật thể tĩnh</span>
+                  </button>
                 </div>
               </div>
 
@@ -1692,23 +1767,47 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                   Class model gốc:
                 </label>
                 <select
-                  value={modalBaseClass}
+                  value={isCustomClassInput ? '__custom__' : modalBaseClass}
                   aria-label="Class model gốc"
                   onChange={(e) => {
                     const next = e.target.value;
-                    setModalBaseClass(next);
-                    setModalKind(next === 'person' ? 'nguoi' : 'xe');
+                    setModalBaseClass(next === '__custom__' ? '' : next);
+                    setModalKind(next === 'person' ? 'nguoi' : next === 'shipping_container' ? 'tinh' : 'xe');
                   }}
                   style={{ width: '100%', marginBottom: '10px', padding: '9px 12px', borderRadius: '9px', border: '1px solid var(--line2)', backgroundColor: 'var(--bg)', color: 'var(--ink)', fontSize: '13px', outline: 'none' }}
                 >
-                  {baseClassOptions
-                    .filter((option) => modalKind === 'nguoi' ? option.value === 'person' : option.value !== 'person')
+                  {BASE_CLASS_OPTIONS
+                    .filter((option) => modalKind === 'nguoi'
+                      ? option.value === 'person'
+                      : modalKind === 'tinh'
+                        ? option.value === 'shipping_container'
+                        : option.value !== 'person' && option.value !== 'shipping_container')
                     .map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
+                  {modalKind === 'xe' && <option value="__custom__">Class custom khác…</option>}
                 </select>
+                {modalKind === 'xe' && isCustomClassInput && (
+                  <div style={{ marginBottom: '10px' }}>
+                    <label htmlFor="custom-canonical-class" style={{ display: 'block', marginBottom: '5px', color: 'var(--ink2)', fontSize: '11px', fontWeight: 600 }}>
+                      Mã class custom chuẩn hóa
+                    </label>
+                    <input
+                      id="custom-canonical-class"
+                      value={modalBaseClass}
+                      onChange={(event) => setModalBaseClass(event.target.value.trim().toLocaleLowerCase().replace(/[ -]+/g, '_'))}
+                      placeholder="vd: yard_tug"
+                      aria-invalid={!isCanonicalClassValid}
+                      aria-describedby="custom-class-help"
+                      style={{ width: '100%', padding: '9px 12px', borderRadius: '9px', border: `1px solid ${isCanonicalClassValid ? 'var(--line2)' : 'var(--p0)'}`, backgroundColor: 'var(--bg)', color: 'var(--ink)', fontSize: '13px', outline: 'none' }}
+                    />
+                    <div id="custom-class-help" style={{ marginTop: '5px', color: isCanonicalClassValid ? 'var(--ink3)' : 'var(--p0)', fontSize: '10px', lineHeight: 1.4 }}>
+                      Dùng chữ thường, số và dấu gạch dưới; phải bắt đầu bằng chữ. Class custom vẫn hiện “Chưa có model nhận diện” cho tới khi có model ACTIVE chứa class này.
+                    </div>
+                  </div>
+                )}
                 <div style={{ marginBottom: '8px', fontSize: '10.5px', color: 'var(--ink3)' }}>
-                  Chọn class model gốc; lưu mẫu không tự huấn luyện model.
+                  Container tĩnh là <strong>shipping_container</strong>, không phải phương tiện. Xe đầu kéo chở container là <strong>container_truck</strong>. Lưu mẫu không tự bật nhận diện.
                 </div>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink2)', display: 'block', marginBottom: '8px' }}>
                   Màu sắc nhận diện bounding box:
@@ -1719,6 +1818,8 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                     return (
                       <button
                         key={c}
+                        type="button"
+                        aria-label={`Chọn màu ${c}`}
                         onClick={() => setModalTint(c)}
                         style={{
                           width: '32px',
@@ -1759,6 +1860,7 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
               }}
             >
               <button
+                type="button"
                 onClick={() => setLabelModalOpen(false)}
                 style={{
                   padding: '8px 16px',
@@ -1775,18 +1877,19 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
               </button>
 
               <button
+                type="button"
                 onClick={handleSaveLabelModal}
-                disabled={!modalName.trim()}
+                disabled={!modalName.trim() || !isCanonicalClassValid}
                 style={{
                   padding: '8px 20px',
                   borderRadius: '8px',
                   border: 'none',
-                  backgroundColor: modalName.trim() ? 'var(--acc)' : 'var(--raise)',
-                  color: modalName.trim() ? '#ffffff' : 'var(--ink3)',
+                  backgroundColor: modalName.trim() && isCanonicalClassValid ? 'var(--acc)' : 'var(--raise)',
+                  color: modalName.trim() && isCanonicalClassValid ? '#ffffff' : 'var(--ink3)',
                   fontSize: '12.5px',
                   fontWeight: 700,
-                  cursor: modalName.trim() ? 'pointer' : 'not-allowed',
-                  boxShadow: modalName.trim() ? '0 2px 8px var(--acc-glow)' : 'none'
+                  cursor: modalName.trim() && isCanonicalClassValid ? 'pointer' : 'not-allowed',
+                  boxShadow: modalName.trim() && isCanonicalClassValid ? '0 2px 8px var(--acc-glow)' : 'none'
                 }}
               >
                 {editingLabel ? 'Cập nhật' : 'Thêm nhãn'}

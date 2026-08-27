@@ -11,14 +11,14 @@ import type {
   ChatMessage,
   FloatingNotification,
   Vehicle,
-  GateEvent
+  GateEvent,
+  ObjectKind
 } from './types';
 import {
   INITIAL_VEHICLES,
   INITIAL_LABELS,
   INITIAL_GATE_EVENTS,
   INITIAL_ZONES,
-  INITIAL_OBJ_LABELS,
   INITIAL_ANN_SOURCES,
   INITIAL_ANN_SAMPLES,
   INITIAL_QA_MESSAGES,
@@ -36,14 +36,11 @@ import { ThemeSettingsTab } from './components/Settings/ThemeSettingsTab';
 import { AIQAChat } from './components/AIQAChat';
 import { FloatingAlert } from './components/FloatingAlert';
 import { useBroadcastChannel, useWebSocket } from './hooks';
+import { useZoneMutations } from './hooks/useZoneMutations';
 import {
-  createZone as createZoneRequest,
-  deleteZone as deleteZoneRequest,
   getCameraSnapshot,
   getZones,
-  updateZone as updateZoneRequest,
   zoneRecordToView,
-  zoneViewToWrite,
 } from './api/zones';
 
 export const App: React.FC = () => {
@@ -75,8 +72,10 @@ export const App: React.FC = () => {
   }));
   const [zoneEditorLoading, setZoneEditorLoading] = useState(true);
   const [zoneEditorError, setZoneEditorError] = useState<string | null>(null);
+  const [objectLabelError, setObjectLabelError] = useState<string | null>(null);
+  const [objectLabelRegistryStatus, setObjectLabelRegistryStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [areaSnapshotImage, setAreaSnapshotImage] = useState<string | null>(null);
-  const [objLabels, setObjLabels] = useState<ObjectLabel[]>(INITIAL_OBJ_LABELS);
+  const [objLabels, setObjLabels] = useState<ObjectLabel[]>([]);
   const [annSources, setAnnSources] = useState<AnnotationSource[]>(() => {
     try {
       const saved = localStorage.getItem('sentriai_user_media_sources');
@@ -212,6 +211,25 @@ export const App: React.FC = () => {
     () => objLabels.map((label) => label.name),
     [objLabels],
   );
+  const detectableObjLabelNames = useMemo(
+    () => objLabels.filter((label) => label.isDetectable).map((label) => label.name),
+    [objLabels],
+  );
+
+  const {
+    updateZone: handleUpdateZone,
+    addZone: handleAddZone,
+    deleteZone: handleDeleteZone,
+    statusByZoneId: zoneMutationStatusById,
+    notice: zoneMutationNotice,
+  } = useZoneMutations({
+    zonesByCam,
+    setZonesByCam,
+    allLabelNames: allObjLabelNames,
+    detectableLabelNames: detectableObjLabelNames,
+    registryReady: objectLabelRegistryStatus === 'ready',
+    setEditorError: setZoneEditorError,
+  });
 
   const loadZoneEditorData = useCallback(async () => {
     setZoneEditorLoading(true);
@@ -253,82 +271,32 @@ export const App: React.FC = () => {
     void loadZoneEditorData();
   }, [loadZoneEditorData]);
 
-  // Zone handlers: persists through VS-SETTINGS-ZONE API for both BAI-KIEM and GATE-01.
-  const handleUpdateZone = (camId: string, zoneId: string, patch: Partial<PolygonZone>) => {
-    const previousZones = zonesByCam[camId] || [];
-    const updatedZones = previousZones.map((zone) => (
-      zone.id === zoneId ? { ...zone, ...patch } : zone
-    ));
-
-    setZonesByCam((prev) => ({
-      ...prev,
-      [camId]: updatedZones,
-    }));
-
-    const updatedZone = updatedZones.find((zone) => zone.id === zoneId);
-    if (!updatedZone) return;
-
-    void updateZoneRequest(zoneId, zoneViewToWrite(updatedZone, allObjLabelNames, camId))
-      .then((record) => {
-        const persisted = zoneRecordToView(record, allObjLabelNames);
-        setZonesByCam((prev) => ({
-          ...prev,
-          [camId]: (prev[camId] || []).map((zone) => (
-            zone.id === zoneId ? { ...persisted, color: zone.color } : zone
-          )),
-        }));
-      })
-      .catch(() => {
-        setZonesByCam((prev) => ({ ...prev, [camId]: previousZones }));
-        setZoneEditorError(`Không thể lưu thay đổi zone ${camId}. Thay đổi đã được hoàn tác.`);
-      });
-  };
-
-  const handleAddZone = async (camId: string, newZone: PolygonZone): Promise<PolygonZone> => {
+  const loadObjectLabels = useCallback(async () => {
+    setObjectLabelRegistryStatus('loading');
     try {
-      const record = await createZoneRequest(zoneViewToWrite(newZone, allObjLabelNames, camId));
-      const persisted = {
-        ...zoneRecordToView(record, allObjLabelNames),
-        color: newZone.color,
-      };
-      setZonesByCam((prev) => ({
-        ...prev,
-        [camId]: [...(prev[camId] || []), persisted],
-      }));
-      return persisted;
+      const { getLabels } = await import('./api/labels');
+      const data = await getLabels();
+      if (!Array.isArray(data)) throw new Error('Phản hồi danh mục nhãn không hợp lệ.');
+      setObjLabels(data);
+      setObjectLabelError(null);
+      setObjectLabelRegistryStatus('ready');
     } catch (err) {
-      console.error(`Failed to create zone for ${camId}:`, err);
-      setZonesByCam((prev) => ({
-        ...prev,
-        [camId]: [...(prev[camId] || []), newZone],
-      }));
-      return newZone;
+      console.warn('Could not fetch labels from API:', err);
+      setObjLabels([]);
+      setObjectLabelRegistryStatus('error');
+      setObjectLabelError('Không thể tải danh mục nhãn từ máy chủ. Danh mục hiện được để trống để tránh dùng dữ liệu giả.');
     }
-  };
+  }, []);
 
-  const handleDeleteZone = (camId: string, zoneId: string) => {
-    const previousZones = zonesByCam[camId] || [];
-    setZonesByCam((prev) => ({
-      ...prev,
-      [camId]: (prev[camId] || []).filter((z) => z.id !== zoneId)
-    }));
-
-    void deleteZoneRequest(zoneId).catch(() => {
-      setZonesByCam((prev) => ({ ...prev, [camId]: previousZones }));
-      setZoneEditorError('Không thể xóa zone. Zone đã được khôi phục.');
-    });
-  };
+  const retryZoneEditorData = useCallback(() => {
+    void loadObjectLabels();
+    void loadZoneEditorData();
+  }, [loadObjectLabels, loadZoneEditorData]);
 
   // Fetch labels, media sources & samples from API on mount
   useEffect(() => {
-    import('./api/labels').then(({ getLabels, getMediaSources, getAnnotationSamples }) => {
-      getLabels()
-        .then((data) => {
-          if (Array.isArray(data) && data.length > 0) {
-            setObjLabels(data);
-          }
-        })
-        .catch((err) => console.warn('Could not fetch labels from API:', err));
+    void loadObjectLabels();
+    import('./api/labels').then(({ getMediaSources, getAnnotationSamples }) => {
 
       getMediaSources()
         .then((media) => {
@@ -376,14 +344,15 @@ export const App: React.FC = () => {
           .catch((err) => console.warn('Could not fetch vehicles from API:', err));
       });
     });
-  }, []);
+  }, [loadObjectLabels]);
 
   // Object label handlers with API integration
-  const handleAddLabel = async (name: string, baseClass: string, kind: 'xe' | 'nguoi', tint?: string) => {
+  const handleAddLabel = async (name: string, baseClass: string, kind: ObjectKind, tint?: string) => {
     const tints = ['#3b82f6', '#10b981', '#06b6d4', '#a855f7', '#f59e0b', '#f43f5e', '#8b5cf6', '#64748b'];
     const assignedTint = tint || tints[objLabels.length % tints.length];
     
     try {
+      setObjectLabelError(null);
       const { createLabel } = await import('./api/labels');
       const created = await createLabel({
         vietnameseName: name,
@@ -392,51 +361,35 @@ export const App: React.FC = () => {
         tint: assignedTint,
       });
       setObjLabels((prev) => [...prev, created]);
-    } catch (err: any) {
-      console.warn('API error creating label, updating local state:', err);
-      const newLabel: ObjectLabel = {
-        id: 'l' + Date.now(),
-        name,
-        baseClass,
-        kind,
-        tint: assignedTint,
-        samples: 0
-      };
-      setObjLabels((prev) => [...prev, newLabel]);
+    } catch (err) {
+      console.warn('API error creating label:', err);
+      setObjectLabelError(err instanceof Error ? err.message : 'Không thể tạo nhãn trên máy chủ.');
     }
   };
 
-  const handleRenameLabel = async (id: string, newName: string, baseClass?: string, kind?: 'xe' | 'nguoi', tint?: string) => {
+  const handleRenameLabel = async (id: string, newName: string, baseClass?: string, kind?: ObjectKind, tint?: string) => {
     try {
+      setObjectLabelError(null);
       const { updateLabel } = await import('./api/labels');
-      await updateLabel(id, { vietnameseName: newName, baseClass, kind, tint });
+      const updated = await updateLabel(id, { vietnameseName: newName, baseClass, kind, tint });
+      setObjLabels((prev) => prev.map((label) => label.id === id ? updated : label));
     } catch (err) {
-      console.warn('API error updating label, updating local state:', err);
+      console.warn('API error updating label:', err);
+      setObjectLabelError(err instanceof Error ? err.message : 'Không thể cập nhật nhãn trên máy chủ.');
     }
-    setObjLabels((prev) =>
-      prev.map((l) =>
-        l.id === id
-          ? {
-              ...l,
-              name: newName,
-              ...(baseClass ? { baseClass } : {}),
-              ...(kind ? { kind } : {}),
-              ...(tint ? { tint } : {})
-            }
-          : l
-      )
-    );
   };
 
   const handleDeleteLabel = async (id: string) => {
     try {
+      setObjectLabelError(null);
       const { deleteLabel } = await import('./api/labels');
       await deleteLabel(id);
+      setObjLabels((prev) => prev.filter((label) => label.id !== id));
+      setAnnSamples((prev) => prev.filter((sample) => sample.labelId !== id));
     } catch (err) {
       console.warn('API error deleting label:', err);
+      setObjectLabelError(err instanceof Error ? err.message : 'Không thể xóa nhãn trên máy chủ.');
     }
-    setObjLabels((prev) => prev.filter((l) => l.id !== id));
-    setAnnSamples((prev) => prev.filter((s) => s.labelId !== id));
   };
 
   // Annotation sample handlers
@@ -463,25 +416,15 @@ export const App: React.FC = () => {
         const { saveAnnotationSamples, getLabels } = await import('./api/labels');
         await saveAnnotationSamples(pending);
         const refreshed = await getLabels();
-        if (Array.isArray(refreshed) && refreshed.length > 0) {
+        if (Array.isArray(refreshed)) {
           setObjLabels(refreshed);
+          setObjectLabelError(null);
         }
       } catch (err) {
         console.warn('API error saving samples; keeping annotations for retry:', err);
         return false;
       }
     }
-
-    const counts: Record<string, number> = {};
-    annSamples.forEach((s) => {
-      if (s.session === 1) {
-        counts[s.labelId] = (counts[s.labelId] || 0) + 1;
-      }
-    });
-
-    setObjLabels((prev) =>
-      prev.map((l) => (counts[l.id] ? { ...l, samples: l.samples + counts[l.id] } : l))
-    );
 
     // Clear saved boxes from active canvas once persisted to database
     setAnnSamples([]);
@@ -828,11 +771,14 @@ export const App: React.FC = () => {
                 onUpdateZone={handleUpdateZone}
                 onAddZone={handleAddZone}
                 onDeleteZone={handleDeleteZone}
+                mutationStatusByZoneId={zoneMutationStatusById}
+                mutationNotice={zoneMutationNotice}
                 snapshotImageByCam={snapshotImageByCam}
                 snapshotImage={areaSnapshotImage}
                 isLoading={zoneEditorLoading}
                 apiError={zoneEditorError}
-                onRetry={loadZoneEditorData}
+                labelRegistryStatus={objectLabelRegistryStatus}
+                onRetry={retryZoneEditorData}
               />
             )}
 
@@ -850,6 +796,7 @@ export const App: React.FC = () => {
                 onUpdateSample={handleUpdateSample}
                 onDeleteSample={handleDeleteSample}
                 onSaveSamples={handleSaveSamples}
+                apiError={objectLabelError}
               />
             )}
 

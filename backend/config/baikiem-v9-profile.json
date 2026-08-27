@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "profile": "BAIKIEM_V9_UNIFIED",
+  "runtimeMode": "UNIFIED",
+  "classes": [
+    { "id": 0, "baseClass": "person", "recommendedDisplayName": "Người", "minimumInstances": 1000, "minimumSources": 5 },
+    { "id": 1, "baseClass": "bicycle", "recommendedDisplayName": "Xe đạp", "minimumInstances": 300, "minimumSources": 5 },
+    { "id": 2, "baseClass": "car", "recommendedDisplayName": "Xe con", "minimumInstances": 500, "minimumSources": 5 },
+    { "id": 3, "baseClass": "motorcycle", "recommendedDisplayName": "Xe máy", "minimumInstances": 500, "minimumSources": 5 },
+    { "id": 4, "baseClass": "bus", "recommendedDisplayName": "Xe buýt", "minimumInstances": 300, "minimumSources": 5 },
+    { "id": 5, "baseClass": "truck", "recommendedDisplayName": "Xe tải", "minimumInstances": 800, "minimumSources": 5 },
+    { "id": 6, "baseClass": "container_truck", "recommendedDisplayName": "Xe đầu kéo container", "minimumInstances": 500, "minimumSources": 5 },
+    { "id": 7, "baseClass": "forklift", "recommendedDisplayName": "Xe nâng hàng", "minimumInstances": 500, "minimumSources": 5 },
+    { "id": 8, "baseClass": "reach_stacker", "recommendedDisplayName": "Xe nâng container", "minimumInstances": 800, "minimumSources": 5 },
+    { "id": 9, "baseClass": "mobile_crane", "recommendedDisplayName": "Xe cẩu tự hành", "minimumInstances": 300, "minimumSources": 5 }
+  ],
+  "hardNegativeClasses": ["shipping_container"],
+  "selection": {
+    "trainValTargetFrames": 1000,
+    "lockedTargetFrames": 200,
+    "sampleIntervalSeconds": 12.0,
+    "stationaryAnchorSeconds": 30.0,
+    "maximumCandidateFrames": 1300,
+    "proposalConfidence": 0.05,
+    "highConfidence": 0.25,
+    "negativeFraction": 0.2,
+    "nearDuplicateHamming": 4,
+    "jpegQuality": 92,
+    "imageSize": 896,
+    "batch": 1
+  },
+  "acceptance": {
+    "macroPrecision": 0.9,
+    "macroRecall": 0.9,
+    "macroF1": 0.9,
+    "map50": 0.9,
+    "macroMap50To95": 0.55,
+    "minimumClassPrecision": 0.85,
+    "minimumClassRecall": 0.85,
+    "minimumEndToEndFps": 8.0,
+    "maximumVisibleGapSeconds": 0.5
+  }
+}

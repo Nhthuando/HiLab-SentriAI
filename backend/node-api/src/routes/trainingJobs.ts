@@ -3,7 +3,9 @@ import { spawn } from 'child_process';
 import { createReadStream, existsSync, readdirSync, readFileSync } from 'fs';
 import path from 'path';
 import { Router, Request, Response, NextFunction } from 'express';
+import { evaluateModelActivation } from '../detection/activationGate';
 import { prisma } from '../prisma/client';
+import { invalidateDetectionContext } from '../services/detectionCapabilityService';
 import { BadRequestError, NotFoundError } from '../utils/errors';
 import { sendCreated, sendSuccess } from '../utils/response';
 
@@ -256,12 +258,17 @@ trainingJobsRouter.post('/versions/:id/use', async (req: Request, res: Response,
     const candidate = await prisma.modelVersion.findUnique({ where: { id: req.params.id } });
     if (!candidate) throw new NotFoundError('Không tìm thấy bản nhận diện mới');
     if (!['CANDIDATE', 'INACTIVE'].includes(candidate.status) || !candidate.evaluatedAt) throw new BadRequestError('Bản này chưa đạt điều kiện để sử dụng');
+    const activation = evaluateModelActivation(candidate.evaluationMetrics);
+    if (!activation.passed) {
+      throw new BadRequestError(`Model version has not passed the activation safety gate: ${activation.reasonCode}`);
+    }
     const artifact = artifactFile(candidate.artifactPath);
     if (!artifact || !existsSync(artifact) || await fileHash(artifact) !== candidate.artifactSha256) throw new BadRequestError('File model không còn đúng phiên bản đã kiểm tra');
     await prisma.$transaction([
       prisma.modelVersion.updateMany({ where: { status: 'ACTIVE' }, data: { status: 'INACTIVE' } }),
       prisma.modelVersion.update({ where: { id: candidate.id }, data: { status: 'ACTIVE', activatedAt: new Date() } }),
     ]);
+    invalidateDetectionContext();
     return sendSuccess(res, { id: candidate.id, status: 'ACTIVE', message: 'Đã dùng bản nhận diện mới; base YOLO vẫn nhận người và xe nền' });
   } catch (error) { return next(error); }
 });
@@ -269,6 +276,7 @@ trainingJobsRouter.post('/versions/:id/use', async (req: Request, res: Response,
 trainingJobsRouter.post('/versions/return', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     await prisma.modelVersion.updateMany({ where: { status: 'ACTIVE' }, data: { status: 'INACTIVE' } });
+    invalidateDetectionContext();
     return sendSuccess(res, { status: 'BASE_ONLY', message: 'Đã quay về bản nhận diện nền' });
   } catch (error) { return next(error); }
 });

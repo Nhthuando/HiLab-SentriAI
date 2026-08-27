@@ -1,6 +1,10 @@
 import { Request, Response, Router } from 'express';
 import type { Prisma } from '@prisma/client';
+import { validateDetectableTargetLabels, ZoneLabelValidationError } from '../detection/zoneLabelValidation';
 import { prisma } from '../prisma/client';
+import { PrismaZoneMutationRepository } from '../repositories/ZoneMutationRepository';
+import { loadDetectionContext } from '../services/detectionCapabilityService';
+import { ZoneMutationService, ZoneNotFoundError } from '../services/zoneMutationService';
 import { sendCreated, sendError, sendNoContent, sendSuccess } from '../utils/response';
 
 const zonesRouter = Router();
@@ -8,6 +12,7 @@ const AREA_CAMERA_ID = 'BAI-KIEM';
 const GATE_CAMERA_ID = 'GATE-01';
 const SUPPORTED_CAMERA_IDS = new Set(['BAI-KIEM', 'GATE-01']);
 const RULE_TYPES = new Set(['PROHIBIT_SPECIFIED', 'ALLOW_SPECIFIED']);
+const zoneMutationService = new ZoneMutationService(new PrismaZoneMutationRepository());
 
 interface PolygonPoint {
   x: number;
@@ -221,12 +226,6 @@ function isPrismaError(error: unknown, code: string): boolean {
     && (error as { code?: unknown }).code === code;
 }
 
-async function getZoneOrNull(id: string) {
-  return prisma.zone.findUnique({
-    where: { id },
-  });
-}
-
 zonesRouter.get('/', async (req: Request, res: Response) => {
   try {
     if (!isSingleQueryValue(req.query.camera_id)) {
@@ -252,18 +251,23 @@ zonesRouter.get('/', async (req: Request, res: Response) => {
 zonesRouter.post('/', async (req: Request, res: Response) => {
   try {
     const input = parseCreateZoneInput(req.body);
+    const context = await loadDetectionContext();
+    const targetLabels = validateDetectableTargetLabels(input.targetLabels, context.capabilitiesByName);
     const zone = await prisma.zone.create({
       data: {
         cameraId: input.cameraId,
         name: input.name,
         polygonPoints: input.polygonPoints as unknown as Prisma.InputJsonValue,
         ruleType: input.ruleType,
-        targetLabels: input.targetLabels as unknown as Prisma.InputJsonValue,
+        targetLabels: targetLabels as unknown as Prisma.InputJsonValue,
         isActive: input.isActive,
       },
     });
     return sendCreated(res, toZoneDto(zone));
   } catch (error) {
+    if (error instanceof ZoneLabelValidationError) {
+      return sendError(res, 400, error.reasonCode, error.message);
+    }
     if (error instanceof ZoneValidationError) {
       return sendError(res, 400, 'VALIDATION_ERROR', error.message);
     }
@@ -278,29 +282,37 @@ zonesRouter.post('/', async (req: Request, res: Response) => {
 zonesRouter.put('/:id', async (req: Request, res: Response) => {
   try {
     const input = parseUpdateZoneInput(req.body);
-    const existing = await getZoneOrNull(req.params.id);
-    if (!existing) {
-      return sendError(res, 404, 'ZONE_NOT_FOUND', 'Zone was not found');
-    }
+    const targetLabels = input.targetLabels === undefined
+      ? undefined
+      : validateDetectableTargetLabels(
+        input.targetLabels,
+        (await loadDetectionContext()).capabilitiesByName,
+      );
 
-    const zone = await prisma.zone.update({
-      where: { id: existing.id },
-      data: {
+    const zone = await zoneMutationService.update(
+      req.params.id,
+      {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.polygonPoints !== undefined
           ? { polygonPoints: input.polygonPoints as unknown as Prisma.InputJsonValue }
           : {}),
         ...(input.ruleType !== undefined ? { ruleType: input.ruleType } : {}),
-        ...(input.targetLabels !== undefined
-          ? { targetLabels: input.targetLabels as unknown as Prisma.InputJsonValue }
+        ...(targetLabels !== undefined
+          ? { targetLabels: targetLabels as unknown as Prisma.InputJsonValue }
           : {}),
         ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
       },
-    });
+    );
     return sendSuccess(res, toZoneDto(zone));
   } catch (error) {
+    if (error instanceof ZoneLabelValidationError) {
+      return sendError(res, 400, error.reasonCode, error.message);
+    }
     if (error instanceof ZoneValidationError) {
       return sendError(res, 400, 'VALIDATION_ERROR', error.message);
+    }
+    if (error instanceof ZoneNotFoundError) {
+      return sendError(res, 404, 'ZONE_NOT_FOUND', error.message);
     }
     if (isPrismaError(error, 'P2002')) {
       return sendError(res, 409, 'ZONE_NAME_CONFLICT', 'Zone name already exists for this camera');
@@ -312,12 +324,7 @@ zonesRouter.put('/:id', async (req: Request, res: Response) => {
 
 zonesRouter.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const existing = await getZoneOrNull(req.params.id);
-    if (!existing) {
-      return sendError(res, 404, 'ZONE_NOT_FOUND', 'Zone was not found');
-    }
-
-    await prisma.zone.delete({ where: { id: existing.id } });
+    await zoneMutationService.delete(req.params.id);
     return sendNoContent(res);
   } catch (error) {
     console.error('[zonesRouter] Failed to delete zone:', error);

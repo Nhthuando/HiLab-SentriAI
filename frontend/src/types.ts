@@ -3,7 +3,7 @@ export type SettingsSubTab = 'label' | 'zone' | 'obj' | 'theme';
 export type ThemeMode = 'dark' | 'light' | 'system';
 export type AccentColor = 'blue' | 'emerald' | 'cyan' | 'purple' | 'amber';
 export type VehicleStatus = 'quen' | 'la';
-export type ObjectKind = 'xe' | 'nguoi';
+export type ObjectKind = 'xe' | 'nguoi' | 'tinh';
 
 export interface Vehicle {
   plate: string;
@@ -29,6 +29,7 @@ export interface GateEvent {
 
 export type ViolationStatus = 'OPEN' | 'CLOSED';
 export type AreaAction = 'STARTED' | 'ENDED';
+export type AreaClipStatus = 'NOT_REQUESTED' | 'QUEUED' | 'GENERATING' | 'READY' | 'FAILED' | 'EXPIRED';
 
 export interface AreaViolationDto {
   id: string;
@@ -40,6 +41,8 @@ export interface AreaViolationDto {
   enteredAt: string;
   exitedAt: string | null;
   durationSeconds: number | null;
+  clipStatus: AreaClipStatus;
+  clipAvailable: boolean;
   clipUrl: string | null;
 }
 
@@ -84,6 +87,7 @@ export interface AreaEvent {
   st: 'Được phép' | 'Vi phạm';
   ok: boolean;
   clipUrl?: string | null;
+  clipStatus?: AreaClipStatus;
   durationSeconds?: number | null;
 }
 
@@ -101,10 +105,29 @@ export interface ObjectLabel {
   id: string;
   name: string;
   kind: ObjectKind;
-  /** Canonical detector class used by the Python worker (for example `forklift`). */
-  baseClass?: string;
+  /** Canonical detector class requested by the registry row. */
+  baseClass: string;
   tint: string;
   samples: number;
+  canonicalClass: string | null;
+  detectionSource: 'COCO' | 'CUSTOM' | 'UNAVAILABLE';
+  isDetectable: boolean;
+  activeModelVersion: string | null;
+  capabilityReason: string;
+  capabilityReasonCode: string;
+}
+
+export type ZoneMutationPhase = 'saving' | 'deleting' | 'saved' | 'error';
+
+export interface ZoneMutationStatus {
+  phase: ZoneMutationPhase;
+  message?: string;
+}
+
+export interface ZoneMutationNotice {
+  id: number;
+  kind: 'success' | 'error';
+  message: string;
 }
 
 export interface AnnotationSource {
@@ -128,24 +151,6 @@ export interface AnnotationSample {
   w: number;
   h: number;
   session?: number;
-}
-
-export interface TrainingReadiness {
-  savedSamples: number;
-  labelsWithSamples: number;
-  sourceCount: number;
-  excludedSamples: number;
-  isReady: boolean;
-  issues?: string[];
-  labelCoverage?: Array<{
-    label: string;
-    minimumSamples: number;
-    minimumSources: number;
-    savedSamples: number;
-    sourceCount: number;
-    splitCounts: { train: number; val: number; test: number };
-    ready: boolean;
-  }>;
 }
 
 export type MockTrainingStatus =

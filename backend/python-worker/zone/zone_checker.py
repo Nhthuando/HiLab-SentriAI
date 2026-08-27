@@ -13,9 +13,10 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 import uuid
 
+from shapely.affinity import scale as scale_geometry
 from shapely.geometry import Point, Polygon
 
 logger = logging.getLogger("sentriai.zone.checker")
@@ -31,7 +32,11 @@ def parse_polygon(points_data: Any) -> Optional[Polygon]:
 
     coords: List[Tuple[float, float]] = []
     for pt in points_data:
-        if isinstance(pt, dict) and "x" in pt and "y" in pt:
+        # ZoneSynchronizer recursively freezes snapshot dictionaries as
+        # MappingProxyType. Accept the Mapping contract here; checking only
+        # ``dict`` made every live immutable polygon invalid even though the
+        # same points were still serialized and drawn by the frontend.
+        if isinstance(pt, Mapping) and "x" in pt and "y" in pt:
             try:
                 coords.append((float(pt["x"]), float(pt["y"])))
             except (ValueError, TypeError):
@@ -94,7 +99,8 @@ def evaluate_zone_rule(
         otherwise -> ALLOWED
     - ALLOW_SPECIFIED:
         any candidate in target_labels -> ALLOWED
-        otherwise (including CHƯA XÁC ĐỊNH) -> VIOLATION (BR-04)
+        otherwise -> VIOLATION (BR-04). Unknown/unavailable labels are
+        rejected by the registry capability boundary before this function.
     """
     norm_targets = {t.strip().casefold() for t in target_labels if t}
     norm_candidates = {c.strip().casefold() for c in candidate_labels if c}
@@ -116,63 +122,19 @@ def resolve_candidate_labels(
     coco_label: str,
     class_to_labels: Dict[str, List[str]],
 ) -> List[str]:
+    """Return labels from the registry for one exact canonical class.
+
+    The synchronizer has already removed unavailable labels before constructing
+    ``class_to_labels``. Model display text is deliberately ignored: semantic
+    aliases must never bypass the registry detection whitelist.
     """
-    Resolve candidate Vietnamese names for a YOLO class.
-    1. Confirmed custom reach stacker / crane / forklift labels -> ['Xe nâng', 'Xe cẩu']
-    2. Check class_to_labels (from object_labels table)
-    3. Check class aliases
-    4. If class_to_labels is active (configured in DB), any class not in whitelist returns ['CHƯA XÁC ĐỊNH']
-    5. Fallback to COCO translated name if class_to_labels is empty
-    """
-    c_folded = yolo_class.strip().casefold() if yolo_class else ""
-    lbl_clean = coco_label.strip() if coco_label else ""
-    lbl_folded = lbl_clean.casefold()
+    del coco_label
+    canonical_class = yolo_class.strip().casefold() if isinstance(yolo_class, str) else ""
+    labels = class_to_labels.get(canonical_class)
+    if not labels:
+        return []
+    return list(labels)
 
-    # Confirmed custom reach stacker / crane / forklift labels
-    if lbl_folded in {"xe nâng", "xe cẩu", "reach stacker", "forklift"} or c_folded in {"reach stacker", "forklift", "container handler"}:
-        if "forklift" in class_to_labels and class_to_labels["forklift"]:
-            return class_to_labels["forklift"]
-        if "reach stacker" in class_to_labels and class_to_labels["reach stacker"]:
-            return class_to_labels["reach stacker"]
-        if not class_to_labels:
-            return ["Xe nâng", "Xe cẩu"]
-
-    if c_folded in class_to_labels and class_to_labels[c_folded]:
-        return class_to_labels[c_folded]
-
-    class_aliases = {
-        "container": ("container", "shipping container"),
-        "shipping container": ("container", "shipping container"),
-        "forklift": ("forklift", "reach stacker", "container handler", "xe nâng"),
-        "container handler": ("forklift", "container handler", "reach stacker", "xe nâng"),
-        "reach stacker": ("forklift", "reach stacker", "container handler", "xe nâng"),
-        "truck": ("truck", "heavy_vehicle", "container_truck", "container truck"),
-        "container truck": ("truck", "container"),
-        "person": ("person", "pedestrian"),
-        "car": ("car", "automobile"),
-        "motorcycle": ("motorcycle", "motorbike"),
-        "bus": ("bus",),
-        "personnel carrier": ("personnel_carrier", "personnel carrier"),
-        "personnel_carrier": ("personnel_carrier", "personnel carrier"),
-        "utility vehicle": ("personnel_carrier", "personnel carrier"),
-        "golf cart": ("personnel_carrier", "personnel carrier"),
-    }
-    for canonical_base in class_aliases.get(c_folded, ()):
-        if class_to_labels.get(canonical_base):
-            return class_to_labels[canonical_base]
-
-    # If class_to_labels is active (configured in DB), check if lbl_clean is in whitelist values
-    if class_to_labels:
-        for base, names in class_to_labels.items():
-            if lbl_clean in names:
-                return [lbl_clean]
-        return ["CHƯA XÁC ĐỊNH"]
-
-    # Fallback only when class_to_labels is empty (e.g. initial setup or test environment)
-    if lbl_clean and lbl_folded not in {"truck", "car", "bus", "motorcycle", "person", "boat", "train"}:
-        return [lbl_clean]
-
-    return ["CHƯA XÁC ĐỊNH"]
 
 
 def choose_display_label(
@@ -187,10 +149,13 @@ def choose_display_label(
     - Otherwise use the first candidate.
     """
     if not candidate_labels:
-        return "CHƯA XÁC ĐỊNH"
+        return ""
 
-    if preferred_label and preferred_label.strip() in candidate_labels:
-        return preferred_label.strip()
+    if preferred_label:
+        preferred_key = preferred_label.strip().casefold()
+        for candidate in candidate_labels:
+            if candidate.strip().casefold() == preferred_key:
+                return candidate
 
     if target_labels:
         norm_targets = {t.strip().casefold() for t in target_labels if t}
@@ -256,6 +221,7 @@ class ZoneChecker:
         missing_grace_seconds: float = 12.0,
         boundary_hysteresis: float = 0.02,
         minimum_violation_seconds: float = 1.0,
+        boundary_tolerance_pixels: float = 12.0,
     ):
         self.camera_id = camera_id
         self.grace_frames = max(1, int(grace_frames))
@@ -265,6 +231,10 @@ class ZoneChecker:
         # without treating a genuine exit as inside.
         self.boundary_hysteresis = min(0.1, max(0.0, float(boundary_hysteresis)))
         self.minimum_violation_seconds = max(0.0, float(minimum_violation_seconds))
+        self.boundary_tolerance_pixels = min(
+            100.0,
+            max(0.0, float(boundary_tolerance_pixels)),
+        )
         # Key: (camera_id, track_id, zone_id)
         self.active_violations: Dict[Tuple[str, int, str], ActiveViolation] = {}
         self.pending_violations: Dict[Tuple[str, int, str], PendingViolation] = {}
@@ -282,6 +252,31 @@ class ZoneChecker:
         if key in self.active_violations:
             return
 
+        restore_state = getattr(transition, "_restore_state", None)
+        if (
+            isinstance(restore_state, ActiveViolation)
+            and restore_state.violation_id == transition.violation_id
+            and restore_state.camera_id == transition.camera_id
+            and restore_state.track_id == transition.track_id
+            and restore_state.zone_id == transition.zone_id
+        ):
+            self.active_violations[key] = ActiveViolation(
+                violation_id=restore_state.violation_id,
+                camera_id=restore_state.camera_id,
+                track_id=restore_state.track_id,
+                zone_id=restore_state.zone_id,
+                zone_name=restore_state.zone_name,
+                object_label=restore_state.object_label,
+                entered_at=restore_state.entered_at,
+                last_seen_inside=restore_state.last_seen_inside,
+                consecutive_outside=restore_state.consecutive_outside,
+                normalized_bbox=restore_state.normalized_bbox,
+                yolo_class=restore_state.yolo_class,
+            )
+            return
+
+        # Backwards-compatible fallback for manually constructed transitions,
+        # which do not carry the private in-memory snapshot.
         last_seen = transition.exited_at or transition.entered_at
         self.active_violations[key] = ActiveViolation(
             violation_id=transition.violation_id,
@@ -294,6 +289,53 @@ class ZoneChecker:
             last_seen_inside=last_seen,
             consecutive_outside=max(0, self.grace_frames - 1),
         )
+
+    @staticmethod
+    def _build_ended_transition(
+        active: ActiveViolation,
+        exited_at: datetime,
+    ) -> ViolationTransition:
+        """Build one immutable persistence transition from active runtime state."""
+        duration = max(0, int((exited_at - active.entered_at).total_seconds()))
+        transition = ViolationTransition(
+            action="ENDED",
+            violation_id=active.violation_id,
+            camera_id=active.camera_id,
+            track_id=active.track_id,
+            zone_id=active.zone_id,
+            zone_name=active.zone_name,
+            object_label=active.object_label,
+            status="CLOSED",
+            entered_at=active.entered_at,
+            exited_at=exited_at,
+            duration_seconds=duration,
+        )
+        # Persistence receives only declared transition fields. The private
+        # snapshot remains available to legacy callers that explicitly choose
+        # to restore a failed close.
+        setattr(transition, "_restore_state", ActiveViolation(**vars(active)))
+        return transition
+
+    def end_all(
+        self,
+        timestamp: Optional[datetime] = None,
+    ) -> List[ViolationTransition]:
+        """End the current video timeline and clear every pending violation."""
+        exited_at = timestamp or datetime.now(timezone.utc)
+        transitions = [
+            self._build_ended_transition(active, exited_at)
+            for active in self.active_violations.values()
+        ]
+        self.active_violations.clear()
+        self.pending_violations.clear()
+        return transitions
+
+    def clear_runtime_state(self) -> Tuple[int, int]:
+        """Discard active and pending runtime state without emitting events."""
+        counts = (len(self.active_violations), len(self.pending_violations))
+        self.active_violations.clear()
+        self.pending_violations.clear()
+        return counts
 
     @staticmethod
     def _bbox_iou(
@@ -334,15 +376,11 @@ class ZoneChecker:
         observed_track_ids: Set[int],
         now: datetime,
     ) -> Optional[Tuple[str, int, str]]:
-        """
-        Reconnect a just-renumbered ByteTrack identity before opening a duplicate event.
+        """Reconnect a ByteTrack ID only when the canonical class also matches.
 
-        NOTE: We intentionally do NOT require object_label or yolo_class to match.
-        YOLO-World can assign different class text-prompts to the same physical object
-        across frames (e.g. "truck" vs "forklift" for the same forklift), causing the
-        cross-class NMS winner to alternate. Requiring label equality would prevent
-        reconnection and create a new violation for every class flip.
-        Only zone + bbox proximity are needed to identify the same physical object.
+        Class compatibility is exact: nearby trucks, reach stackers, forklifts
+        and static shipping containers cannot inherit each other's violation
+        lifecycles during a temporary tracker renumbering.
         """
         best_key: Optional[Tuple[str, int, str]] = None
         best_iou = 0.0
@@ -355,6 +393,7 @@ class ZoneChecker:
                 or active.track_id in observed_track_ids
                 or (now - active.last_seen_inside).total_seconds() >= self.missing_grace_seconds
                 or active.normalized_bbox is None
+                or active.yolo_class != yolo_class
             ):
                 continue
 
@@ -372,6 +411,7 @@ class ZoneChecker:
         zones: List[Dict[str, Any]],
         class_to_labels: Dict[str, List[str]],
         timestamp: Optional[datetime] = None,
+        frame_size: Tuple[int, int] = (640, 480),
     ) -> Tuple[List[Dict[str, Any]], List[ViolationTransition]]:
         """
         Process detections against active zones for one frame:
@@ -379,7 +419,22 @@ class ZoneChecker:
         2. Advances in-memory violation state machine and returns any STARTED/ENDED transitions.
         """
         now = timestamp or datetime.now(timezone.utc)
-        parsed_zones: List[Tuple[Dict[str, Any], Optional[Polygon], Optional[Any]]] = []
+        try:
+            frame_width = float(frame_size[0])
+            frame_height = float(frame_size[1])
+            if (
+                not math.isfinite(frame_width)
+                or not math.isfinite(frame_height)
+                or frame_width <= 0.0
+                or frame_height <= 0.0
+            ):
+                raise ValueError("frame dimensions must be positive finite numbers")
+        except (IndexError, TypeError, ValueError):
+            frame_width, frame_height = 640.0, 480.0
+
+        parsed_zones: List[
+            Tuple[Dict[str, Any], Optional[Polygon], Optional[Any], Optional[Any]]
+        ] = []
 
         for z in zones:
             poly = parse_polygon(z.get("polygon_points") or z.get("polygon"))
@@ -388,7 +443,22 @@ class ZoneChecker:
                 if poly is not None and self.boundary_hysteresis > 0.0
                 else poly
             )
-            parsed_zones.append((z, poly, buffered_poly))
+            pixel_poly = (
+                scale_geometry(
+                    poly,
+                    xfact=frame_width,
+                    yfact=frame_height,
+                    origin=(0.0, 0.0),
+                )
+                if poly is not None
+                else None
+            )
+            membership_poly = (
+                pixel_poly.buffer(self.boundary_tolerance_pixels)
+                if pixel_poly is not None and self.boundary_tolerance_pixels > 0.0
+                else pixel_poly
+            )
+            parsed_zones.append((z, poly, buffered_poly, membership_poly))
 
         # Track keys present in this frame with VIOLATION status
         current_violations_in_frame: Dict[
@@ -400,35 +470,32 @@ class ZoneChecker:
         annotated_detections: List[Dict[str, Any]] = []
 
         for det in detections:
-            # The detector's spatial-temporal gate marks stationary yard
-            # infrastructure (notably container stacks) as non-vehicles.  Keep
-            # this defensive guard here so a caller cannot accidentally turn a
-            # suppressed object into a zone violation.
-            if det.get("suppressedStatic"):
-                continue
             bbox = det.get("bbox", [0, 0, 0, 0])
             norm_bbox = det.get("normalized_bbox")
             if not norm_bbox:
                 # Fallback if normalized_bbox missing
-                w, h = 640, 480
                 norm_bbox = [
-                    round(bbox[0] / w, 4),
-                    round(bbox[1] / h, 4),
-                    round(bbox[2] / w, 4),
-                    round(bbox[3] / h, 4),
+                    round(bbox[0] / frame_width, 4),
+                    round(bbox[1] / frame_height, 4),
+                    round(bbox[2] / frame_width, 4),
+                    round(bbox[3] / frame_height, 4),
                 ]
 
             px, py = get_detection_bottom_center(norm_bbox)
             det_point = Point(px, py)
+            det_point_pixels = Point(px * frame_width, py * frame_height)
 
-            yolo_cls = det.get("class", "")
-            coco_lbl = det.get("label", "")
-            candidates = resolve_candidate_labels(yolo_cls, coco_lbl, class_to_labels)
+            # Detector outputs are canonical. ``class`` is a canonical fallback
+            # for an in-flight legacy worker; raw model display labels are never
+            # used to resolve a registry object label.
+            raw_canonical = det.get("canonicalClass")
+            if not isinstance(raw_canonical, str) or not raw_canonical.strip():
+                raw_canonical = det.get("class", "")
+            yolo_cls = raw_canonical.strip().casefold() if isinstance(raw_canonical, str) else ""
+            candidates = resolve_candidate_labels(yolo_cls, "", class_to_labels)
 
-            # Strict Whitelist Gate:
-            # When object_labels are configured in DB (class_to_labels is not empty),
-            # any detection that cannot be matched to a configured label is DROPPED.
-            if class_to_labels and (not candidates or candidates == ["CHƯA XÁC ĐỊNH"]):
+            # Registry is the unconditional system-wide detection whitelist.
+            if not candidates:
                 continue
 
             raw_track_id = det.get("trackId")
@@ -440,8 +507,8 @@ class ZoneChecker:
             has_violation = False
             first_violating_label = None
 
-            for z_dict, poly, buffered_poly in parsed_zones:
-                if poly is None:
+            for z_dict, poly, buffered_poly, membership_poly in parsed_zones:
+                if poly is None or membership_poly is None:
                     continue
 
                 rule_type = z_dict.get("rule_type") or z_dict.get("ruleType") or "PROHIBIT_SPECIFIED"
@@ -454,11 +521,11 @@ class ZoneChecker:
                 zone_name = z_dict.get("name", "Zone")
                 key = (self.camera_id, track_id, zone_id) if track_id is not None else None
 
-                # Opening remains strict: only an exact polygon hit can create a
-                # violation. For an already-open violation, a small outward
-                # buffer avoids false exits/reopens when the detector jitters
-                # around the polygon edge.
-                exact_inside = poly.covers(det_point)
+                # Visible membership uses a fixed physical-pixel tolerance so
+                # non-square frames do not receive different X/Y margins. The
+                # existing normalized buffer remains event-only hysteresis for
+                # an already-open violation.
+                membership_inside = membership_poly.covers(det_point_pixels)
                 sustained_inside = (
                     key is not None
                     and key in self.active_violations
@@ -466,13 +533,10 @@ class ZoneChecker:
                     and buffered_poly is not None
                     and buffered_poly.covers(det_point)
                 )
-                if not exact_inside and not sustained_inside:
+                if not membership_inside and not sustained_inside:
                     continue
 
-                # The overlay represents the exact current frame. Hysteresis
-                # still protects event persistence but cannot leave a box shown
-                # after the vehicle has visibly exited the polygon.
-                if exact_inside:
+                if membership_inside:
                     zone_matches.append({
                         "zoneId": zone_id,
                         "zoneName": zone_name,
@@ -481,18 +545,24 @@ class ZoneChecker:
 
                 if match_status == "VIOLATION":
                     has_violation = True
-                    disp_lbl = choose_display_label(candidates, target_labels, preferred_label=coco_lbl)
+                    disp_lbl = choose_display_label(candidates, target_labels)
                     if first_violating_label is None:
                         first_violating_label = disp_lbl
 
-                    # Only tracks with valid trackId can open/maintain persisted violations
+                    # A weak observation cannot create or advance pending state.
+                    # It can sustain only the same ByteTrack ID and exact
+                    # canonical class of an already-open event.
                     if track_id is not None:
-                        current_violations_in_frame[key] = (
-                            z_dict,
-                            disp_lbl,
-                            tuple(float(value) for value in norm_bbox),
-                            yolo_cls,
-                        )
+                        active = self.active_violations.get(key)
+                        can_sustain = active is not None and active.yolo_class == yolo_cls
+                        can_initiate = det.get("canInitiate") is True
+                        if can_sustain or (active is None and can_initiate):
+                            current_violations_in_frame[key] = (
+                                z_dict,
+                                disp_lbl,
+                                tuple(float(value) for value in norm_bbox),
+                                yolo_cls,
+                            )
 
             # Sort zoneMatches by zoneName then zoneId
             zone_matches.sort(key=lambda m: (m["zoneName"], m["zoneId"]))
@@ -505,8 +575,7 @@ class ZoneChecker:
                 if has_violation
                 else ("ALLOWED" if zone_matches else "OUTSIDE")
             )
-            pref_lbl = coco_lbl if coco_lbl and coco_lbl != "CHƯA XÁC ĐỊNH" else None
-            chosen_label = first_violating_label or choose_display_label(candidates, preferred_label=pref_lbl)
+            chosen_label = first_violating_label or choose_display_label(candidates)
 
             annotated_det = dict(det)
             annotated_det["label"] = chosen_label
@@ -627,21 +696,8 @@ class ZoneChecker:
                 if should_close:
                     # Transition: CLOSED
                     exit_ts = active.last_seen_inside
-                    dur = max(0, int((exit_ts - active.entered_at).total_seconds()))
-
-                    transitions.append(ViolationTransition(
-                        action="ENDED",
-                        violation_id=active.violation_id,
-                        camera_id=active.camera_id,
-                        track_id=active.track_id,
-                        zone_id=active.zone_id,
-                        zone_name=active.zone_name,
-                        object_label=active.object_label,
-                        status="CLOSED",
-                        entered_at=active.entered_at,
-                        exited_at=exit_ts,
-                        duration_seconds=dur,
-                    ))
+                    transition = self._build_ended_transition(active, exit_ts)
+                    transitions.append(transition)
                     keys_to_remove.append(key)
 
         for key in keys_to_remove:

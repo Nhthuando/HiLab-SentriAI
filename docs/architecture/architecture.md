@@ -28,7 +28,7 @@
 |---|---|---|---|
 | Nhận RTSP hoặc video file, xử lý ≥ 5 FPS | Python AI Worker đọc stream bằng OpenCV, xử lý frame trong thread/asyncio loop riêng | Khả thi | GPU không bắt buộc cho YOLO-nano/small; cần benchmark trên máy intern |
 | LPR nhận diện biển số khi xe vào zone làn IN | Python AI Worker: YOLO detect xe → kiểm tra point-in-polygon zone → PaddleOCR/EasyOCR đọc biển | Khả thi | Độ chính xác OCR phụ thuộc chất lượng video; BR-02 tự gán XE LẠ nếu biển chưa đăng ký |
-| Phát hiện đối tượng trong zone đa giác (BAI-KIEM) | Python AI Worker: YOLO detect → point-in-polygon check → so khớp loại với zone rules | Khả thi | BR-03/BR-04 xử lý CHƯA XÁC ĐỊNH trong zone rule |
+| Phát hiện đối tượng trong zone đa giác (BAI-KIEM) | Python AI Worker: registry-controlled YOLO11 COCO + custom ACTIVE → ByteTrack → point-in-polygon → exact canonical-class rule | Khả thi | Class ngoài whitelist/unavailable bị loại trước zone evaluation |
 | Live feed với bbox overlay, badge, màu trạng thái | Python encode JPEG frame + bbox metadata → WebSocket nội bộ → Node.js proxy → Browser render trên Canvas/img | Khả thi | Latency phụ thuộc encoding speed; JPEG quality 70-80 đủ cho demo |
 | Alert panel real-time + floating mini-alert cross-tab | Node.js nhận event từ Python, push SSE/WebSocket xuống browser; floating mini-alert dùng BroadcastChannel API giữa các tab | Khả thi | BroadcastChannel không hoạt động cross-origin; cùng origin là đủ |
 | Clip 10s pre-saved ngay khi event xảy ra | Python AI Worker dùng circular buffer 10s frames; khi event xảy ra, flush buffer ra file MP4 trong background thread | Khả thi có điều kiện | Buffer 10s × 2 stream × ~5 FPS × JPEG ≈ ~50-100 MB RAM; cần giới hạn resolution |
@@ -46,7 +46,7 @@
 
 - **Điểm khả thi rõ:** Stack Python AI + Node.js + React đã được dùng rộng rãi; YOLO + OpenCV + PaddleOCR đủ cho demo; Gemini function calling đã được document rõ
 - **Constraint kỹ thuật:**
-  - Máy intern cần chạy 2 stream AI đồng thời ≥ 5 FPS → YOLO model size cần là `nano` hoặc `small`; resolution input nên giảm xuống 480p hoặc 640p
+  - Area yêu cầu ≥8 E2E FPS trên RTX 3050 4 GB; local benchmark YOLO11n tại imgsz 640/896/960 và ROI off/on đều vượt ngưỡng, còn YOLO11s/TensorRT chưa đo vì thiếu artifact local
   - Circular buffer clip 10s: cần giới hạn RAM bằng cách encode frame JPEG với quality thấp hơn (Q=60) trong buffer
   - Neon free tier: ~500MB storage, 100 compute hours/tháng — đủ cho 2 tuần demo; batch-insert mỗi 0.5-1s thay vì ghi từng event
 - **Risk cần giảm thiểu:**
@@ -60,7 +60,7 @@
 - **Giả định kỹ thuật:**
   - Máy intern có CPU đủ cho YOLO-nano × 2 stream tại 640×480
   - Demo chạy có Internet
-  - Các class YOLO phổ biến (COCO) bao phủ xe tải, xe máy, người — một số loại (xe nâng, xe cẩu) có thể cần model fine-tuned hoặc mapping thủ công
+  - COCO chỉ chịu trách nhiệm chính xác cho person/bicycle/car/motorcycle/bus/truck. Không dùng mapping thủ công để giả lập reach_stacker/container_truck/forklift/mobile_crane/shipping_container.
 
 ---
 
@@ -128,13 +128,13 @@
 Node.js API Server khởi động → load zone config và label config từ Neon DB qua Prisma → expose REST API cho frontend. Python AI Worker khởi động → đọc zone config từ Neon qua asyncpg → bắt đầu đọc 2 video stream (GATE-01 + BAI-KIEM) qua OpenCV. Python Worker duy trì background poller mỗi 5s để detect zone config thay đổi và áp dụng ngay (đáp ứng BR-07).
 
 **Luồng 2 — Real-time frame processing và delivery:**
-Python AI Worker đọc frame → resize xuống 640×480 → chạy YOLO inference → với mỗi detection: kiểm tra point-in-polygon cho từng zone active → xác định trạng thái (XE QUEN/XE LẠ/VI PHẠM/BÌNH THƯỜNG) → encode frame thành JPEG + đóng gói metadata bbox → gửi qua WebSocket nội bộ (localhost:8001/ws/{camera_id}) → Node.js WebSocket proxy nhận và forward xuống browser. Browser render JPEG lên Canvas element, vẽ overlay bbox từ metadata JSON.
+Python AI Worker đọc frame → lấy một immutable ZoneSnapshot gồm registry capability/model manifest/zone → chạy YOLO11 base và custom ACTIVE nếu cần → ByteTrack + initiation/continuation gate → kiểm tra point-in-polygon → encode JPEG + metadata bbox → gửi qua WebSocket nội bộ. Class không có capability không đi vào feed hay event path.
 
 **Luồng 3 — LPR tại cổng (M1):**
 Frame vào zone làn IN → YOLO detect xe → crop vùng biển số → PaddleOCR/EasyOCR đọc text → tra danh sách biển số đã đăng ký trong DB → gán trạng thái XE QUEN/XE LẠ → ghi event vào DB (batch mỗi 500ms) → lưu ảnh cắt biển số vào `/crops/` → flush circular buffer thành clip 10s vào `/clips/`. Node.js nhận event notification từ Python qua WebSocket nội bộ → push event xuống browser để hiển thị alert panel.
 
 **Luồng 4 — Zone violation detection (M2):**
-Frame có đối tượng → YOLO detect với class mapping sang loại nhãn tiếng Việt → point-in-polygon kiểm tra tâm đối tượng với từng zone active → nếu loại đối tượng nằm trong danh sách cấm của zone: Python mở event vi phạm (ghi thời gian vào, clip buffer bắt đầu từ lúc vào) → gửi violation event tới Node.js → Node.js push tới browser (alert panel + floating mini-alert nếu tab không active). Khi đối tượng rời zone: Python đóng event (ghi thời gian ra + duration) → lưu clip 10s từ lúc vào. Không sinh alert lặp khi đối tượng vẫn trong zone (BR-06).
+Frame có đối tượng → detector chỉ emit canonical class được registry cho phép → resolve đúng tên registry → point-in-polygon → rule exact-label. Observation `canInitiate=false` chỉ được nối một event đã mở có cùng track/class, không tạo pending mới. Một giây xác nhận, 3 frame observed-exit, 12 giây missing-track reconnect và clip/event lifecycle được giữ nguyên.
 
 **Luồng 5 — Floating mini-alert cross-tab:**
 Browser tab giám sát nhận violation event qua WebSocket → nếu tab không visible (document.hidden = true), post message qua BroadcastChannel("sentriai-alerts") → các tab khác trong cùng app listen BroadcastChannel và hiển thị floating mini-alert góc dưới phải → khi user quay về tab giám sát, BroadcastChannel clear mini-alert (BR-08).
@@ -150,7 +150,15 @@ User nhập câu hỏi → React POST tới Node.js API → Node.js gọi Gemini
 | Phần | Quyết định | Lý do | Khi cần đổi |
 |---|---|---|---|
 | AI pipeline | Python 3.11+ | YOLO, OpenCV, PaddleOCR native Python | — |
-| Object detection | YOLOv8-nano hoặc YOLOv8-small (Ultralytics) | Nhanh, CPU-friendly, COCO class phủ đủ loại xe/người | Nếu accuracy thấp → YOLOv8-medium |
+| Object detection | YOLO11n COCO base + tối đa một custom ACTIVE | Whitelist/manifest quyết định source; không semantic fallback | Benchmark YOLO11s/TensorRT chỉ khi artifact local được duyệt |
+
+### 6.8 Detection control and evaluation (2026-08-22)
+
+- Node capability service đọc toàn bộ object-label registry và ưu tiên đúng một model DB `ACTIVE`; khi DB chưa có `ACTIVE`, cờ migration bridge tường minh có thể dùng artifact đã review dưới `backend/data`, nhưng chỉ khi manifest và quality/base-regression gates hợp lệ. Malformed manifest fail-closed cho custom nhưng không làm mất COCO.
+- Python poll mỗi 5 giây và publish atomic immutable snapshot. Refresh lỗi giữ nguyên object snapshot trước; control fingerprint tương đương không reset ByteTrack/temporal state.
+- ROI mặc định tắt (`AREA_ROI_ENABLED=false`), tile 640, overlap 0.20, interval 3, tối đa 8 tile; tile prediction không được advance callback của full-frame tracker. `AREA_INFERENCE_HALF` mặc định false và chỉ bật có chủ ý/benchmark.
+- Threshold policy parse immutable config và từ chối giá trị sai miền hoặc continuation lớn hơn initiation. `0.30/0.14` (base) và `0.45/0.25` (custom) là benchmark defaults, không phải hard floor; calibration hiện hữu vẫn được giữ cho tới khi golden annotation thay thế. Custom confirmation luôn 2-of-3.
+- Golden manifest không chứa absolute path, split theo contiguous 120-second time block, chỉ `ANNOTATED`/`NEGATIVE` mới được tính metric. Evaluator mặc định dùng riêng 26 frame `test`; tất cả đang `PENDING`, vì vậy mọi tuyên bố accuracy bị chặn. PR points và sweep ngưỡng initiation/continuation theo class/source chỉ được xuất khi ground truth hợp lệ.
 | LPR/OCR | PaddleOCR (ưu tiên) hoặc EasyOCR | PaddleOCR nhanh hơn, hỗ trợ tiếng Việt; EasyOCR dễ install hơn | Nếu accuracy biển số thấp → thử cả hai |
 | Zone detection | Shapely (Python) | Point-in-polygon chính xác với polygon phức tạp | — |
 | Stream reading | OpenCV + ffmpeg | Hỗ trợ RTSP + video file, frame extraction dễ | — |

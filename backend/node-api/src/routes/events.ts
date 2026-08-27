@@ -10,8 +10,12 @@ import fs from 'fs';
 import path from 'path';
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../prisma/client';
+import {
+  AreaEventResetUnavailableError,
+  deleteAreaEventsViaWorker,
+} from '../services/areaEventResetService';
 import { BadRequestError } from '../utils/errors';
-import { sendCreated, sendSuccess } from '../utils/response';
+import { sendCreated, sendError, sendSuccess } from '../utils/response';
 import { channelManager } from '../ws';
 
 const eventsRouter = Router();
@@ -291,16 +295,27 @@ function cleanDirectoryFiles(dirPath: string, fileFilter?: (fileName: string) =>
  */
 eventsRouter.delete('/area', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const deleteResult = await prisma.zoneViolation.deleteMany({});
+    const deleteResult = await deleteAreaEventsViaWorker();
     const clipsDir = getMediaDirectory('clips');
-    const deletedFiles = cleanDirectoryFiles(clipsDir, (file) => file.startsWith('area_') || file.endsWith('.mp4'));
+    const deletedFiles = cleanDirectoryFiles(
+      clipsDir,
+      (file) => file.startsWith('area_') && file.endsWith('.mp4'),
+    );
 
     return sendSuccess(res, {
       message: 'Đã xóa toàn bộ sự kiện khu vực và video clip 10s liên quan.',
-      deletedRecords: deleteResult.count,
+      deletedRecords: deleteResult.deletedRecords,
       deletedFiles,
     });
   } catch (err) {
+    if (err instanceof AreaEventResetUnavailableError) {
+      return sendError(
+        res,
+        503,
+        'AREA_RESET_UNAVAILABLE',
+        'Không thể đồng bộ xóa sự kiện với Python Worker. Dữ liệu chưa bị xóa.',
+      );
+    }
     return next(err);
   }
 });
@@ -334,10 +349,8 @@ eventsRouter.delete('/gate', async (_req: Request, res: Response, next: NextFunc
  */
 eventsRouter.delete('/all', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const [areaResult, gateResult] = await Promise.all([
-      prisma.zoneViolation.deleteMany({}),
-      prisma.gateEvent.deleteMany({}),
-    ]);
+    const areaResult = await deleteAreaEventsViaWorker();
+    const gateResult = await prisma.gateEvent.deleteMany({});
 
     const clipsDir = getMediaDirectory('clips');
     const cropsDir = getMediaDirectory('crops');
@@ -347,11 +360,19 @@ eventsRouter.delete('/all', async (_req: Request, res: Response, next: NextFunct
 
     return sendSuccess(res, {
       message: 'Đã xóa toàn bộ sự kiện và giải phóng toàn bộ video clip 10s, ảnh crop.',
-      deletedAreaRecords: areaResult.count,
+      deletedAreaRecords: areaResult.deletedRecords,
       deletedGateRecords: gateResult.count,
       deletedFiles: deletedClips + deletedCrops,
     });
   } catch (err) {
+    if (err instanceof AreaEventResetUnavailableError) {
+      return sendError(
+        res,
+        503,
+        'AREA_RESET_UNAVAILABLE',
+        'Không thể đồng bộ xóa sự kiện với Python Worker. Dữ liệu chưa bị xóa.',
+      );
+    }
     return next(err);
   }
 });

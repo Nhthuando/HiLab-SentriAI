@@ -1,5 +1,12 @@
 import { apiClient, API_BASE_URL } from './client';
-import type { AreaEventsPage, GateEvent } from '../types';
+import type { AreaClipStatus, AreaEventsPage, GateEvent } from '../types';
+
+export interface AreaClipState {
+  violationId: string;
+  status: AreaClipStatus;
+  clipUrl: string | null;
+  message?: string;
+}
 
 export async function getGateEvents(params?: {
   limit?: number;
@@ -33,6 +40,14 @@ export async function getAreaEvents(params?: {
 
 export async function deleteAreaEvents(): Promise<{ message: string; deletedRecords: number; deletedFiles: number }> {
   return apiClient.delete<{ message: string; deletedRecords: number; deletedFiles: number }>('/events/area');
+}
+
+export async function requestAreaEventClip(eventId: string): Promise<AreaClipState> {
+  return apiClient.post<AreaClipState>(`/events/area/${encodeURIComponent(eventId)}/clip`);
+}
+
+export async function getAreaEventClipStatus(eventId: string): Promise<AreaClipState> {
+  return apiClient.get<AreaClipState>(`/events/area/${encodeURIComponent(eventId)}/clip`);
 }
 
 export async function deleteGateEvents(): Promise<{ message: string; deletedRecords: number; deletedFiles: number }> {

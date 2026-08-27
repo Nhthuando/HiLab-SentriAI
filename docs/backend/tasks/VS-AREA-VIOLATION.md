@@ -94,7 +94,7 @@ The implementation model must read these files in order before editing code. A l
 
 ### Tracking and entry/exit identity
 
-- Create `TrackedYoloDetector` as an Area-owned subclass/wrapper around the verified `YoloDetector`; call Ultralytics `model.track(..., persist=True, tracker="bytetrack.yaml")` and emit a stable integer `track_id` with the existing detection fields. Area tracking must not apply the foundation detector's default target-class filter, because any model class without a DB mapping must reach the `CHƯA XÁC ĐỊNH` rule path.
+- Create `TrackedYoloDetector` as an Area-owned wrapper around `YoloDetector`; call Ultralytics ByteTrack and emit a stable track ID. Apply the atomic registry capability whitelist before inference output; model classes without an exact detectable registry mapping are dropped and never enter a `CHƯA XÁC ĐỊNH` fallback path.
 - Do not change `YoloDetector.detect()` behavior used by other slices.
 - A detection not yet assigned a ByteTrack ID may be shown in the feed with `trackId = null`, but it cannot open/close a persisted violation or emit an alert until the tracker confirms an ID.
 - The in-memory violation state key is `(camera_id, track_id, zone_id)`. One key can have at most one OPEN DB row.
@@ -107,7 +107,7 @@ The implementation model must read these files in order before editing code. A l
 
 - Refresh active BAI-KIEM zones and all object-label mappings together every 5 seconds. On refresh failure, keep the last good immutable snapshot and log one warning; do not clear active rules.
 - Build `base_class -> sorted vietnamese_name[]` from `object_labels`, sorting Unicode names ascending for deterministic output.
-- A YOLO class with no DB mapping is displayed as `CHƯA XÁC ĐỊNH`; it is still evaluated against every containing zone.
+- A YOLO class with no exact detectable registry mapping is dropped before zone evaluation.
 - When multiple Vietnamese names map to one base class, the candidate set contains all names. For display, prefer the first candidate present in the current zone's `target_labels`; otherwise use the first sorted candidate.
 - Normalize rule comparisons by trimming and Unicode case-folding; do not remove Vietnamese accents in stored/displayed labels.
 
@@ -116,7 +116,7 @@ The implementation model must read these files in order before editing code. A l
 | `PROHIBIT_SPECIFIED` | any candidate is targeted | `VIOLATION` |
 | `PROHIBIT_SPECIFIED` | no candidate is targeted | `ALLOWED` |
 | `ALLOW_SPECIFIED` | any candidate is targeted | `ALLOWED` |
-| `ALLOW_SPECIFIED` | no candidate is targeted, including `CHƯA XÁC ĐỊNH` | `VIOLATION` (BR-04) |
+| `ALLOW_SPECIFIED` | exact detectable registry candidate is not targeted | `VIOLATION` (BR-04) |
 
 ### Clip lifecycle
 
@@ -261,7 +261,7 @@ Execute in this order. After each step, update this task's changed-files and nex
 
 - [x] Python Worker reads BAI-KIEM video stream via OpenCV at >= 5 FPS (Architecture §3)
 - [x] YOLO detects objects; class mapping to Vietnamese names via `object_labels` lookup (BR-03)
-- [x] Unknown class → label "CHƯA XÁC ĐỊNH", still checked against zone rules (BR-03, BR-04, AC-08)
+- [x] Unknown/unavailable class is absent from feed and zone evaluation; no semantic fallback bypasses the whitelist (BR-03, AC-08)
 - [x] Point-in-polygon check for object center against all active zones for BAI-KIEM camera (Architecture §6.2 Flow 4)
 - [x] Prohibited object enters zone → open violation event: `zone_violations` with status=OPEN, entered_at, object_label, zone_id, clip buffer starts (BR-06, AC-03)
 - [x] While object is inside zone → no duplicate alerts, 1 event per entry/exit (BR-06)
@@ -363,7 +363,7 @@ Execute in this order. After each step, update this task's changed-files and nex
 ## User feedback addendum (2026-08-18)
 
 - Reported false-positive detections on walls/equipment, repeated event rows for one object, and 10-second clips opening at `0:00`.
-- Area inference now requests only YOLO `person` and `truck` classes at confidence `0.45`; `truck` remains mapped to the business label `Container` through `object_labels`.
+- Superseded 2026-08-22: Area requests exactly the registry-enabled subset of six COCO classes and the exact classes in a checksum-verified custom ACTIVE manifest. `truck`, `container_truck` and `shipping_container` are distinct; the ambiguous `Container` mapping is rejected.
 - The zone state machine reconnects a fresh ByteTrack ID to an active violation when the same class/label remains spatially continuous during the grace window, preserving one violation ID until the object exits and re-enters.
 - Worker and Node API resolve relative `CLIPS_DIR` from the shared `backend/` root. Clip playback FPS is derived from captured timestamps so slow inference does not compress a ten-second window into a short/empty-looking MP4.
 - Formal verification remains intentionally pending; the exact next action is manual browser retest with the configured video, followed by the normal verifier set later.
@@ -397,9 +397,15 @@ Execute in this order. After each step, update this task's changed-files and nex
 - A violation remains pending for one continuous second before the `STARTED` transition. A person/object that appears for less than one second is discarded without a database row, WS alert, event-panel row, or clip job.
 - Evidence: `python tests/test_area_pipeline.py` passed 20/20 on 2026-08-18. Browser testing remains user-owned.
 
-## YOLO-World detector trial (2026-08-18)
+## Historical YOLO-World detector trial (2026-08-18; removed from runtime 2026-08-22)
 
-- Area can switch from the original YOLOv8n detector to YOLO-World using `AREA_DETECTOR_KIND=world`; prompts come from `AREA_DETECTOR_CLASSES`.
-- Current trial prompts: `person`, `forklift`, `mobile crane`, `car`, `truck`, `bus`, `motorcycle`; the standard YOLO path remains the fallback when the flag is `yolov8`.
-- `yolov8s-world.pt` was downloaded locally and loaded successfully. A single-frame smoke check on the configured video returned a `car` detection at confidence `0.713`; no browser acceptance has been claimed.
+- This trial is retained as history only. `AREA_DETECTOR_KIND=world` and prompt inference are no longer accepted by the Area runtime because prompts can bypass the registry ontology.
+- The current runtime is snapshot-gated YOLO11 base plus an exact reviewed custom manifest. DB `ACTIVE` has priority; the existing explicit configured-model switch is retained only as a checksum/manifest/quality-gated migration bridge until that artifact has an equivalent DB row. No YOLO-World or heuristic semantic fallback is loaded.
+
+## Detection reliability verification (2026-08-22)
+
+- Atomic registry/model/zone snapshot; refresh failure preserves the exact prior object; equivalent refresh does not reset ByteTrack or temporal evidence.
+- Base/custom source policy uses benchmark defaults `0.30/0.14` and `0.45/0.25`, while preserving explicit deployed calibration (`AREA_BASE_*` or legacy `AREA_TRACK_*`). Low confidence cannot create pending; custom requires 2 of 3 opportunities.
+- Optional bounded ROI tile inference defaults off and uses a separate inference clock without tracker-callback corruption.
+- Local BAI-KIEM matrix passed ≥8 E2E FPS in all six measurable YOLO11n FP16 cells through the production `AreaPipeline` output path and injected no-write sinks; class accuracy remains blocked on 26 pending test-split golden frames (65 total candidates).
 - Python unit suite remains green at 20/20. Compare live FPS and forklift/crane precision manually before deciding whether to keep or revert this trial.

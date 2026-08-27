@@ -11,6 +11,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 import cv2
@@ -62,7 +63,8 @@ class StreamReader:
             or self.source.startswith("http://")
             or self.source.startswith("https://")
         ):
-            logger.info("[%s] Using network stream source: %s", self.camera_id, self.source)
+            source_scheme = self.source.split(":", 1)[0].upper()
+            logger.info("[%s] Using %s network stream source (URL redacted).", self.camera_id, source_scheme)
             return
 
         def _optimize_local_video(path_str: str) -> str:
@@ -250,6 +252,31 @@ class StreamReader:
             "seekable": self._duration_seconds > 0.0,
             "positionSeconds": min(self._current_pos_seconds, self._duration_seconds),
             "durationSeconds": self._duration_seconds,
+        }
+
+    def get_source_context(self) -> dict:
+        """Return event source metadata without exposing live-stream credentials."""
+        if self.is_local_file and self.source:
+            return {
+                "source_kind": "LOCAL_FILE",
+                "source_ref": os.path.abspath(self.source),
+                "source_position_seconds": float(self.get_playback_state()["positionSeconds"]),
+                "source_timestamp": None,
+            }
+
+        if self.source and self.source.startswith(("rtsp://", "http://", "https://")):
+            return {
+                "source_kind": "LIVE",
+                "source_ref": self.camera_id,
+                "source_position_seconds": None,
+                "source_timestamp": datetime.now(timezone.utc),
+            }
+
+        return {
+            "source_kind": "UNAVAILABLE",
+            "source_ref": None,
+            "source_position_seconds": None,
+            "source_timestamp": None,
         }
 
     def request_seek(self, position_seconds: float) -> dict:

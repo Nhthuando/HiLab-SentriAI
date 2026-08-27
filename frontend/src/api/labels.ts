@@ -2,7 +2,7 @@
  * api/labels.ts — Object Labels & Annotation Samples API (VS-SETTINGS-LABEL)
  */
 import { apiClient } from './client';
-import type { AnnotationSample, ObjectLabel } from '../types';
+import type { AnnotationSample, ObjectKind, ObjectLabel } from '../types';
 
 export interface LabelRecord {
   id: string;
@@ -12,6 +12,12 @@ export interface LabelRecord {
   samples?: number;
   createdAt?: string;
   updatedAt?: string;
+  canonicalClass: string | null;
+  detectionSource: 'COCO' | 'CUSTOM' | 'UNAVAILABLE';
+  isDetectable: boolean;
+  activeModelVersion: string | null;
+  capabilityReason: string;
+  capabilityReasonCode: string;
 }
 
 export async function getLabels(): Promise<ObjectLabel[]> {
@@ -20,14 +26,14 @@ export async function getLabels(): Promise<ObjectLabel[]> {
 
 export async function createLabel(data: {
   vietnameseName: string;
-  baseClass?: string;
+  baseClass: string;
   tint?: string;
-  kind?: 'xe' | 'nguoi';
+  kind?: ObjectKind;
   name?: string;
 }): Promise<ObjectLabel> {
   const payload = {
     vietnameseName: data.vietnameseName || data.name || '',
-    baseClass: data.baseClass || (data.kind === 'nguoi' ? 'person' : 'truck'),
+    baseClass: data.baseClass,
     tint: data.tint,
     kind: data.kind,
   };
@@ -41,7 +47,7 @@ export async function updateLabel(
     name?: string;
     baseClass?: string;
     tint?: string;
-    kind?: 'xe' | 'nguoi';
+    kind?: ObjectKind;
   }
 ): Promise<ObjectLabel> {
   const payload = {

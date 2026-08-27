@@ -7,6 +7,7 @@ import asyncio
 import logging
 import math
 import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
@@ -73,6 +74,8 @@ async def lifespan(app: FastAPI):
         target_fps=area_target_fps,
         resolution=(1280, 720),
     )
+
+    await area_pipeline.prepare()
 
     pipelines["GATE-01"] = gate_pipeline
     pipelines["BAI-KIEM"] = area_pipeline
@@ -172,7 +175,71 @@ async def seek_camera_playback(camera_id: str, payload: Dict[str, float] = Body(
     pipeline = pipelines.get(cid)
     if not pipeline:
         raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
-    return {"cameraId": cid, **pipeline.request_seek(float(payload["positionSeconds"]))}
+    if cid == "BAI-KIEM":
+        state = await pipeline.request_seek(float(payload["positionSeconds"]))
+    else:
+        state = pipeline.request_seek(float(payload["positionSeconds"]))
+    return {"cameraId": cid, **state}
+
+
+@app.delete("/cameras/{camera_id}/violations")
+async def delete_camera_violations(camera_id: str):
+    cid = camera_id.strip().upper()
+    if cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+    if cid != "BAI-KIEM":
+        raise HTTPException(
+            status_code=409,
+            detail="Coordinated violation reset is available only for BAI-KIEM",
+        )
+    pipeline = pipelines.get(cid)
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+
+    result = await pipeline.delete_all_events()
+    return {
+        "cameraId": cid,
+        "deletedRecords": result["deleted_records"],
+        "clearedActive": result["cleared_active"],
+        "clearedPending": result["cleared_pending"],
+    }
+
+
+def _area_clip_pipeline(camera_id: str):
+    cid = camera_id.strip().upper()
+    if cid in ["AREA", "BAIKIEM", "BAI_KIEM"]:
+        cid = "BAI-KIEM"
+    if cid != "BAI-KIEM":
+        raise HTTPException(status_code=409, detail="Area clips are available only for BAI-KIEM")
+    pipeline = pipelines.get(cid)
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
+    return pipeline
+
+
+def _validate_violation_id(violation_id: str) -> str:
+    try:
+        return str(uuid.UUID(violation_id))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="violation_id must be a UUID") from exc
+
+
+@app.post("/cameras/{camera_id}/violations/{violation_id}/clip")
+async def request_violation_clip(camera_id: str, violation_id: str):
+    pipeline = _area_clip_pipeline(camera_id)
+    state = await pipeline.clip_service.request(_validate_violation_id(violation_id))
+    if state is None:
+        raise HTTPException(status_code=404, detail="Area violation not found")
+    return state
+
+
+@app.get("/cameras/{camera_id}/violations/{violation_id}/clip")
+async def get_violation_clip(camera_id: str, violation_id: str):
+    pipeline = _area_clip_pipeline(camera_id)
+    state = await pipeline.clip_service.get_state(_validate_violation_id(violation_id))
+    if state is None:
+        raise HTTPException(status_code=404, detail="Area violation not found")
+    return state
 
 
 @app.get("/cameras/{camera_id}/playback/preview")

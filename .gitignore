@@ -32,9 +32,13 @@ backend/data/user_media.json
 # Runtime-generated training data and experiment outputs (server-managed, never source)
 backend/data/training/
 backend/data/external-datasets/
+backend/data/evaluation/
 backend/python-worker/runs/
 backend/python-worker/weights/
 backend/python-worker/.yolo*.part
+backend/python-worker/worker.*.log
+.local/
+backend/config/baikiem-v9-video-plan.local.json
 
 # ─── AI Models ─────────────────────────────────────────────────────────────────
 *.pt
@@ -52,3 +56,5 @@ backend/python-worker/models/*.onnx
 Thumbs.db
 .vscode/settings.json
 *.swp
+
+improve.md

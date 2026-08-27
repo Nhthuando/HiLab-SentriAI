@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "BAI-KIEM-LOCAL-V1",
+  "classes": [
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "truck",
+    "reach_stacker",
+    "forklift"
+  ],
+  "sources": [
+    {
+      "sourceId": "kiemhoa-hik-1",
+      "fileName": "KiemHoa-Hik (1)_fastseek.mp4",
+      "duplicateGroup": "kiemhoa-hik-1-transcodes",
+      "role": "positive",
+      "ranges": [
+        { "startMs": 0, "endMs": 480000, "split": "train", "intervalMs": 2000 },
+        { "startMs": 480000, "endMs": 700000, "split": "val", "intervalMs": 2000 }
+      ]
+    },
+    {
+      "sourceId": "kiemhoa-hik-2",
+      "fileName": "KiemHoa-Hik (2)_fastseek.mp4",
+      "duplicateGroup": "kiemhoa-hik-2-transcodes",
+      "role": "positive",
+      "ranges": [
+        { "startMs": 0, "endMs": 500000, "split": "test", "intervalMs": 2000 }
+      ]
+    },
+    {
+      "sourceId": "bai-kiem-20260618",
+      "fileName": "Bai-Kiem_hai_quan_20260618102959_20260618104022_4049297_fastseek.mp4",
+      "duplicateGroup": "bai-kiem-20260618-transcodes",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 700000, "split": "train", "intervalMs": 5000 }
+      ]
+    },
+    {
+      "sourceId": "bai-kiem-20260618-cont",
+      "fileName": "Bai-Kiem_hai_quan_20260618104022_20260618104042_4051578.mp4",
+      "duplicateGroup": "bai-kiem-20260618-cont-transcodes",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 30000, "split": "train", "intervalMs": 2000 }
+      ]
+    },
+    {
+      "sourceId": "bai-kiem-20260620",
+      "fileName": "Bai-Kiem_hai_quan_20260620105958_20260620112604_418795.mp4",
+      "duplicateGroup": "bai-kiem-20260620-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 1800000, "split": "val", "intervalMs": 10000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-0-te9",
+      "fileName": "0_te9.mp4",
+      "duplicateGroup": "forklift-0-te9-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 30000, "split": "train", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-0-te10",
+      "fileName": "0_te10.mp4",
+      "duplicateGroup": "forklift-0-te10-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 20000, "split": "train", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-0-te11",
+      "fileName": "0_te11.mp4",
+      "duplicateGroup": "forklift-0-te11-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 20000, "split": "train", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-0-te12",
+      "fileName": "0_te12.mp4",
+      "duplicateGroup": "forklift-0-te12-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 20000, "split": "train", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-0-te13",
+      "fileName": "0_te13.mp4",
+      "duplicateGroup": "forklift-0-te13-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 20000, "split": "train", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-0-te14",
+      "fileName": "0_te14.mp4",
+      "duplicateGroup": "forklift-0-te14-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 20000, "split": "train", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-0-te15",
+      "fileName": "0_te15.mp4",
+      "duplicateGroup": "forklift-0-te15-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 20000, "split": "train", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-0-te16",
+      "fileName": "0_te16.mp4",
+      "duplicateGroup": "forklift-0-te16-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 20000, "split": "train", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-3-te5",
+      "fileName": "3_te5.mp4",
+      "duplicateGroup": "forklift-3-te5-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 15000, "split": "val", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "forklift-4-te12",
+      "fileName": "4_te12.mp4",
+      "duplicateGroup": "forklift-4-te12-original",
+      "role": "hard_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 15000, "split": "val", "intervalMs": 1000 }
+      ]
+    },
+    {
+      "sourceId": "yard-cross-camera-output-test",
+      "fileName": "output_test.mp4",
+      "duplicateGroup": "yard-cross-camera-output-test-transcodes",
+      "role": "cross_camera_negative",
+      "ranges": [
+        { "startMs": 0, "endMs": 700000, "split": "test", "intervalMs": 5000 }
+      ]
+    }
+  ]
+}

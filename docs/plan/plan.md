@@ -106,7 +106,7 @@
   - AC-03: Đối tượng cấm vào zone → bbox đỏ + alert panel + floating mini-alert
   - AC-04: Vi phạm có: thời gian vào/ra, duration, clip 10s từ lúc vào
 - Critical negative paths:
-  - Đối tượng không khớp class → "CHƯA XÁC ĐỊNH" + vẫn check zone rule (BR-03, BR-04, AC-08)
+  - Class ngoài registry/unavailable bị loại trước feed và zone rule; không có semantic fallback `CHƯA XÁC ĐỊNH` (BR-03, BR-04, AC-08)
   - Đối tượng vào/ra < 1s → vẫn sinh event (Product §7)
   - Vi phạm kéo dài → 1 event, không spam alert (BR-06)
 - Quality baseline:

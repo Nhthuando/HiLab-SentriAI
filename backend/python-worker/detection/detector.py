@@ -15,7 +15,9 @@ from ultralytics import YOLO
 logger = logging.getLogger("sentriai.detection")
 DEFAULT_YOLO_MODEL = "yolo11n.pt"
 
-# Vietnamese domain translation mapping for COCO classes
+# Area and Gate share this COCO-only display mapping. Non-COCO machinery is
+# deliberately absent: it may be emitted only by an active custom model through
+# the registry capability control plane.
 COCO_VIETNAMESE_MAPPING: Dict[str, str] = {
     "person": "Người",
     "car": "Xe ô tô",
@@ -23,23 +25,6 @@ COCO_VIETNAMESE_MAPPING: Dict[str, str] = {
     "motorcycle": "Xe máy",
     "bus": "Xe buýt",
     "bicycle": "Xe đạp",
-    "train": "Tàu hỏa",
-    "boat": "Thuyền",
-    "traffic light": "Đèn giao thông",
-    "stop sign": "Biển dừng",
-    "fire hydrant": "Trụ cứu hỏa",
-    "backpack": "Balo",
-    "umbrella": "Ô/Dù",
-    "handbag": "Túi xách",
-    "suitcase": "Vali",
-    "forklift": "Xe nâng",
-    "container handler": "Xe nâng",
-    "reach stacker": "Xe nâng",
-    "container": "Container",
-    "shipping container": "Container",
-    "personnel carrier": "Xe chở người",
-    "utility vehicle": "Xe chở người",
-    "golf cart": "Xe chở người",
 }
 
 

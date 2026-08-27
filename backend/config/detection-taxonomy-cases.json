@@ -1,0 +1,387 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "COCO class remains detectable with zero samples",
+      "label": {
+        "vietnameseName": "Xe tải",
+        "baseClass": "truck",
+        "sampleCount": 0
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": "truck",
+        "detectionSource": "COCO",
+        "isDetectable": true,
+        "activeModelVersion": null,
+        "reasonCode": "COCO_BASE_CLASS",
+        "reasonText": "Nhận diện bởi model COCO"
+      }
+    },
+    {
+      "name": "recommended display name maps to its exact canonical class",
+      "label": {
+        "vietnameseName": "Xe đầu kéo container",
+        "baseClass": "container_truck",
+        "sampleCount": 0
+      },
+      "activeModel": {
+        "versionKey": "custom-v1",
+        "labelMap": {
+          "Xe đầu kéo container": "container_truck"
+        }
+      },
+      "expected": {
+        "canonicalClass": "container_truck",
+        "detectionSource": "CUSTOM",
+        "isDetectable": true,
+        "activeModelVersion": "custom-v1",
+        "reasonCode": "ACTIVE_CUSTOM_CLASS",
+        "reasonText": "Nhận diện bởi model custom custom-v1"
+      }
+    },
+    {
+      "name": "recommended display name mapped to a different class fails closed",
+      "label": {
+        "vietnameseName": "Xe đầu kéo container",
+        "baseClass": "truck",
+        "sampleCount": 0
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": null,
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "RESERVED_DISPLAY_NAME_CLASS_MISMATCH",
+        "reasonText": "Tên Xe đầu kéo container phải dùng class container_truck, không phải truck"
+      }
+    },
+    {
+      "name": "normalization removes BOM and NBSP and accepts NFC NFD and uppercase spelling",
+      "label": {
+        "vietnameseName": "\uFEFF\u00A0XE NA\u0302NG\u00A0",
+        "baseClass": "\uFEFF\u00A0REACH-STACKER\u00A0",
+        "sampleCount": 0
+      },
+      "activeModel": {
+        "versionKey": "custom-v1",
+        "labelMap": {
+          "Xe nâng container": "\uFEFF\u00A0REACH STACKER\u00A0"
+        }
+      },
+      "expected": {
+        "canonicalClass": "reach_stacker",
+        "detectionSource": "CUSTOM",
+        "isDetectable": true,
+        "activeModelVersion": "custom-v1",
+        "reasonCode": "ACTIVE_CUSTOM_CLASS",
+        "reasonText": "Nhận diện bởi model custom custom-v1"
+      }
+    },
+    {
+      "name": "active custom model supports syntax-normalized reach stacker",
+      "label": {
+        "vietnameseName": "Xe nâng container",
+        "baseClass": "reach-stacker",
+        "sampleCount": 0
+      },
+      "activeModel": {
+        "versionKey": "custom-v1",
+        "labelMap": {
+          "Xe nâng": "reach stacker"
+        }
+      },
+      "expected": {
+        "canonicalClass": "reach_stacker",
+        "detectionSource": "CUSTOM",
+        "isDetectable": true,
+        "activeModelVersion": "custom-v1",
+        "reasonCode": "ACTIVE_CUSTOM_CLASS",
+        "reasonText": "Nhận diện bởi model custom custom-v1"
+      }
+    },
+    {
+      "name": "custom class is unavailable without an active model",
+      "label": {
+        "vietnameseName": "Xe nâng container",
+        "baseClass": "reach_stacker",
+        "sampleCount": 10000
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": "reach_stacker",
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "NO_ACTIVE_CUSTOM_MODEL",
+        "reasonText": "Chưa có model nhận diện"
+      }
+    },
+    {
+      "name": "future canonical class can be supplied by an active manifest",
+      "label": {
+        "vietnameseName": "Xe kéo sân bãi",
+        "baseClass": "yard_tug",
+        "sampleCount": 0
+      },
+      "activeModel": {
+        "versionKey": "future-v2",
+        "labelMap": {
+          "Xe kéo sân bãi": "yard_tug"
+        }
+      },
+      "expected": {
+        "canonicalClass": "yard_tug",
+        "detectionSource": "CUSTOM",
+        "isDetectable": true,
+        "activeModelVersion": "future-v2",
+        "reasonCode": "ACTIVE_CUSTOM_CLASS",
+        "reasonText": "Nhận diện bởi model custom future-v2"
+      }
+    },
+    {
+      "name": "custom manifest cannot take ownership of a COCO class",
+      "label": {
+        "vietnameseName": "Xe tải",
+        "baseClass": "truck",
+        "sampleCount": 42
+      },
+      "activeModel": {
+        "versionKey": "custom-v1",
+        "labelMap": {
+          "Xe tải": "truck"
+        }
+      },
+      "expected": {
+        "canonicalClass": "truck",
+        "detectionSource": "COCO",
+        "isDetectable": true,
+        "activeModelVersion": null,
+        "reasonCode": "COCO_BASE_CLASS",
+        "reasonText": "Nhận diện bởi model COCO"
+      }
+    },
+    {
+      "name": "static shipping container is not a vehicle and is unavailable without a model",
+      "label": {
+        "vietnameseName": "Container tĩnh",
+        "baseClass": "shipping container",
+        "sampleCount": 0
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": "shipping_container",
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "NO_ACTIVE_CUSTOM_MODEL",
+        "reasonText": "Chưa có model nhận diện"
+      }
+    },
+    {
+      "name": "raw container canonical class is ambiguous",
+      "label": {
+        "vietnameseName": "Xe container",
+        "baseClass": "container",
+        "sampleCount": 0
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": null,
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "AMBIGUOUS_CONTAINER",
+        "reasonText": "Class container không xác định xe đầu kéo hay container tĩnh"
+      }
+    },
+    {
+      "name": "legacy Container display name is ambiguous even when mapped to truck",
+      "label": {
+        "vietnameseName": "Container",
+        "baseClass": "truck",
+        "sampleCount": 12
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": null,
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "AMBIGUOUS_CONTAINER",
+        "reasonText": "Tên Container không xác định xe đầu kéo hay container tĩnh"
+      }
+    },
+    {
+      "name": "legacy Xe nâng mapped to truck is rejected",
+      "label": {
+        "vietnameseName": "Xe nâng",
+        "baseClass": "truck",
+        "sampleCount": 17
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": null,
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "LEGACY_NAME_CLASS_MISMATCH",
+        "reasonText": "Tên Xe nâng không phù hợp với class truck"
+      }
+    },
+    {
+      "name": "legacy Xe cẩu mapped to truck is rejected",
+      "label": {
+        "vietnameseName": "Xe cẩu",
+        "baseClass": "truck",
+        "sampleCount": 8
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": null,
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "LEGACY_NAME_CLASS_MISMATCH",
+        "reasonText": "Tên Xe cẩu không phù hợp với class truck"
+      }
+    },
+    {
+      "name": "active model lacking the requested custom class is unavailable",
+      "label": {
+        "vietnameseName": "Xe đầu kéo container",
+        "baseClass": "container truck",
+        "sampleCount": 500
+      },
+      "activeModel": {
+        "versionKey": "custom-v1",
+        "labelMap": {
+          "Xe nâng container": "reach_stacker"
+        }
+      },
+      "expected": {
+        "canonicalClass": "container_truck",
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "CUSTOM_CLASS_NOT_IN_ACTIVE_MODEL",
+        "reasonText": "Model custom đang hoạt động không hỗ trợ class container_truck"
+      }
+    },
+    {
+      "name": "invalid canonical identifier is rejected",
+      "label": {
+        "vietnameseName": "Nhãn lỗi",
+        "baseClass": "9 invalid class!",
+        "sampleCount": 0
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": null,
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "INVALID_CANONICAL_CLASS",
+        "reasonText": "Class 9 invalid class! không phải định danh canonical hợp lệ"
+      }
+    },
+    {
+      "name": "approved shared whitespace is normalized without native trim semantics",
+      "label": {
+        "vietnameseName": "Xe n\u00e2ng container",
+        "baseClass": "\t \ufeff reach_stacker \u00a0\n",
+        "sampleCount": 0.0
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": "reach_stacker",
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "NO_ACTIVE_CUSTOM_MODEL",
+        "reasonText": "Ch\u01b0a c\u00f3 model nh\u1eadn di\u1ec7n"
+      }
+    },
+    {
+      "name": "leading U+001C file separator is not shared whitespace",
+      "label": {
+        "vietnameseName": "Xe n\u00e2ng container",
+        "baseClass": "\u001creach_stacker",
+        "sampleCount": 0
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": null,
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "INVALID_CANONICAL_CLASS",
+        "reasonText": "Class \u001creach_stacker kh\u00f4ng ph\u1ea3i \u0111\u1ecbnh danh canonical h\u1ee3p l\u1ec7"
+      }
+    },
+    {
+      "name": "trailing U+001C file separator is not shared whitespace",
+      "label": {
+        "vietnameseName": "Xe n\u00e2ng container",
+        "baseClass": "reach_stacker\u001c",
+        "sampleCount": 0
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": null,
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "INVALID_CANONICAL_CLASS",
+        "reasonText": "Class reach_stacker\u001c kh\u00f4ng ph\u1ea3i \u0111\u1ecbnh danh canonical h\u1ee3p l\u1ec7"
+      }
+    },
+    {
+      "name": "interior U+001C file separator is not shared whitespace",
+      "label": {
+        "vietnameseName": "Xe nâng container",
+        "baseClass": "reach\u001c_stacker",
+        "sampleCount": 0
+      },
+      "activeModel": null,
+      "expected": {
+        "canonicalClass": null,
+        "detectionSource": "UNAVAILABLE",
+        "isDetectable": false,
+        "activeModelVersion": null,
+        "reasonCode": "INVALID_CANONICAL_CLASS",
+        "reasonText": "Class reach\u001c_stacker không phải định danh canonical hợp lệ"
+      }
+    }
+  ],
+  "malformedInputs": [
+    { "name": "registry null", "target": "registry", "value": null, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "registry rejects null name", "target": "registry", "value": { "vietnameseName": null, "baseClass": "truck" }, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "registry rejects unknown field", "target": "registry", "value": { "vietnameseName": "Xe tải", "baseClass": "truck", "extra": true }, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "registry rejects boolean sample count", "target": "registry", "value": { "vietnameseName": "Xe tải", "baseClass": "truck", "sampleCount": true }, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "registry rejects fractional sample count", "target": "registry", "value": { "vietnameseName": "Xe tải", "baseClass": "truck", "sampleCount": 1.5 }, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "registry rejects unsafe sample count", "target": "registry", "value": { "vietnameseName": "Xe tải", "baseClass": "truck", "sampleCount": 9007199254740992 }, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "active model rejects blank version", "target": "activeModel", "value": { "versionKey": "\u00a0\ufeff", "labelMap": {} }, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "active model rejects null map value", "target": "activeModel", "value": { "versionKey": "custom-v1", "labelMap": { "Xe nâng": null } }, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "active model rejects blank map key", "target": "activeModel", "value": { "versionKey": "custom-v1", "labelMap": { " ": "reach_stacker" } }, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "active model rejects noncanonical map value", "target": "activeModel", "value": { "versionKey": "custom-v1", "labelMap": { "Xe nâng": "9 invalid class!" } }, "expectedCategory": "INPUT_VALIDATION" },
+    { "name": "active model rejects array", "target": "activeModel", "value": [], "expectedCategory": "INPUT_VALIDATION" }
+  ],
+  "malformedTaxonomy": [
+    { "name": "schema version boolean", "path": ["schemaVersion"], "value": true, "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "schema version decimal", "path": ["schemaVersion"], "value": 1.5, "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "schema version unsafe integer", "path": ["schemaVersion"], "value": 9007199254740992, "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "missing required COCO class", "path": ["cocoClasses", "person"], "delete": true, "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "extra COCO class", "path": ["cocoClasses", "train"], "value": 6, "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "substituted COCO id", "path": ["cocoClasses", "truck"], "value": 6, "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "duplicate COCO id", "path": ["cocoClasses", "truck"], "value": 5, "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "shipping container cannot map to truck", "path": ["syntaxAliases", "shipping container"], "value": "truck", "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "container legacy constraint stays ambiguous", "path": ["legacyNameConstraints", "container"], "value": ["truck"], "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "xe nang legacy constraint is exact", "path": ["legacyNameConstraints", "xe nâng"], "value": ["forklift"], "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "xe cau legacy constraint is exact", "path": ["legacyNameConstraints", "xe cẩu"], "value": ["forklift"], "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "display name must exist", "path": ["recommendedDisplayNames", "truck"], "delete": true, "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "display name must be nonblank after normalization", "path": ["recommendedDisplayNames", "truck"], "value": "\u00a0\ufeff", "expectedCategory": "TAXONOMY_VALIDATION" },
+    { "name": "container truck display name is semantically locked", "path": ["recommendedDisplayNames", "container_truck"], "value": "Xe tải", "expectedCategory": "TAXONOMY_VALIDATION" }
+  ]
+}

@@ -97,6 +97,13 @@ model ZoneViolation {
   exitedAt        DateTime? @db.Timestamptz() @map("exited_at")
   durationSeconds Int?      @map("duration_seconds")
   clipPath        String?   @db.VarChar(500) @map("clip_path")
+  sourceKind      String?   @db.VarChar(20) @map("source_kind")
+  sourceRef       String?   @db.VarChar(1000) @map("source_ref")
+  sourcePositionSeconds Float? @map("source_position_seconds")
+  sourceTimestamp DateTime? @db.Timestamptz() @map("source_timestamp")
+  clipStatus      String    @default("NOT_REQUESTED") @db.VarChar(20) @map("clip_status")
+  clipRequestedAt DateTime? @db.Timestamptz() @map("clip_requested_at")
+  clipError       String?   @db.Text @map("clip_error")
   createdAt       DateTime  @default(now()) @db.Timestamptz() @map("created_at")
 
   zone Zone @relation(fields: [zoneId], references: [id], onDelete: Cascade, onUpdate: Cascade)

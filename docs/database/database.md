@@ -342,7 +342,7 @@ erDiagram
 | `id` | `uuid` | No | `gen_random_uuid()` | PK | Định danh sự kiện vi phạm |
 | `camera_id` | `varchar(50)` | No | None | | Mã camera xảy ra vi phạm (`'BAI-KIEM'`) — Worker phải truyền tường minh |
 | `zone_id` | `uuid` | No | None | FK | Vùng giám sát bị vi phạm |
-| `object_label` | `varchar(100)` | No | None | | Tên nhãn đối tượng vi phạm (hoặc `'CHƯA XÁC ĐỊNH'`) |
+| `object_label` | `varchar(100)` | No | None | | Tên nhãn canonical đã được registry xác nhận tại thời điểm phát hiện; class không resolve được bị loại trước khi tạo sự kiện |
 | `status` | `varchar(20)` | No | `'OPEN'` | | Trạng thái sự kiện: `'OPEN'` (đang ở trong zone), `'CLOSED'` (đã rời khỏi zone) |
 | `entered_at` | `timestamptz` | No | `now()` | | Thời điểm đối tượng đi vào zone |
 | `exited_at` | `timestamptz` | Yes | `NULL` | | Thời điểm đối tượng rời khỏi zone |

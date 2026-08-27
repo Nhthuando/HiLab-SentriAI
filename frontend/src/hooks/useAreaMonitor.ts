@@ -9,10 +9,17 @@
  * 5. Search, tab filters (all, violation, ok), and hover synchronization
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getAreaEvents, getClipUrl, deleteAreaEvents } from '../api/events';
+import {
+  deleteAreaEvents,
+  getAreaEventClipStatus,
+  getAreaEvents,
+  getClipUrl,
+  requestAreaEventClip,
+} from '../api/events';
 import { getCameraPlayback, getCameraPlaybackPreview, seekCameraPlayback, type CameraPlaybackState } from '../api/cameras';
 import type {
   AreaAction,
+  AreaClipStatus,
   AreaEvent,
   AreaViolationDto,
   PolygonZone,
@@ -53,6 +60,7 @@ function formatTimeString(isoOrDate: string | Date | number): string {
 }
 
 const DETECTION_PRESENTATION_GRACE_MS = 900;
+const GENERIC_VEHICLE_PRESENTATION_CLASSES = new Set(['truck', 'car', 'bus']);
 
 interface StableDetectionEntry {
   actualTrackId: number;
@@ -65,9 +73,33 @@ function hasZoneMatch(detection: BoundingBoxDetection): boolean {
   return Boolean(detection.zoneMatches?.length);
 }
 
+export interface SelectedAreaClip {
+  eventId: string;
+  status: AreaClipStatus;
+  url: string | null;
+  message?: string;
+}
+
+export function isAuthoritativeVehicleSemanticUpgrade(
+  previousClass: string,
+  currentClass: string,
+): boolean {
+  return (
+    GENERIC_VEHICLE_PRESENTATION_CLASSES.has(previousClass.trim().toLowerCase()) &&
+    currentClass.trim().toLowerCase() === 'reach_stacker'
+  );
+}
+
 function sharesZone(first: BoundingBoxDetection, second: BoundingBoxDetection): boolean {
   const firstZoneIds = new Set((first.zoneMatches || []).map((match) => match.zoneId));
   return (second.zoneMatches || []).some((match) => firstZoneIds.has(match.zoneId));
+}
+
+function sharesPresentationScope(
+  first: BoundingBoxDetection,
+  second: BoundingBoxDetection,
+): boolean {
+  return sharesZone(first, second) || (!hasZoneMatch(first) && !hasZoneMatch(second));
 }
 
 function detectionBoxesAreContinuous(
@@ -105,6 +137,9 @@ export function useAreaMonitor() {
   const [restError, setRestError] = useState<string | null>(null);
   const [playback, setPlayback] = useState<CameraPlaybackState | null>(null);
   const previewRequestSequenceRef = useRef(0);
+  const clipRequestSequenceRef = useRef(0);
+  const clipPollTimerRef = useRef<number | null>(null);
+  const [selectedClip, setSelectedClip] = useState<SelectedAreaClip | null>(null);
 
   const [filterMode, setFilterMode] = useState<'all' | 'violation' | 'ok'>('all');
   const [searchFilter, setSearchFilter] = useState<string>('');
@@ -126,8 +161,8 @@ export function useAreaMonitor() {
   } = useCameraFeed('BAI-KIEM');
 
   // The detector can skip several frames or receive a new ByteTrack ID for
-  // the same object. Keep an Area-only presentation identity for a short
-  // window so live allowed rows and overlay boxes do not flash or jump.
+  // the same object. Keep a presentation identity for a short window so
+  // overlays do not flash or jump, including neutral OUTSIDE overlays.
   const stableDetectionEntriesRef = useRef<Map<number, StableDetectionEntry>>(new Map());
   const processedSourceResetSequenceRef = useRef(0);
   const [stableDetections, setStableDetections] = useState<BoundingBoxDetection[]>([]);
@@ -135,11 +170,11 @@ export function useAreaMonitor() {
   useEffect(() => {
     const observedAt = lastTimestamp ?? Date.now();
     const observedTrackIds = new Set<number>();
-    const currentInZone = detections.filter((detection) => {
+    const currentTracked = detections.filter((detection) => {
       if (typeof detection.trackId === 'number') {
         observedTrackIds.add(detection.trackId);
       }
-      return typeof detection.trackId === 'number' && hasZoneMatch(detection);
+      return typeof detection.trackId === 'number';
     });
     const entries = stableDetectionEntriesRef.current;
     if (processedSourceResetSequenceRef.current !== sourceResetSequence) {
@@ -148,7 +183,7 @@ export function useAreaMonitor() {
     }
     const refreshedPresentationIds = new Set<number>();
 
-    for (const detection of currentInZone) {
+    for (const detection of currentTracked) {
       const actualTrackId = detection.trackId as number;
       let entry = Array.from(entries.values()).find(
         (candidate) => candidate.actualTrackId === actualTrackId,
@@ -160,8 +195,14 @@ export function useAreaMonitor() {
             !refreshedPresentationIds.has(candidate.presentationTrackId) &&
             !observedTrackIds.has(candidate.actualTrackId) &&
             observedAt - candidate.lastSeenAt <= DETECTION_PRESENTATION_GRACE_MS &&
-            candidate.detection.class === detection.class &&
-            sharesZone(candidate.detection, detection) &&
+            (
+              candidate.detection.class === detection.class ||
+              isAuthoritativeVehicleSemanticUpgrade(
+                candidate.detection.class,
+                detection.class,
+              )
+            ) &&
+            sharesPresentationScope(candidate.detection, detection) &&
             detectionBoxesAreContinuous(candidate.detection, detection),
         );
       }
@@ -187,8 +228,7 @@ export function useAreaMonitor() {
 
     for (const [presentationTrackId, entry] of entries) {
       if (refreshedPresentationIds.has(presentationTrackId)) continue;
-      // The same confirmed track is still visible but no longer intersects a
-      // zone: remove it immediately. Only entirely missing tracks get grace.
+      // Entirely missing tracks get a short presentation grace period.
       if (
         observedTrackIds.has(entry.actualTrackId) ||
         observedAt - entry.lastSeenAt > DETECTION_PRESENTATION_GRACE_MS
@@ -211,18 +251,22 @@ export function useAreaMonitor() {
       setRestError(null);
       const res = await getAreaEvents({ limit: 50, offset: 0 });
       const items = Array.isArray(res?.items) ? res.items : [];
-      const mapped: AreaEvent[] = items.map((dto) => ({
-        id: dto.id,
-        time: formatTimeString(dto.enteredAt),
-        obj: dto.objectLabel,
-        zone: dto.zoneName,
-        zoneId: dto.zoneId,
-        st: 'Vi phạm',
-        ok: false,
-        source: 'violation',
-        clipUrl: dto.clipUrl ? getClipUrl(dto.clipUrl) : null,
-        durationSeconds: dto.durationSeconds,
-      }));
+      const mapped: AreaEvent[] = items.map((dto) => {
+        const clipStatus = dto.clipStatus || (dto.clipUrl ? 'READY' : 'NOT_REQUESTED');
+        return {
+          id: dto.id,
+          time: formatTimeString(dto.enteredAt),
+          obj: dto.objectLabel,
+          zone: dto.zoneName,
+          zoneId: dto.zoneId,
+          st: 'Vi phạm',
+          ok: false,
+          source: 'violation',
+          clipStatus,
+          clipUrl: clipStatus === 'READY' && dto.clipUrl ? getClipUrl(dto.clipUrl) : null,
+          durationSeconds: dto.durationSeconds,
+        };
+      });
       setViolations(mapped);
     } catch (err: any) {
       console.error('[useAreaMonitor] Failed to fetch area violations:', err);
@@ -269,6 +313,7 @@ export function useAreaMonitor() {
     if (!msg || msg.type !== 'zone_violation') return;
 
     if (msg.action === 'STARTED' || msg.status === 'OPEN') {
+      const clipStatus = msg.clipStatus || (msg.clipUrl ? 'READY' : 'NOT_REQUESTED');
       const newEvent: AreaEvent = {
         id: msg.id,
         time: formatTimeString(msg.enteredAt),
@@ -278,7 +323,8 @@ export function useAreaMonitor() {
         st: 'Vi phạm',
         ok: false,
         source: 'violation',
-        clipUrl: msg.clipUrl ? getClipUrl(msg.clipUrl) : null,
+        clipStatus,
+        clipUrl: clipStatus === 'READY' && msg.clipUrl ? getClipUrl(msg.clipUrl) : null,
         durationSeconds: msg.durationSeconds,
       };
 
@@ -294,7 +340,8 @@ export function useAreaMonitor() {
             ? {
                 ...e,
                 durationSeconds: msg.durationSeconds,
-                clipUrl: msg.clipUrl ? getClipUrl(msg.clipUrl) : e.clipUrl,
+                clipStatus: msg.clipStatus || e.clipStatus || 'NOT_REQUESTED',
+                clipUrl: msg.clipStatus === 'READY' && msg.clipUrl ? getClipUrl(msg.clipUrl) : e.clipUrl,
               }
             : e
         )
@@ -416,6 +463,74 @@ export function useAreaMonitor() {
     }
   }, []);
 
+  const clearClipPollTimer = useCallback(() => {
+    if (clipPollTimerRef.current !== null) {
+      window.clearTimeout(clipPollTimerRef.current);
+      clipPollTimerRef.current = null;
+    }
+  }, []);
+
+  const applyClipState = useCallback((
+    eventId: string,
+    status: AreaClipStatus,
+    clipUrl: string | null,
+    message?: string,
+  ) => {
+    const url = status === 'READY' && clipUrl ? getClipUrl(clipUrl) : null;
+    setSelectedClip({ eventId, status, url, ...(message ? { message } : {}) });
+    setViolations((previous) => previous.map((event) => (
+      event.id === eventId
+        ? { ...event, clipStatus: status, clipUrl: url }
+        : event
+    )));
+  }, []);
+
+  const pollClipState = useCallback((eventId: string, sequence: number) => {
+    clearClipPollTimer();
+    clipPollTimerRef.current = window.setTimeout(() => {
+      void getAreaEventClipStatus(eventId)
+        .then((state) => {
+          if (sequence !== clipRequestSequenceRef.current) return;
+          applyClipState(eventId, state.status, state.clipUrl, state.message);
+          if (state.status === 'QUEUED' || state.status === 'GENERATING') {
+            pollClipState(eventId, sequence);
+          }
+        })
+        .catch(() => {
+          if (sequence !== clipRequestSequenceRef.current) return;
+          applyClipState(eventId, 'FAILED', null, 'Không thể kiểm tra trạng thái video. Hãy thử lại.');
+        });
+    }, 750);
+  }, [applyClipState, clearClipPollTimer]);
+
+  const requestEventClip = useCallback(async (eventId: string): Promise<void> => {
+    clearClipPollTimer();
+    const sequence = ++clipRequestSequenceRef.current;
+    setSelectedClip({ eventId, status: 'QUEUED', url: null });
+    try {
+      const state = await requestAreaEventClip(eventId);
+      if (sequence !== clipRequestSequenceRef.current) return;
+      applyClipState(eventId, state.status, state.clipUrl, state.message);
+      if (state.status === 'QUEUED' || state.status === 'GENERATING') {
+        pollClipState(eventId, sequence);
+      }
+    } catch {
+      if (sequence !== clipRequestSequenceRef.current) return;
+      applyClipState(eventId, 'FAILED', null, 'Không thể bắt đầu tạo video. Hãy thử lại.');
+    }
+  }, [applyClipState, clearClipPollTimer, pollClipState]);
+
+  const closeEventClip = useCallback(() => {
+    clipRequestSequenceRef.current += 1;
+    clearClipPollTimer();
+    setSelectedClip(null);
+  }, [clearClipPollTimer]);
+
+  useEffect(() => () => {
+    clipRequestSequenceRef.current += 1;
+    clearClipPollTimer();
+  }, [clearClipPollTimer]);
+
   return {
     // Feed & Connection
     frameImage,
@@ -438,6 +553,9 @@ export function useAreaMonitor() {
     restError,
     fetchViolations,
     clearAreaEvents,
+    requestEventClip,
+    closeEventClip,
+    selectedClip,
     // Filters & UI State
     filterMode,
     setFilterMode,

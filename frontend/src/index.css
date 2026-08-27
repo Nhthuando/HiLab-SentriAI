@@ -415,3 +415,13 @@ a:hover {
     transition: none !important;
   }
 }
+
+.object-label-layout {
+  grid-template-columns: minmax(0, 1.6fr) minmax(340px, 1fr);
+}
+
+@media (max-width: 900px) {
+  .object-label-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

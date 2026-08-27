@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import type { PolygonZone } from '../types';
 import { useAreaMonitor } from '../hooks/useAreaMonitor';
 
@@ -36,11 +36,24 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
     restError,
     fetchViolations,
     clearAreaEvents,
+    requestEventClip,
+    closeEventClip,
+    selectedClip,
     kpis,
   } = useAreaMonitor();
 
   const [hoveredFeedObjectKey, setHoveredFeedObjectKey] = useState<string | null>(null);
-  const [selectedClipUrl, setSelectedClipUrl] = useState<string | null>(null);
+  const clipVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  const closeClipModal = () => {
+    const video = clipVideoRef.current;
+    if (video) {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    }
+    closeEventClip();
+  };
 
   // Play / Pause & Seek timeline state
   const [isPaused, setIsPaused] = useState<boolean>(false);
@@ -162,7 +175,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
       ),
     },
     {
-      label: 'Xe nâng / container',
+      label: 'Đối tượng được phép',
       value: String(kpis.allowedInZoneCount),
       sub: 'Hoạt động đúng quy định',
       color: 'var(--ok)',
@@ -528,9 +541,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
             })}
 
             {/* Real-Time Detected Objects with Bounding Boxes */}
-            {displayDetections
-              .filter((det) => det.zoneMatches && det.zoneMatches.length > 0)
-              .map((det, idx) => {
+            {displayDetections.map((det, idx) => {
               const key = `det-${det.trackId ?? idx}`;
               const isHighlighted = isDetectionMatchingHover(det, idx);
 
@@ -554,12 +565,16 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                 bh = `${(((y2 - y1) / 480) * 100).toFixed(2)}%`;
               }
 
-              const isViolation = det.status === 'VIOLATION';
-              const color = isViolation ? '#f43f5e' : '#10b981';
-              const fill = isViolation ? 'rgba(244,63,94,0.22)' : 'rgba(16,185,129,0.12)';
-              const labelText = `${(det.label || det.class).toUpperCase()} · ${
-                isViolation ? 'VI PHẠM ZONE' : 'ĐƯỢC PHÉP'
-              }`;
+              const isOutside = det.status === 'OUTSIDE' || !det.zoneMatches?.length;
+              const isViolation = !isOutside && det.status === 'VIOLATION';
+              const color = isOutside ? '#94a3b8' : isViolation ? '#f43f5e' : '#10b981';
+              const fill = isOutside
+                ? 'rgba(148,163,184,0.10)'
+                : isViolation
+                  ? 'rgba(244,63,94,0.22)'
+                  : 'rgba(16,185,129,0.12)';
+              const statusText = isOutside ? 'NGOÀI ZONE' : isViolation ? 'VI PHẠM ZONE' : 'ĐƯỢC PHÉP';
+              const labelText = `${(det.label || det.class).toUpperCase()} · ${statusText}`;
 
               return (
                 <div
@@ -1014,29 +1029,43 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                       </div>
                     </div>
 
-                    {event.clipUrl && (
+                    {event.source === 'violation' && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setSelectedClipUrl(event.clipUrl || null);
+                          void requestEventClip(event.id);
                         }}
-                        title="Xem video clip 10s"
+                        disabled={
+                          selectedClip?.eventId === event.id
+                          && (selectedClip.status === 'QUEUED' || selectedClip.status === 'GENERATING')
+                        }
+                        title="Chỉ tạo và tải video khi bấm nút này"
                         style={{
                           border: 'none',
                           backgroundColor: 'rgba(255, 255, 255, 0.08)',
                           color: 'var(--ink2)',
                           padding: '5px 10px',
                           borderRadius: '6px',
-                          cursor: 'pointer',
+                          cursor: selectedClip?.eventId === event.id
+                            && (selectedClip.status === 'QUEUED' || selectedClip.status === 'GENERATING')
+                            ? 'wait'
+                            : 'pointer',
                           display: 'flex',
                           alignItems: 'center',
                           gap: '4px',
                           fontSize: '11px',
                           fontWeight: 600,
                           flexShrink: 0,
+                          opacity: selectedClip?.eventId === event.id
+                            && (selectedClip.status === 'QUEUED' || selectedClip.status === 'GENERATING')
+                            ? 0.7
+                            : 1,
                         }}
                       >
-                        ▶ Clip
+                        {selectedClip?.eventId === event.id
+                          && (selectedClip.status === 'QUEUED' || selectedClip.status === 'GENERATING')
+                          ? 'Đang tạo video…'
+                          : '▶ Xem video'}
                       </button>
                     )}
 
@@ -1063,7 +1092,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
       </div>
 
       {/* Video Clip Modal */}
-      {selectedClipUrl && (
+      {selectedClip && (
         <div
           style={{
             position: 'fixed',
@@ -1075,7 +1104,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
             justifyContent: 'center',
             zIndex: 150,
           }}
-          onClick={() => setSelectedClipUrl(null)}
+          onClick={closeClipModal}
         >
           <div
             style={{
@@ -1092,7 +1121,7 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <span style={{ fontSize: '14px', fontWeight: 700 }}>Video Clip 10s sự kiện</span>
               <button
-                onClick={() => setSelectedClipUrl(null)}
+                onClick={closeClipModal}
                 style={{
                   border: 'none',
                   backgroundColor: 'transparent',
@@ -1104,12 +1133,36 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                 ✕
               </button>
             </div>
-            <video
-              src={selectedClipUrl}
-              controls
-              autoPlay
-              style={{ width: '100%', borderRadius: '8px', backgroundColor: '#000' }}
-            />
+            {(selectedClip.status === 'QUEUED' || selectedClip.status === 'GENERATING') && (
+              <div style={{ padding: '42px 20px', textAlign: 'center', color: 'var(--ink2)' }}>
+                Đang tạo video 10 giây theo yêu cầu…
+              </div>
+            )}
+            {selectedClip.status === 'READY' && selectedClip.url && (
+              <video
+                ref={clipVideoRef}
+                src={selectedClip.url}
+                controls
+                autoPlay
+                preload="metadata"
+                style={{ width: '100%', borderRadius: '8px', backgroundColor: '#000' }}
+              />
+            )}
+            {selectedClip.status === 'EXPIRED' && (
+              <div style={{ padding: '36px 20px', textAlign: 'center', color: 'var(--p1)' }}>
+                Video trực tiếp này đã quá thời gian lưu tạm 2 giờ nên không thể tạo lại.
+              </div>
+            )}
+            {selectedClip.status === 'FAILED' && (
+              <div style={{ padding: '36px 20px', textAlign: 'center', color: 'var(--p0)' }}>
+                {selectedClip.message || 'Không thể tạo video cho sự kiện này. Hãy thử lại.'}
+              </div>
+            )}
+            {selectedClip.status === 'NOT_REQUESTED' && (
+              <div style={{ padding: '36px 20px', textAlign: 'center', color: 'var(--ink2)' }}>
+                Video chưa được yêu cầu tạo.
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -12,7 +12,7 @@
 | # | Nội dung quyết định | Kết quả |
 |---|---|---|
 | Q1 | Clip 10s: pre-saved hay on-demand? | Pre-saved tự động khi event xảy ra |
-| Q2 | Labeling tool: train model hay define type? | Define type (gán nhãn tên Việt cho class model gốc); loại ngoài model → `CHƯA XÁC ĐỊNH` |
+| Q2 | Labeling tool: train model hay define type? | Danh mục Nhãn Đối Tượng là detection whitelist. Mỗi nhãn resolve chính xác sang COCO, class trong model custom ACTIVE, hoặc `UNAVAILABLE`; không có nhánh nhận diện `CHƯA XÁC ĐỊNH`. |
 | Q3 | Alert vi phạm zone hiển thị thế nào? | Bbox đỏ + alert panel list + floating mini-alert góc dưới phải khi ở tab khác |
 | Q4 | Hiển thị xe quen/lạ trên feed cổng? | Có — xanh/`XE QUEN`, vàng/`XE LẠ` + hiển thị trong alert panel |
 | Q5 | Vi phạm kéo dài: bao nhiêu alert? | 1 sự kiện mở lúc vào, đóng lúc ra, ghi tổng thời gian; clip từ lúc vào |
@@ -45,7 +45,7 @@
 **M2 — Giám sát khu vực (BAI-KIEM, góc trên cao)**
 - Nhận luồng video; xử lý >= 5 FPS
 - Phát hiện đối tượng trong các zone đa giác theo cấu hình
-- Phân loại đối tượng theo danh sách đã define; loại không khớp model gốc → nhãn `CHƯA XÁC ĐỊNH`
+- Chỉ phát hiện/hiển thị class có trong danh mục Nhãn Đối Tượng và có capability `COCO` hoặc `CUSTOM`; class ngoài whitelist hoặc `UNAVAILABLE` bị loại trước khi kiểm tra zone
 - Kiểm tra đối tượng có nằm trong zone không (point-in-polygon)
 - Khi đối tượng bị cấm đi vào zone:
   - Bbox chuyển màu đỏ + label `VI PHẠM` trên live feed
@@ -58,7 +58,7 @@
 **M3 — Cài đặt**
 - Gắn nhãn xe: Danh sách biển số đã thu thập; đánh dấu từng xe là `XE QUEN` / `XE LẠ`
 - Vẽ zone: Chọn camera (Cổng / Bãi Kiểm); vẽ polygon trên khung hình thật; zone lưu cập nhật ngay trên màn hình giám sát
-- Nhãn đối tượng: Import ảnh hoặc video, vẽ bounding box, chọn loại từ class model gốc, đặt tên nhãn tiếng Việt; nhãn đã lưu xuất hiện trong danh sách loại của mọi zone
+- Nhãn đối tượng: Import ảnh hoặc video, vẽ bounding box, chọn canonical class và đặt tên tiếng Việt. Nhãn server trả về xuất hiện trong Zone Editor; nhãn `UNAVAILABLE` được hiển thị cảnh báo nhưng bị vô hiệu hóa cho write mới.
 - Huấn luyện nhận diện đối tượng: Người dùng chủ động bắt đầu một lần huấn luyện từ các mẫu đã gán nhãn; hệ thống đánh giá version mới trước khi cho phép kích hoạt, đồng thời giữ model đang chạy để tiếp tục giám sát
 
 **M4 — Hỏi đáp AI**
@@ -113,8 +113,8 @@ Xe vào làn IN → LPR detect biển số → Tra danh sách quen/lạ → Hi�
 |---|---|
 | BR-01 | LPR chỉ kích hoạt khi xe đi vào zone làn IN; không detect xe đang đứng yên ngoài zone |
 | BR-02 | Biển số chưa có trong danh sách → tự động gán `XE LẠ`; không chặn xe |
-| BR-03 | Đối tượng detect không khớp class model gốc → gán `CHƯA XÁC ĐỊNH`; vẫn kiểm tra zone rules |
-| BR-04 | `CHƯA XÁC ĐỊNH` trong zone có rule "chỉ cho phép loại cụ thể" → bị coi là vi phạm |
+| BR-03 | Label registry là detection whitelist. Class COCO dùng base detector; class ngoài COCO chỉ dùng model custom ACTIVE có manifest chứa đúng class; class ngoài registry hoặc unavailable không được phát hiện, hiển thị hay mở zone event. |
+| BR-04 | Rule `ALLOW_SPECIFIED` coi mọi registry label detectable không nằm trong danh sách cho phép là vi phạm; unknown model class không được tạo candidate/event. |
 | BR-05 | Clip 10s được pre-saved ngay khi event xảy ra; sự kiện vi phạm tính clip từ lúc đối tượng vào zone |
 | BR-06 | Mỗi lần vào/ra zone = 1 sự kiện vi phạm; không spam alert trong khi đối tượng ở yên trong zone |
 | BR-07 | Zone cập nhật từ Cài đặt có hiệu lực ngay lập tức trên màn hình giám sát đang chạy |
@@ -149,7 +149,7 @@ Xe vào làn IN → LPR detect biển số → Tra danh sách quen/lạ → Hi�
 - LPR nhận diện đúng >= 80% biển số rõ nét trong video mẫu
 - Vi phạm zone được phát hiện và alert xuất hiện trong <= 2s
 - AI Q&A trả lời đúng >= 5 câu hỏi mẫu cơ bản có kèm clip tham chiếu
-- Bộ nhãn: >= 5 loại, mỗi loại >= 20 mẫu đã gắn nhãn
+- Profile custom MVP `YARD_CUSTOM_V2`: `reach_stacker` cần tối thiểu 60 mẫu từ 5 nguồn và đủ split do server tính; readiness train không quyết định runtime detectability.
 - Có thể huấn luyện thủ công từ bộ mẫu đã lưu, xem kết quả đánh giá theo version và chỉ kích hoạt version đã qua đánh giá
 - Demo video 3-5 phút bao phủ đủ 4 module
 
@@ -166,7 +166,7 @@ Xe vào làn IN → LPR detect biển số → Tra danh sách quen/lạ → Hi�
 | AC-05 | Vẽ zone mới trong Cài đặt → zone active ngay trên màn hình giám sát (không cần restart) | Thao tác trực tiếp trong app |
 | AC-06 | Nhãn đối tượng đã lưu → xuất hiện trong dropdown loại của zone config | Thao tác trực tiếp trong app |
 | AC-07 | Query "Hôm nay có bao nhiêu xe lạ vào?" → số đúng + chi tiết + clip reference + nút tải | So sánh với dữ liệu DB |
-| AC-08 | Đối tượng không khớp class model → hiện nhãn `CHƯA XÁC ĐỊNH`, vẫn kiểm tra zone rule | Test với vật thể lạ trong video |
+| AC-08 | Class ngoài registry hoặc không có detector capability không xuất hiện trong feed/Zone write; UI nêu rõ “Chưa có model nhận diện” cho registry label unavailable | Contract test capability + Area whitelist |
 | AC-09 | Stream ngắt → app hiện "Mất kết nối", không crash | Ngắt nguồn video file giả lập |
 | AC-10 | Người dùng lưu mẫu rồi chủ động bắt đầu huấn luyện; việc lưu mẫu không tự chạy huấn luyện | Thao tác ở Cài đặt → Nhãn đối tượng |
 | AC-11 | Model version mới chỉ được kích hoạt sau khi có kết quả đánh giá; khi huấn luyện/lỗi, giám sát vẫn dùng version đang hoạt động | Theo dõi giám sát và lịch sử version trong lúc train/thử lỗi |
@@ -184,7 +184,14 @@ Xe vào làn IN → LPR detect biển số → Tra danh sách quen/lạ → Hi�
 
 **Giả định:**
 - 2 camera cố định: GATE-01 (cổng) và BAI-KIEM (bãi kiểm)
-- Các loại xe trong proposal đều nằm trong class của model detection phổ biến
+- Sáu class COCO được hỗ trợ chính xác là `person`, `bicycle`, `car`, `motorcycle`, `bus`, `truck`; `reach_stacker`, `container_truck`, `forklift`, `mobile_crane` và `shipping_container` cần model custom ACTIVE nếu được yêu cầu.
+
+## Detection reliability contract — 2026-08-22
+
+- `Container` không còn là tên đa nghĩa. `container_truck` là xe đầu kéo/chở container; `shipping_container` là thùng container tĩnh và không phải phương tiện. COCO `truck` không được dùng để giả phân biệt hai class này.
+- GET/POST/PUT label trả capability gồm `canonicalClass`, `detectionSource`, `isDetectable`, `activeModelVersion`, `capabilityReason` và `capabilityReasonCode`. Sample count chỉ là readiness/evidence.
+- Track mới dùng ngưỡng khởi tạo cao hơn ngưỡng nối track. Default base là `0.30/0.14`, custom là `0.45/0.25`; custom phải đạt 2 hit trong 3 cơ hội. Low-confidence hit không tự mở pending/event mới.
+- Golden BAI-KIEM local có 65 candidate frame theo time block; evaluator mặc định khóa vào 26 frame `test`, hiện đều `PENDING`, nên accuracy vẫn `BLOCKED/NOT EVALUATED`. Performance YOLO11n local đạt từ 11.878 đến 20.682 E2E FPS trong sáu cell ROI on/off qua đường `AreaPipeline` và output sink không ghi ngoài, vượt mục tiêu 8 FPS. Xem `docs/evaluation/bai-kiem-baseline-report.md`.
 - Single user, không cần authentication cho MVP
 - Chạy local, không cần deploy cloud
 

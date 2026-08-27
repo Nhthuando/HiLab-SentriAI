@@ -27,9 +27,14 @@
 
 ## Acceptance criteria
 
-- [ ] Saving samples does not start training.
-- [ ] Export reports missing media/invalid bbox/legacy unresolved samples without changing original labels.
-- [ ] Snapshot is reproducible after label edits/deletions and is stored in `training_datasets`.
+- [x] Saving samples does not start training or change runtime detectability.
+- [x] `YARD_CUSTOM_V2` readiness is server-authoritative and initially requires only `reach_stacker`: 60 samples, 5 sources and source-grouped split coverage.
+- [x] Export reports missing media/invalid bbox/legacy unresolved samples without changing original labels and freezes `requiredClasses` in the manifest.
+- [x] Snapshot is reproducible after label edits/deletions and is stored in `training_datasets`; raw API snapshots can be audited without mutating the source.
+
+## Dataset audit evidence (2026-08-22)
+
+The current legacy snapshot contains 200 images and 222 reach-stacker boxes, 0 negatives, 0 boxes below 1% area, 58 edge-touching boxes and verified median normalized area 54.60948%. The previous 54.77% note was an estimate and is superseded. See `docs/evaluation/reach-stacker-dataset-audit.md`. Readiness remains independent from the detection capability resolver.
 - [ ] OpenAPI and backend handoff describe only verified behavior for this slice.
 
 ## Expected files and seams

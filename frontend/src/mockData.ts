@@ -3,7 +3,6 @@ import type {
   GateEvent,
   AreaEvent,
   PolygonZone,
-  ObjectLabel,
   AnnotationSource,
   AnnotationSample,
   ChatMessage
@@ -65,17 +64,6 @@ export const INITIAL_ZONES: Record<string, PolygonZone[]> = {
     }
   ]
 };
-
-export const INITIAL_OBJ_LABELS: ObjectLabel[] = [
-  { id: 'l1', name: 'Container', kind: 'xe', tint: '#2a4a6b', samples: 128 },
-  { id: 'l2', name: 'Xe tải', kind: 'xe', tint: '#3d5a40', samples: 64 },
-  { id: 'l3', name: 'Xe nâng', kind: 'xe', tint: '#5a5230', samples: 41 },
-  { id: 'l4', name: 'Xe cẩu', kind: 'xe', tint: '#4a3d5a', samples: 12 },
-  { id: 'l5', name: 'Xe con', kind: 'xe', tint: '#5a4a3d', samples: 23 },
-  { id: 'l6', name: 'Xe máy', kind: 'xe', tint: '#5a3d3d', samples: 17 },
-  { id: 'l7', name: 'Xe đạp', kind: 'xe', tint: '#3d4a5a', samples: 6 },
-  { id: 'l8', name: 'Người', kind: 'nguoi', tint: '#3d5a55', samples: 87 }
-];
 
 export const INITIAL_ANN_SOURCES: AnnotationSource[] = [
   { id: 'src1', name: 'baikiem-cam-01.jpg', kind: 'img', img: '/assets/cam-baikiem.png', isDefault: true },

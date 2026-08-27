@@ -113,12 +113,20 @@ class StreamEmitter:
 
     async def _send_json(self, path: str, payload: Dict[str, Any]) -> bool:
         """Send JSON payload over WebSocket connection."""
+        # Encode before opening a socket. A non-serializable payload is a DTO
+        # bug, not a transport failure; reconnecting only creates a connection
+        # storm and hides the actual cause.
+        try:
+            raw = json.dumps(payload)
+        except (TypeError, ValueError) as exc:
+            logger.error("Cannot serialize WS payload for %s: %s", path, exc)
+            return False
+
         conn = await self.get_connection(path)
         if not self._is_connected(conn):
             return False
 
         try:
-            raw = json.dumps(payload)
             await conn.send(raw)
             return True
         except Exception as exc:

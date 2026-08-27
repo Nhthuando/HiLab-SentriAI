@@ -28,9 +28,15 @@ assert.equal(created.name, 'Vùng kiểm thử');
 assert.deepEqual(created.targetLabels, ['Người', 'Container']);
 assert.equal(created.polygonPoints.length, 3);
 
-expectValidationError(() => parseCreateZoneInput({
+const gateCreated = parseCreateZoneInput({
   cameraId: 'GATE-01',
-  name: 'Không hợp lệ',
+  name: 'Valid gate zone',
+  polygonPoints: polygon,
+});
+assert.equal(gateCreated.cameraId, 'GATE-01');
+expectValidationError(() => parseCreateZoneInput({
+  cameraId: 'WAREHOUSE-99',
+  name: 'Unsupported camera',
   polygonPoints: polygon,
 }));
 expectValidationError(() => parsePolygonPoints([{ x: 0, y: 0 }, { x: 1, y: 0 }]));

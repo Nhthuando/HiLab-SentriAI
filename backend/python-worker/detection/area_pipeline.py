@@ -6,35 +6,49 @@ Coordinates:
 2. TrackedYoloDetector (ByteTrack multi-object tracking)
 3. ZoneSynchronizer (5-second atomic DB sync)
 4. ZoneChecker (polygon containment, rule matrix, violation state machine)
-5. CircularBuffer (10s MP4 clip generation)
-6. StreamEmitter (WebSocket frame, event, and alert emission)
-7. DB persistence (zone_violations OPEN/CLOSED and clip_path updates)
+5. StreamEmitter (WebSocket frame, event, and alert emission)
+6. DB persistence (zone_violations OPEN/CLOSED and lazy clip source metadata)
 """
 import asyncio
 import base64
+import hashlib
 import logging
 import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import cv2
 
-from buffer.circular_buffer import CircularBuffer
 from db.repositories import (
     close_zone_violation,
     create_zone_violation,
-    get_active_custom_model,
-    update_violation_clip_path,
+    delete_zone_violations,
 )
+from detection.area_event_queue import AreaEventQueue, RetryableAreaTransitionError
+from detection.event_clip_service import EventClipGenerator, EventClipService
 from detection.tracked_detector import TrackedYoloDetector
 from stream.emitter import StreamEmitter
 from stream.reader import StreamReader
+from stream.rolling_archive import RollingArchive
 from zone.zone_checker import ViolationTransition, ZoneChecker
-from zone.zone_sync import ZoneSynchronizer
+from zone.zone_sync import ZoneSnapshot, ZoneSynchronizer
 
 logger = logging.getLogger("sentriai.area.pipeline")
+
+
+class RepositoryAreaPersistence:
+    """Production persistence adapter; benchmarks can inject a no-write sink."""
+
+    async def create(self, **payload: Any) -> Any:
+        return await create_zone_violation(**payload)
+
+    async def close(self, **payload: Any) -> Any:
+        return await close_zone_violation(**payload)
+
+    async def delete_all(self, camera_id: str) -> int:
+        return await delete_zone_violations(camera_id)
 
 
 class AreaPipeline:
@@ -50,6 +64,12 @@ class AreaPipeline:
         detector: Optional[TrackedYoloDetector] = None,
         zone_sync: Optional[ZoneSynchronizer] = None,
         zone_checker: Optional[ZoneChecker] = None,
+        reader: Optional[Any] = None,
+        circular_buffer: Optional[Any] = None,
+        persistence: Optional[Any] = None,
+        record_violation_clips: bool = True,
+        rolling_archive: Optional[RollingArchive] = None,
+        clip_service: Optional[EventClipService] = None,
     ):
         self.camera_id = camera_id
         self.target_fps = target_fps
@@ -71,25 +91,16 @@ class AreaPipeline:
         )
         self.clips_dir.mkdir(parents=True, exist_ok=True)
 
-        self.reader = StreamReader(
+        self.reader = reader or StreamReader(
             source=source,
             camera_id=camera_id,
             target_fps=target_fps,
             resolution=resolution,
         )
         self.detector = detector or TrackedYoloDetector()
-        self._default_custom_model = TrackedYoloDetector.default_custom_model_config()
-        self._force_default_custom_model = os.getenv("CUSTOM_AUGMENT_FORCE_DEFAULT", "false").strip().casefold() in {"1", "true", "yes", "on"}
-        # A one-class fallback model can relabel every vehicle as its only class.
-        # It remains available only for an explicit diagnostic override; normal
-        # operation loads a reviewed active candidate or uses base YOLO alone.
-        if self._force_default_custom_model and self._default_custom_model and hasattr(self.detector, "configure_custom_model"):
-            self.detector.configure_custom_model(
-                str(self._default_custom_model["version_key"]),
-                str(self._default_custom_model["artifact_path"]),
-                self._default_custom_model["label_map"],
-            )
-        self.buffer = CircularBuffer(max_seconds=15.0, target_fps=target_fps)
+        # Compatibility hook only. Raw frames are no longer retained in RAM;
+        # event clips are generated lazily from the source/archive.
+        self.buffer = circular_buffer
         self.emitter = emitter or StreamEmitter()
         self.zone_sync = zone_sync or ZoneSynchronizer(camera_id=camera_id, sync_interval=5.0)
         self.zone_checker = zone_checker or ZoneChecker(
@@ -97,61 +108,168 @@ class AreaPipeline:
             grace_frames=3,
             missing_grace_seconds=12.0,
         )
+        self.persistence = persistence or RepositoryAreaPersistence()
+        self.record_violation_clips = False
+
+        source_context = self._get_source_context()
+        live_source = getattr(self.reader, "source", None)
+        if rolling_archive is not None:
+            self.rolling_archive = rolling_archive
+        elif source_context.get("source_kind") == "LIVE" and isinstance(live_source, str):
+            self.rolling_archive = RollingArchive(
+                camera_id=self.camera_id,
+                source_url=live_source,
+                archive_dir=backend_dir / "data" / "area_archive" / self.camera_id,
+                retention_seconds=int(os.getenv("AREA_ARCHIVE_RETENTION_SECONDS", "7200")),
+                segment_seconds=int(os.getenv("AREA_ARCHIVE_SEGMENT_SECONDS", "2")),
+            )
+        else:
+            self.rolling_archive = None
+        self.clip_service = clip_service or EventClipService(
+            camera_id=self.camera_id,
+            generator=EventClipGenerator(self.clips_dir),
+            archive=self.rolling_archive,
+            queue_limit=int(os.getenv("AREA_CLIP_QUEUE_LIMIT", "8")),
+        )
 
         self._running = False
         self._active = False
         self._task: Optional[asyncio.Task] = None
-        self._clip_tasks: Set[asyncio.Task] = set()
         self.frame_count = 0
         self.fps_measured = 0.0
         self._last_fps_calc = time.time()
         self._fps_counter = 0
-        self._last_custom_model_sync = 0.0
+        self._control_lock = asyncio.Lock()
+        self._runtime_generation = 0
+        self._event_queue = AreaEventQueue(
+            self._process_transition_once,
+            self._handle_exhausted_transition,
+        )
+        self._applied_detection_snapshot: Optional[ZoneSnapshot] = None
+        self._applied_detection_control: Optional[tuple[object, ...]] = None
 
-    async def _refresh_custom_model(self) -> None:
-        """Poll active custom augmentation from DB; fallback to default custom model if available."""
-        if self._force_default_custom_model:
-            return
-        if time.time() - self._last_custom_model_sync < 5.0:
-            return
-        self._last_custom_model_sync = time.time()
+    def _get_source_context(self) -> Dict[str, Any]:
+        getter = getattr(self.reader, "get_source_context", None)
+        if callable(getter):
+            try:
+                context = getter()
+                if isinstance(context, Mapping):
+                    return dict(context)
+            except Exception:
+                pass
+        return {
+            "source_kind": "UNAVAILABLE",
+            "source_ref": None,
+            "source_position_seconds": None,
+            "source_timestamp": None,
+        }
+
+    def _resolve_active_model(self, active_model: Optional[Mapping[str, Any]]) -> Optional[Dict[str, object]]:
+        """Return a verified, absolute ACTIVE artifact or fail closed.
+
+        The database/synchronizer owns ACTIVE selection.  This method merely
+        verifies the artifact before it reaches Ultralytics: paths must remain
+        below ``backend/data`` and their stored digest must match exactly.
+        """
+        if not isinstance(active_model, Mapping):
+            return None
+        version_key = active_model.get("version_key")
+        artifact_setting = active_model.get("artifact_path")
+        artifact_sha256 = active_model.get("artifact_sha256")
+        label_map = active_model.get("label_map")
+        runtime_mode = str(active_model.get("runtime_mode", "SUPPLEMENTAL")).strip().upper()
+        if (
+            not isinstance(version_key, str)
+            or not version_key.strip()
+            or not isinstance(artifact_setting, str)
+            or not artifact_setting.strip()
+            or not isinstance(artifact_sha256, str)
+            or len(artifact_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in artifact_sha256.casefold())
+            or not isinstance(label_map, Mapping)
+            or runtime_mode not in {"SUPPLEMENTAL", "UNIFIED"}
+        ):
+            logger.error("[%s] ACTIVE model metadata is incomplete or invalid; custom detection is disabled.", self.camera_id)
+            return None
+
+        backend_root = Path(__file__).resolve().parents[2]
+        data_root = (backend_root / "data").resolve()
+        artifact = Path(artifact_setting)
+        candidate = artifact.resolve() if artifact.is_absolute() else (data_root / artifact).resolve()
+        if data_root not in candidate.parents or not candidate.is_file():
+            logger.error("[%s] ACTIVE model artifact is outside backend/data or missing: %s", self.camera_id, candidate)
+            return None
+
+        digest = hashlib.sha256()
         try:
-            active = await get_active_custom_model()
-            if not active:
-                if self._default_custom_model:
-                    await asyncio.to_thread(
-                        self.detector.configure_custom_model,
-                        str(self._default_custom_model["version_key"]),
-                        str(self._default_custom_model["artifact_path"]),
-                        self._default_custom_model["label_map"],
-                    )
-                else:
-                    await asyncio.to_thread(self.detector.configure_custom_model, None, None, None)
-                return
-            metrics = active.get("evaluation_metrics") or {}
-            label_map = metrics.get("labelMap") if isinstance(metrics, dict) else {}
-            backend_root = Path(__file__).resolve().parents[2]
-            data_root = backend_root / "data"
-            artifact_path = (data_root / str(active["artifact_path"])).resolve()
-            if data_root not in artifact_path.parents:
-                raise ValueError("unsafe custom artifact path")
-            await asyncio.to_thread(
-                self.detector.configure_custom_model,
-                str(active["version_key"]),
-                str(artifact_path),
-                label_map if isinstance(label_map, dict) else {},
+            with candidate.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError as exc:
+            logger.error("[%s] Could not read ACTIVE model artifact %s: %s", self.camera_id, candidate, exc)
+            return None
+        if digest.hexdigest() != artifact_sha256.casefold():
+            logger.error("[%s] ACTIVE model artifact checksum mismatch: %s", self.camera_id, candidate)
+            return None
+
+        return {
+            "version_key": version_key,
+            "artifact_path": str(candidate),
+            "artifact_sha256": artifact_sha256.casefold(),
+            "label_map": dict(label_map),
+            "runtime_mode": runtime_mode,
+        }
+
+    def _apply_detection_control(self, snapshot: ZoneSnapshot) -> None:
+        """Apply the synchronizer's complete control snapshot before a frame."""
+        active_model = self._resolve_active_model(snapshot.active_model)
+        active_fingerprint: Optional[tuple[object, ...]] = None
+        if active_model is not None:
+            label_map = active_model["label_map"]
+            assert isinstance(label_map, dict)
+            active_fingerprint = (
+                active_model["version_key"],
+                active_model["artifact_path"],
+                active_model["artifact_sha256"],
+                active_model["runtime_mode"],
+                tuple(sorted((str(label), str(canonical)) for label, canonical in label_map.items())),
             )
+        control_fingerprint: tuple[object, ...] = (
+            tuple(sorted(snapshot.coco_classes)),
+            tuple(sorted(snapshot.custom_classes)),
+            active_fingerprint,
+        )
+        if control_fingerprint == self._applied_detection_control:
+            return
+        self.detector.configure_detection_control(
+            coco_classes=snapshot.coco_classes,
+            custom_classes=snapshot.custom_classes,
+            active_model=active_model,
+        )
+        self._applied_detection_control = control_fingerprint
+
+    async def prepare(self) -> bool:
+        """Load and warm detection control before the first feed subscriber."""
+        self.clip_service.start()
+        if self.rolling_archive is not None:
+            self.rolling_archive.start()
+        try:
+            if not await self.zone_sync.refresh_now():
+                logger.warning("[%s] Area prewarm skipped because initial zone sync failed.", self.camera_id)
+                return False
+            snapshot = self.zone_sync.get_snapshot()
+            self._apply_detection_control(snapshot)
+            self._applied_detection_snapshot = snapshot
+            await asyncio.to_thread(self.detector.warmup, self.resolution)
+            logger.info("[%s] Area detector preloaded and warmed before feed activation.", self.camera_id)
+            return True
         except Exception as exc:
-            if self._default_custom_model:
-                await asyncio.to_thread(
-                    self.detector.configure_custom_model,
-                    str(self._default_custom_model["version_key"]),
-                    str(self._default_custom_model["artifact_path"]),
-                    self._default_custom_model["label_map"],
-                )
-            else:
-                await asyncio.to_thread(self.detector.configure_custom_model, None, None, None)
-            logger.warning("[%s] Could not refresh reviewed custom model; using fallback custom or base YOLO: %s", self.camera_id, exc)
+            logger.warning(
+                "[%s] Area detector prewarm failed; base failover remains available: %s",
+                self.camera_id,
+                exc,
+            )
+            return False
 
     def process_single_frame(self) -> Dict[str, Any]:
         """
@@ -162,24 +280,35 @@ class AreaPipeline:
         if not success or frame is None:
             return {"success": False, "detections": [], "transitions": []}
 
+        if self.reader.did_loop:
+            # The first frame after a seek/rewind belongs to a new tracking
+            # timeline. Never let ByteTrack IDs or temporal confirmation leak
+            # across that discontinuity.
+            self.detector.reset_tracking()
+            if self.buffer is not None:
+                self.buffer.clear()
+
+        # Use one exact snapshot for both inference routing and zone evaluation.
+        # A refresh can atomically publish a new object between frames, never
+        # half a whitelist/model combination during a frame.
+        snapshot = self.zone_sync.get_snapshot()
+        if snapshot is not self._applied_detection_snapshot:
+            self._apply_detection_control(snapshot)
+            self._applied_detection_snapshot = snapshot
+
         now_sec = time.time()
         now_dt = datetime.now(timezone.utc)
 
         # 1. Run ByteTrack multi-object tracking
         raw_detections = self.detector.track(frame)
 
-        # 2. Store in circular buffer for 10-second clip generation
-        self.buffer.append(frame, now_sec)
-
-        # 3. Get latest zone & label snapshot
-        snapshot = self.zone_sync.get_snapshot()
-
-        # 4. Check detections against zones & advance violation state machine
+        # 2. Check detections against zones & advance violation state machine
         annotated_detections, transitions = self.zone_checker.check_detections(
             detections=raw_detections,
             zones=snapshot.zones,
             class_to_labels=snapshot.class_to_labels,
             timestamp=now_dt,
+            frame_size=(int(frame.shape[1]), int(frame.shape[0])),
         )
 
         # 5. Encode JPEG frame to base64
@@ -202,16 +331,11 @@ class AreaPipeline:
             self._fps_counter = 0
             self._last_fps_calc = now_sec
 
-        # Format zones for WS feed output matching AreaZoneFeedDto
-        feed_zones = []
-        for z in snapshot.zones:
-            feed_zones.append({
-                "id": z["id"],
-                "name": z["name"],
-                "polygon": z.get("polygon") or z.get("polygon_points") or [],
-                "ruleType": z.get("ruleType") or z.get("rule_type") or "PROHIBIT_SPECIFIED",
-                "targetLabels": z.get("targetLabels") or z.get("target_labels") or [],
-            })
+        # Snapshot internals are recursively frozen with MappingProxyType and
+        # tuples. Never leak those immutable implementation types into the WS
+        # DTO: stdlib json rejects MappingProxyType, which previously caused a
+        # connect -> serialize failure -> reconnect storm on every frame.
+        feed_zones = self._build_feed_zones(snapshot.zones)
 
         return {
             "success": True,
@@ -226,22 +350,107 @@ class AreaPipeline:
             "source_reset": self.reader.did_loop,
         }
 
+    @staticmethod
+    def _build_feed_zones(zones: Any) -> List[Dict[str, Any]]:
+        """Convert immutable ZoneSnapshot records to JSON-native feed DTOs."""
+        output: List[Dict[str, Any]] = []
+        for zone in zones:
+            raw_polygon = zone.get("polygon") or zone.get("polygon_points") or ()
+            polygon: List[Any] = []
+            for point in raw_polygon:
+                if isinstance(point, Mapping):
+                    polygon.append({"x": float(point["x"]), "y": float(point["y"])})
+                elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                    polygon.append([float(point[0]), float(point[1])])
+
+            raw_targets = zone.get("targetLabels") or zone.get("target_labels") or ()
+            output.append({
+                "id": str(zone["id"]),
+                "name": str(zone.get("name") or "Zone"),
+                "polygon": polygon,
+                "ruleType": str(zone.get("ruleType") or zone.get("rule_type") or "PROHIBIT_SPECIFIED"),
+                "targetLabels": [str(label) for label in raw_targets],
+            })
+        return output
+
     def get_playback_state(self) -> Dict[str, Any]:
         return self.reader.get_playback_state()
 
-    def request_seek(self, position_seconds: float) -> Dict[str, Any]:
-        state = self.reader.request_seek(position_seconds)
-        if state.get("seekable"):
-            self.detector.reset_tracking()
-            self.buffer.clear()
-            self._fps_counter = 0
-            self._last_fps_calc = time.time()
-            self.fps_measured = self.target_fps
-        return state
+    async def request_seek(self, position_seconds: float) -> Dict[str, Any]:
+        """End the current timeline and seek without racing frame processing."""
+        async with self._control_lock:
+            for transition in self.zone_checker.end_all(datetime.now(timezone.utc)):
+                self._event_queue.enqueue(transition, self._runtime_generation)
 
-    async def _handle_transition(self, t: ViolationTransition) -> None:
-        """Handle violation state machine transitions (DB persistence + WS emission + clip)."""
+            state = self.reader.request_seek(position_seconds)
+            if state.get("seekable"):
+                self.detector.reset_tracking()
+                if self.buffer is not None:
+                    self.buffer.clear()
+                self._fps_counter = 0
+                self._last_fps_calc = time.time()
+                self.fps_measured = self.target_fps
+            return state
+
+    async def delete_all_events(self) -> Dict[str, int]:
+        """Atomically retire live Area state before deleting its DB history."""
+        async with self._control_lock:
+            self._runtime_generation += 1
+            await self._event_queue.reset_generation(self._runtime_generation)
+            await self.clip_service.reset()
+
+            deleted_records = await self.persistence.delete_all(self.camera_id)
+            cleared_active, cleared_pending = self.zone_checker.clear_runtime_state()
+
+            return {
+                "deleted_records": int(deleted_records),
+                "cleared_active": cleared_active,
+                "cleared_pending": cleared_pending,
+            }
+
+    async def _process_transition_once(
+        self,
+        t: ViolationTransition,
+        generation: int,
+    ) -> None:
+        """Attempt persistence once; the queue owns retry timing."""
+        if generation != self._runtime_generation:
+            return
         if t.action == "STARTED":
+            # 1. DB persistence: insert OPEN violation
+            try:
+                source_context = self._get_source_context()
+                if source_context.get("source_kind") == "LOCAL_FILE":
+                    current_position = float(source_context.get("source_position_seconds") or 0.0)
+                    confirmation_delay = max(
+                        0.0,
+                        (datetime.now(timezone.utc) - t.entered_at).total_seconds(),
+                    )
+                    source_context["source_position_seconds"] = max(
+                        0.0,
+                        current_position - confirmation_delay,
+                    )
+                elif source_context.get("source_kind") == "LIVE":
+                    source_context["source_timestamp"] = t.entered_at
+                created = await self.persistence.create(
+                    camera_id=self.camera_id,
+                    zone_id=t.zone_id,
+                    object_label=t.object_label,
+                    entered_at=t.entered_at,
+                    clip_path=None,
+                    source_kind=source_context.get("source_kind"),
+                    source_ref=source_context.get("source_ref"),
+                    source_position_seconds=source_context.get("source_position_seconds"),
+                    source_timestamp=source_context.get("source_timestamp"),
+                    violation_id=t.violation_id,
+                )
+                if created is None:
+                    raise RuntimeError("Zone violation was not persisted")
+            except Exception as exc:
+                raise RetryableAreaTransitionError(
+                    f"Failed to persist OPEN violation {t.violation_id}: {exc}"
+                ) from exc
+
             logger.info(
                 "[%s] VIOLATION STARTED: %s in %s (ID: %s)",
                 self.camera_id,
@@ -250,34 +459,10 @@ class AreaPipeline:
                 t.violation_id,
             )
 
-            # 1. DB persistence: insert OPEN violation
-            try:
-                created = await create_zone_violation(
-                    camera_id=self.camera_id,
-                    zone_id=t.zone_id,
-                    object_label=t.object_label,
-                    entered_at=t.entered_at,
-                    clip_path=None,
-                    violation_id=t.violation_id,
-                )
-                if created is None:
-                    raise RuntimeError("Zone violation was not persisted")
-            except Exception as exc:
-                logger.error("[%s] Failed to persist OPEN violation to DB: %s", self.camera_id, exc)
-                self.zone_checker.discard_started_transition(t)
-                return
-
-            # 2. Schedule 10-second circular buffer clip job
-            entered_sec = t.entered_at.timestamp()
-            clip_task = asyncio.create_task(
-                self._save_clip_job(t.violation_id, entered_sec)
-            )
-            self._clip_tasks.add(clip_task)
-            clip_task.add_done_callback(self._clip_tasks.discard)
-
-            # 3. Emit real-time Area event notification
+            # 2. Emit real-time Area event notification. Event-specific MP4
+            # generation begins only after an explicit user request.
             iso_entered = t.entered_at.isoformat().replace("+00:00", "Z")
-            await self.emitter.emit_area_event({
+            await self._safe_emit_area_event({
                 "action": "STARTED",
                 "id": t.violation_id,
                 "cameraId": self.camera_id,
@@ -289,10 +474,11 @@ class AreaPipeline:
                 "exitedAt": None,
                 "durationSeconds": None,
                 "clipUrl": None,
+                "clipStatus": "NOT_REQUESTED",
             })
 
-            # 4. Emit urgent cross-tab alert (BR-08)
-            await self.emitter.emit_alert({
+            # 3. Emit urgent cross-tab alert (BR-08)
+            await self._safe_emit_alert({
                 "level": "critical",
                 "title": "CẢNH BÁO VI PHẠM ZONE",
                 "message": f"Phát hiện {t.object_label} trong {t.zone_name}",
@@ -307,6 +493,26 @@ class AreaPipeline:
             })
 
         elif t.action == "ENDED":
+            # 1. DB persistence: close violation
+            try:
+                closed = await self.persistence.close(
+                    violation_id=t.violation_id,
+                    exited_at=t.exited_at,
+                    duration_seconds=t.duration_seconds,
+                )
+            except Exception as exc:
+                raise RetryableAreaTransitionError(
+                    f"Failed to close violation {t.violation_id}: {exc}"
+                ) from exc
+
+            if closed is None:
+                logger.warning(
+                    "[%s] Violation %s was already deleted; retiring local close.",
+                    self.camera_id,
+                    t.violation_id,
+                )
+                return
+
             logger.info(
                 "[%s] VIOLATION ENDED: %s in %s (ID: %s, duration: %ss)",
                 self.camera_id,
@@ -316,24 +522,10 @@ class AreaPipeline:
                 t.duration_seconds,
             )
 
-            # 1. DB persistence: close violation
-            try:
-                closed = await close_zone_violation(
-                    violation_id=t.violation_id,
-                    exited_at=t.exited_at,
-                    duration_seconds=t.duration_seconds,
-                )
-                if closed is None:
-                    raise RuntimeError("Zone violation was not closed")
-            except Exception as exc:
-                logger.error("[%s] Failed to close violation in DB: %s", self.camera_id, exc)
-                self.zone_checker.restore_ended_transition(t)
-                return
-
             # 2. Emit real-time Area event notification
             iso_entered = t.entered_at.isoformat().replace("+00:00", "Z")
             iso_exited = t.exited_at.isoformat().replace("+00:00", "Z") if t.exited_at else None
-            await self.emitter.emit_area_event({
+            await self._safe_emit_area_event({
                 "action": "ENDED",
                 "id": t.violation_id,
                 "cameraId": self.camera_id,
@@ -345,51 +537,58 @@ class AreaPipeline:
                 "exitedAt": iso_exited,
                 "durationSeconds": t.duration_seconds,
                 "clipUrl": None,
+                "clipStatus": "NOT_REQUESTED",
             })
 
-    async def _save_clip_job(self, violation_id: str, entered_sec: float) -> None:
-        """
-        Background worker that waits until entered_sec + 10s has passed,
-        extracts the 10-second MP4 clip from circular buffer, writes to disk,
-        and updates DB clip_path (BR-05).
-        """
-        target_end_time = entered_sec + 10.0
-        now = time.time()
-        wait_seconds = max(0.1, target_end_time - now)
+    async def _safe_emit_area_event(self, payload: Dict[str, Any]) -> None:
         try:
-            await asyncio.sleep(wait_seconds)
-        except asyncio.CancelledError:
-            return
-
-        filename = f"area_{violation_id}.mp4"
-        file_path = str(self.clips_dir / filename)
-
-        try:
-            # Save 10s clip up to target_end_time
-            saved_path = await asyncio.to_thread(
-                self.buffer.save_clip,
-                output_path=file_path,
-                duration_seconds=10.0,
-                end_time=target_end_time,
+            await self.emitter.emit_area_event(payload)
+        except Exception as exc:
+            logger.warning(
+                "[%s] Persisted Area event %s but realtime emission failed: %s",
+                self.camera_id,
+                payload.get("id"),
+                exc,
             )
 
-            if saved_path and os.path.isfile(saved_path):
-                logger.info("[%s] Saved violation clip: %s", self.camera_id, filename)
-                # Store relative filename area_<id>.mp4 in DB
-                await update_violation_clip_path(violation_id, filename)
-            else:
-                logger.warning("[%s] Clip save produced no file for violation %s", self.camera_id, violation_id)
+    async def _safe_emit_alert(self, payload: Dict[str, Any]) -> None:
+        try:
+            await self.emitter.emit_alert(payload)
         except Exception as exc:
-            logger.warning("[%s] Failed to write violation clip (%s). clip_path remains NULL.", self.camera_id, exc)
+            logger.warning(
+                "[%s] Persisted Area alert for %s but realtime emission failed: %s",
+                self.camera_id,
+                payload.get("data", {}).get("violationId"),
+                exc,
+            )
+
+    async def _handle_exhausted_transition(
+        self,
+        transition: ViolationTransition,
+        generation: int,
+        error: BaseException,
+    ) -> None:
+        logger.error(
+            "[%s] Area event persistence exhausted for %s %s after bounded retries: %s",
+            self.camera_id,
+            transition.action,
+            transition.violation_id,
+            error,
+        )
+        if generation == self._runtime_generation and transition.action == "STARTED":
+            self.zone_checker.discard_started_transition(transition)
 
     async def _loop(self) -> None:
         """Asynchronous processing and emission loop."""
         logger.info("[%s] Area camera pipeline started (target: %.1f FPS).", self.camera_id, self.target_fps)
-        # Immediate initial sync so first frames have DB labels
-        try:
-            await self.zone_sync.refresh_now()
-        except Exception as exc:
-            logger.warning("[%s] Initial zone sync failed: %s", self.camera_id, exc)
+        # Startup preparation already loaded the first complete snapshot. Keep
+        # this fallback for tests/deployments which construct and start the
+        # pipeline without calling prepare().
+        if self._applied_detection_snapshot is None:
+            try:
+                await self.zone_sync.refresh_now()
+            except Exception as exc:
+                logger.warning("[%s] Initial zone sync failed: %s", self.camera_id, exc)
 
         interval = 1.0 / self.target_fps
 
@@ -400,23 +599,10 @@ class AreaPipeline:
 
             start_t = time.time()
             try:
-                await self._refresh_custom_model()
-                result = await asyncio.to_thread(self.process_single_frame)
+                async with self._control_lock:
+                    result = await asyncio.to_thread(self.process_single_frame)
 
-                if result["success"]:
-                    # 1. Emit live video frame with detection and zone overlays
-                    await self.emitter.emit_frame(
-                        camera_id=self.camera_id,
-                        image_base64=result["image_base64"],
-                        detections=result["detections"],
-                        fps=result["fps"],
-                        zones=result["zones"],
-                        source_reset=result.get("source_reset", False),
-                    )
-
-                    # 2. Handle state machine transitions (STARTED / ENDED)
-                    for trans in result.get("transitions", []):
-                        await self._handle_transition(trans)
+                await self.publish_result(result)
 
             except Exception as exc:
                 logger.error("[%s] Error in Area pipeline loop: %s", self.camera_id, exc)
@@ -427,6 +613,30 @@ class AreaPipeline:
 
         logger.info("[%s] Area camera pipeline loop ended.", self.camera_id)
 
+    async def publish_result(self, result: Mapping[str, Any]) -> None:
+        """Run the production feed/event output path for one processed frame."""
+        if not result.get("success"):
+            return
+        await self.emitter.emit_frame(
+            camera_id=self.camera_id,
+            image_base64=str(result["image_base64"]),
+            detections=result["detections"],
+            fps=float(result["fps"]),
+            zones=result["zones"],
+            source_reset=bool(result.get("source_reset", False)),
+        )
+        for transition in result.get("transitions", []):
+            queued = self._event_queue.enqueue(
+                transition,
+                self._runtime_generation,
+            )
+            if not queued:
+                await self._handle_exhausted_transition(
+                    transition,
+                    self._runtime_generation,
+                    RuntimeError("Area event queue rejected transition"),
+                )
+
     def start(self) -> None:
         """Start the area pipeline background tasks."""
         self._active = True
@@ -436,6 +646,10 @@ class AreaPipeline:
         if self._running:
             return
         self._running = True
+        self._event_queue.start()
+        self.clip_service.start()
+        if self.rolling_archive is not None:
+            self.rolling_archive.start()
         self.zone_sync.start()
         self._task = asyncio.create_task(self._loop())
 
@@ -454,11 +668,10 @@ class AreaPipeline:
             self._task = None
 
         await self.zone_sync.stop()
-
-        # Cancel any pending clip tasks
-        for ct in list(self._clip_tasks):
-            ct.cancel()
-        self._clip_tasks.clear()
+        await self._event_queue.stop()
+        await self.clip_service.stop()
+        if self.rolling_archive is not None:
+            await self.rolling_archive.stop()
 
         self.reader.release()
         await self.emitter.close()
@@ -475,6 +688,7 @@ class AreaPipeline:
             "active": self._active,
             "frame_count": self.frame_count,
             "fps": self.fps_measured,
-            "buffered_frames": self.buffer.get_frame_count(),
+            "buffered_frames": self.buffer.get_frame_count() if self.buffer is not None else 0,
+            "rolling_archive": self.rolling_archive.status() if self.rolling_archive is not None else None,
             "active_violations": len(self.zone_checker.active_violations),
         }

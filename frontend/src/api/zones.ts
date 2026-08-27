@@ -78,6 +78,35 @@ export function zoneViewToWrite(
   };
 }
 
+export function zonePatchToWrite(
+  patch: Partial<PolygonZone>,
+  currentZone: PolygonZone,
+  availableLabels: string[],
+): Partial<ZoneWriteInput> | null {
+  const payload: Partial<ZoneWriteInput> = {};
+
+  if (patch.name !== undefined) {
+    payload.name = patch.name.trim();
+  }
+  if (patch.points !== undefined) {
+    payload.polygonPoints = patch.points.map(([x, y]) => ({ x: x / 100, y: y / 100 }));
+  }
+  if (
+    patch.types !== undefined
+    || patch.ruleType !== undefined
+    || patch.targetLabels !== undefined
+  ) {
+    const normalized = zoneViewToWrite(
+      { ...currentZone, ...patch },
+      availableLabels,
+    );
+    payload.ruleType = normalized.ruleType;
+    payload.targetLabels = normalized.targetLabels;
+  }
+
+  return Object.keys(payload).length > 0 ? payload : null;
+}
+
 export async function getZones(cameraId?: string): Promise<ZoneRecord[]> {
   const query = cameraId ? `?camera_id=${encodeURIComponent(cameraId)}` : '';
   return apiClient.get<ZoneRecord[]>(`/zones${query}`);

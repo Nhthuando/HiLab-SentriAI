@@ -12,29 +12,37 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../prisma/client';
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors';
 import { sendCreated, sendNoContent, sendSuccess } from '../utils/response';
+import {
+  DetectionLabelValidationError,
+  type ObjectLabelDto,
+} from '../detection/capabilities';
+import {
+  detectionCapabilityService,
+  invalidateDetectionContext,
+} from '../services/detectionCapabilityService';
 
 const labelsRouter = Router();
 
-const DEFAULT_TINTS = [
-  '#3b82f6', // Classic Blue
-  '#10b981', // Emerald
-  '#06b6d4', // Cyan
-  '#a855f7', // Purple
-  '#f59e0b', // Amber
-  '#f43f5e', // Rose
-  '#8b5cf6', // Violet
-  '#64748b', // Slate
-];
+function getBodyValue(body: unknown, key: string): unknown {
+  return body !== null && typeof body === 'object' && !Array.isArray(body)
+    ? (body as Record<string, unknown>)[key]
+    : undefined;
+}
 
-/**
- * Infer kind ('xe' | 'nguoi') from baseClass or Vietnamese name
- */
-function inferKind(baseClass: string, name: string): 'xe' | 'nguoi' {
-  const s = `${baseClass} ${name}`.toLowerCase();
-  if (s.includes('người') || s.includes('person') || s.includes('worker') || s.includes('walker')) {
-    return 'nguoi';
+function requiredNonblankString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new BadRequestError(`${field} is required`);
   }
-  return 'xe';
+  return value.trim();
+}
+
+async function currentLabelDto(labelId: string): Promise<ObjectLabelDto> {
+  const context = await detectionCapabilityService.loadDetectionContext();
+  const index = context.labels.findIndex((label) => label.id === labelId);
+  if (index < 0) {
+    throw new NotFoundError(`Không tìm thấy nhãn với id '${labelId}'`);
+  }
+  return detectionCapabilityService.toObjectLabelDto(context.labels[index], context, index);
 }
 
 /**
@@ -43,34 +51,9 @@ function inferKind(baseClass: string, name: string): 'xe' | 'nguoi' {
  */
 labelsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const records = await prisma.objectLabel.findMany({
-      include: {
-        _count: {
-          select: { samples: true },
-        },
-      },
-      orderBy: { vietnameseName: 'asc' },
-    });
-
-    const formatted = records.map((r, index) => {
-      const kind = inferKind(r.baseClass, r.vietnameseName);
-      const tint = DEFAULT_TINTS[index % DEFAULT_TINTS.length];
-
-      return {
-        id: r.id,
-        vietnameseName: r.vietnameseName,
-        baseClass: r.baseClass,
-        createdAt: r.createdAt.toISOString(),
-        updatedAt: r.updatedAt.toISOString(),
-        // UI helper properties
-        name: r.vietnameseName,
-        kind,
-        tint,
-        samples: r._count.samples,
-      };
-    });
-
-    return sendSuccess(res, formatted);
+    const context = await detectionCapabilityService.loadDetectionContext();
+    return sendSuccess(res, context.labels.map((record, index) =>
+      detectionCapabilityService.toObjectLabelDto(record, context, index)));
   } catch (err) {
     return next(err);
   }
@@ -82,15 +65,12 @@ labelsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
  */
 labelsRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const rawName = req.body.vietnameseName || req.body.name;
-    const rawBaseClass = req.body.baseClass || (req.body.kind === 'nguoi' ? 'person' : 'truck');
-
-    if (!rawName || typeof rawName !== 'string' || !rawName.trim()) {
-      throw new BadRequestError('vietnameseName is required');
-    }
-
-    const vietnameseName = rawName.trim();
-    const baseClass = String(rawBaseClass).trim();
+    const vietnameseName = requiredNonblankString(
+      getBodyValue(req.body, 'vietnameseName') ?? getBodyValue(req.body, 'name'),
+      'vietnameseName',
+    );
+    const requestedBaseClass = requiredNonblankString(getBodyValue(req.body, 'baseClass'), 'baseClass');
+    const baseClass = detectionCapabilityService.normalizeWritableLabel(vietnameseName, requestedBaseClass);
 
     // Check unique vietnameseName
     const existing = await prisma.objectLabel.findUnique({
@@ -107,24 +87,12 @@ labelsRouter.post('/', async (req: Request, res: Response, next: NextFunction) =
         baseClass,
       },
     });
-
-    const kind = inferKind(created.baseClass, created.vietnameseName);
-    const tint = req.body.tint || DEFAULT_TINTS[0];
-
-    const formatted = {
-      id: created.id,
-      vietnameseName: created.vietnameseName,
-      baseClass: created.baseClass,
-      createdAt: created.createdAt.toISOString(),
-      updatedAt: created.updatedAt.toISOString(),
-      name: created.vietnameseName,
-      kind,
-      tint,
-      samples: 0,
-    };
-
-    return sendCreated(res, formatted);
+    invalidateDetectionContext();
+    return sendCreated(res, await currentLabelDto(created.id));
   } catch (err) {
+    if (err instanceof DetectionLabelValidationError) {
+      return next(new BadRequestError(err.message, { reasonCode: err.reasonCode }));
+    }
     return next(err);
   }
 });
@@ -144,9 +112,19 @@ labelsRouter.put('/:id', async (req: Request, res: Response, next: NextFunction)
       throw new NotFoundError(`Không tìm thấy nhãn với id '${id}'`);
     }
 
-    const dataToUpdate: any = {};
-    if (req.body.vietnameseName || req.body.name) {
-      const newName = String(req.body.vietnameseName || req.body.name).trim();
+    const requestedName = getBodyValue(req.body, 'vietnameseName') ?? getBodyValue(req.body, 'name');
+    const hasRequestedName = requestedName !== undefined;
+    const hasRequestedBaseClass = getBodyValue(req.body, 'baseClass') !== undefined;
+    const newName = hasRequestedName
+      ? requiredNonblankString(requestedName, 'vietnameseName')
+      : existing.vietnameseName;
+    const requestedBaseClass = hasRequestedBaseClass
+      ? requiredNonblankString(getBodyValue(req.body, 'baseClass'), 'baseClass')
+      : existing.baseClass;
+    const normalizedBaseClass = detectionCapabilityService.normalizeWritableLabel(newName, requestedBaseClass);
+
+    const dataToUpdate: { vietnameseName?: string; baseClass?: string } = {};
+    if (hasRequestedName) {
       // Check if another label has this name
       const duplicate = await prisma.objectLabel.findFirst({
         where: {
@@ -160,35 +138,20 @@ labelsRouter.put('/:id', async (req: Request, res: Response, next: NextFunction)
       dataToUpdate.vietnameseName = newName;
     }
 
-    if (req.body.baseClass) {
-      dataToUpdate.baseClass = String(req.body.baseClass).trim();
+    if (hasRequestedBaseClass || normalizedBaseClass !== existing.baseClass) {
+      dataToUpdate.baseClass = normalizedBaseClass;
     }
 
     const updated = await prisma.objectLabel.update({
       where: { id },
       data: dataToUpdate,
-      include: {
-        _count: { select: { samples: true } },
-      },
     });
-
-    const kind = req.body.kind || inferKind(updated.baseClass, updated.vietnameseName);
-    const tint = req.body.tint || DEFAULT_TINTS[0];
-
-    const formatted = {
-      id: updated.id,
-      vietnameseName: updated.vietnameseName,
-      baseClass: updated.baseClass,
-      createdAt: updated.createdAt.toISOString(),
-      updatedAt: updated.updatedAt.toISOString(),
-      name: updated.vietnameseName,
-      kind,
-      tint,
-      samples: updated._count.samples,
-    };
-
-    return sendSuccess(res, formatted);
+    invalidateDetectionContext();
+    return sendSuccess(res, await currentLabelDto(updated.id));
   } catch (err) {
+    if (err instanceof DetectionLabelValidationError) {
+      return next(new BadRequestError(err.message, { reasonCode: err.reasonCode }));
+    }
     return next(err);
   }
 });
@@ -212,6 +175,7 @@ labelsRouter.delete('/:id', async (req: Request, res: Response, next: NextFuncti
     await prisma.objectLabel.delete({
       where: { id },
     });
+    invalidateDetectionContext();
 
     return sendNoContent(res);
   } catch (err) {

@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "BAI-KIEM-GOLDEN-V1",
+  "status": "BLOCKED",
+  "split": "test",
+  "manifestFrameCount": 65,
+  "frameCounts": {
+    "total": 26,
+    "pending": 26,
+    "annotated": 0,
+    "negative": 0,
+    "evaluatable": 0
+  },
+  "blockers": [
+    "annotationStatus contains 26 PENDING frame(s)"
+  ],
+  "metrics": null,
+  "acceptance": {
+    "status": "BLOCKED",
+    "gates": {
+      "reachStackerPrecision": {
+        "status": "BLOCKED",
+        "value": null,
+        "operator": ">=",
+        "target": 0.9,
+        "reason": "reach_stacker precision is undefined"
+      },
+      "reachStackerRecall": {
+        "status": "BLOCKED",
+        "value": null,
+        "operator": ">=",
+        "target": 0.85,
+        "reason": "reach_stacker recall is undefined"
+      },
+      "truckAsReachStackerRate": {
+        "status": "BLOCKED",
+        "value": null,
+        "operator": "<",
+        "target": 0.05,
+        "reason": "truck ground truth is unavailable"
+      },
+      "falseAlertsPerMinuteImproved": {
+        "status": "BLOCKED",
+        "value": null,
+        "operator": "<",
+        "target": null,
+        "reason": "current complete-review rate and baseline rate are both required"
+      },
+      "farObjectRecallImproved": {
+        "status": "BLOCKED",
+        "value": null,
+        "operator": ">",
+        "target": null,
+        "reason": "current far-object recall and baseline recall are both required"
+      }
+    }
+  }
+}

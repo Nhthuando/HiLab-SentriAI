@@ -4,7 +4,7 @@ import path from 'path';
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../prisma/client';
 import { sendCreated, sendSuccess } from '../utils/response';
-import { assignYardSplits, isYardTrainingProfile, isYardTrainingSample, YARD_TRAINING_PROFILE, yardReadiness, type DatasetSplit, type TrainingProfileName } from '../training/yardTrainingProfile';
+import { assignYardSplits, isYardTrainingProfile, isYardTrainingSample, YARD_CUSTOM_LABELS, YARD_TRAINING_PROFILE, yardReadiness, type DatasetSplit, type TrainingProfileName } from '../training/yardTrainingProfile';
 
 const trainingDatasetsRouter = Router();
 const backendRoot = path.resolve(process.cwd(), '..');
@@ -163,7 +163,14 @@ trainingDatasetsRouter.post('/export', async (req: Request, res: Response, next:
         split: sample.split,
       };
     });
-    const snapshot = { schemaVersion: 2, profile: profile || null, samples: frozenSamples };
+    const snapshot = {
+      schemaVersion: 2,
+      profile: profile || null,
+      requiredClasses: profile === YARD_TRAINING_PROFILE
+        ? YARD_CUSTOM_LABELS.map(({ label, baseClass }) => ({ label, baseClass }))
+        : [],
+      samples: frozenSamples,
+    };
     const contentHash = createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
     const existing = await prisma.trainingDataset.findUnique({ where: { contentHash } });
     if (existing) return sendSuccess(res, { exported: true, reused: true, dataset: existing, excluded });

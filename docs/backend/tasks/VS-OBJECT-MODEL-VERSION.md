@@ -23,7 +23,7 @@
 ## Contract checkpoint
 
 - API/interface surface: version list, explicit use/return and error contract are planned; only evaluated candidate can enter use operation.
-- Gate pass: activation atomically selects one custom augmentation; base YOLO remains loaded for person/container/COCO vehicles; return disables custom augmentation without restarting monitoring.
+- Gate pass: activation atomically selects one checksum-verified custom augmentation; base YOLO11 remains loaded for the exact enabled COCO subset. `container_truck`/`shipping_container` are never implied by COCO truck. Return disables custom augmentation without restarting monitoring.
 
 ## Acceptance criteria
 
@@ -53,6 +53,10 @@
 - Required evidence kinds: integration_test_output, artifact_integrity_evidence, hybrid_regression_report, FPS_benchmark.
 - Planned command/procedure: candidate use→Area inference→return sequence with corrupted-artifact and race tests.
 - Pass criteria: base COCO detection works in every path; only one custom version is active; Area remains >=8 FPS.
+
+## Runtime manifest contract (2026-08-22)
+
+Runtime capability is derived from the ACTIVE version `labelMap`/manifest, never current sample count or training readiness. A malformed/missing/out-of-root/SHA-mismatched artifact disables custom detection fail-closed while COCO remains available. A custom class is emitted only after exact manifest routing and 2-of-3 temporal confirmation; no geometry or COCO alias can relabel it. No candidate was trained or activated during this reliability change.
 - Latest evidence: not_run.
 
 ## Execution record

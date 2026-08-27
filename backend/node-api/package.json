@@ -10,7 +10,9 @@
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
     "test:ws": "ts-node src/tests/test_ws_proxy.ts",
-    "test:api": "ts-node src/tests/test_api_contract.ts"
+    "test:api": "ts-node src/tests/test_api_contract.ts",
+    "test:area-reset": "ts-node src/tests/test_area_event_reset.ts",
+    "test:area-clip": "ts-node src/tests/test_area_event_clip.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",

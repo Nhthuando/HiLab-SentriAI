@@ -204,7 +204,7 @@ interface AreaDetectionDto {
 - [x] Zone rule chips displayed: ✓ for allowed types, ✕ for prohibited types
 - [x] Alert panel with tab filters: Tất cả | ⚠ Vi phạm | ✓ Được phép + search
 - [x] Hover synchronization: hover event → highlight object/zone on feed (UI Handoff §4.2)
-- [x] AC-08: Unknown object → "CHƯA XÁC ĐỊNH" label displayed, zone rule still applied
+- [x] AC-08 (superseded 2026-08-22): unknown/unavailable class is absent from the feed; unavailable registry labels are visibly disabled in Zone Editor
 - [x] Floating mini-alert appears bottom-right when the active SPA tab is not `area`; the same violation is shared/deduplicated across same-origin browser tabs via BroadcastChannel (BR-08)
 - [x] Floating alert has "Xem camera ngay →" button → navigates to area tab (Design Contract §2.6)
 - [x] When user returns to area tab, floating alert dismissed (BR-08)

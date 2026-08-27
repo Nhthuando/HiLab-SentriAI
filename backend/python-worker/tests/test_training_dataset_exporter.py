@@ -12,16 +12,40 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from training.dataset_exporter import materialize
+from training.dataset_exporter import manifest_class_definitions, materialize
 from training.runner import _quality_gate
 
 
 class TestTrainingDatasetExporter(unittest.TestCase):
-    def _manifest(self, root: Path, samples: list[dict]) -> Path:
+    def _manifest(self, root: Path, samples: list[dict], **extra: object) -> Path:
         snapshot = root / "snapshot"
         snapshot.mkdir(exist_ok=True)
-        (snapshot / "manifest.json").write_text(json.dumps({"schemaVersion": 2, "samples": samples}), encoding="utf-8")
+        (snapshot / "manifest.json").write_text(
+            json.dumps({"schemaVersion": 2, "samples": samples, **extra}), encoding="utf-8",
+        )
         return snapshot / "manifest.json"
+
+    def test_profile_classes_come_from_manifest_contract(self) -> None:
+        manifest = {
+            "schemaVersion": 2,
+            "profile": "YARD_CUSTOM_V2",
+            "requiredClasses": [{"label": "Xe nâng container", "baseClass": "reach_stacker"}],
+            "samples": [{"label": "Xe nâng container", "baseClass": "reach_stacker"}],
+        }
+        self.assertEqual(
+            manifest_class_definitions(manifest),
+            [{"label": "Xe nâng container", "baseClass": "reach_stacker"}],
+        )
+
+    def test_profile_rejects_samples_outside_required_classes(self) -> None:
+        manifest = {
+            "schemaVersion": 2,
+            "profile": "YARD_CUSTOM_V2",
+            "requiredClasses": [{"label": "Xe nâng container", "baseClass": "reach_stacker"}],
+            "samples": [{"label": "Xe tải", "baseClass": "truck"}],
+        }
+        with self.assertRaisesRegex(ValueError, "not in requiredClasses"):
+            manifest_class_definitions(manifest)
 
     def test_materializes_normalized_image_annotation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -84,6 +108,37 @@ class TestTrainingDatasetExporter(unittest.TestCase):
             self.assertEqual(len(label_files), 1)
             self.assertEqual(len(label_files[0].read_text(encoding="utf-8").splitlines()), 2)
 
+    def test_materializes_hard_negative_as_empty_label_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media_dir = root / "snapshot" / "media"
+            media_dir.mkdir(parents=True)
+            self.assertTrue(cv2.imwrite(str(media_dir / "positive.jpg"), np.full((50, 100, 3), 120, dtype=np.uint8)))
+            self.assertTrue(cv2.imwrite(str(media_dir / "truck.jpg"), np.full((50, 100, 3), 80, dtype=np.uint8)))
+            manifest = self._manifest(
+                root,
+                [{
+                    "sampleId": "positive", "label": "Xe nâng container", "baseClass": "reach_stacker",
+                    "sourceId": "reach-source", "mediaKind": "IMAGE", "frameTimestampMs": None,
+                    "bbox": {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4},
+                    "mediaPath": "media/positive.jpg", "mediaSha256": "a" * 64, "split": "train",
+                }],
+                requiredClasses=[{"label": "Xe nâng container", "baseClass": "reach_stacker"}],
+                negativeMedia=[{
+                    "negativeId": "hard-truck", "sourceId": "truck-source", "mediaKind": "IMAGE",
+                    "frameTimestampMs": None, "mediaPath": "media/truck.jpg", "mediaSha256": "b" * 64,
+                    "split": "val", "reasonClasses": ["Dump Truck"],
+                }],
+            )
+            exported = materialize(manifest, root / "materialized")
+            label_path = exported / "labels" / "val" / "hard-truck.txt"
+            self.assertTrue((exported / "images" / "val" / "hard-truck.jpg").is_file())
+            self.assertTrue(label_path.is_file())
+            self.assertEqual(label_path.read_text(encoding="utf-8"), "")
+            self.assertIn("val: images/val", (exported / "data.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(materialize(manifest, root / "materialized"), exported)
+            self.assertEqual(label_path.read_text(encoding="utf-8"), "")
+
     def test_rejects_snapshot_path_outside_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -98,11 +153,11 @@ class TestTrainingDatasetExporter(unittest.TestCase):
     def test_yard_profile_requires_each_class_to_pass_evaluation(self) -> None:
         metrics = {
             "map50": 0.8, "precision": 0.8, "recall": 0.8,
-            "perClass": {"Container": {"map": 0.7}, "Xe tải": {"map": 0.7}, "Xe nâng": {"map": 0.3}},
+            "perClass": {"Xe nâng container": {"map": 0.3}},
         }
-        accepted, failures = _quality_gate(metrics, "YARD_VEHICLE_V1")
+        accepted, failures = _quality_gate(metrics, ["Xe nâng container"])
         self.assertFalse(accepted)
-        self.assertIn("Xe nâng mAP below required threshold", failures)
+        self.assertIn("Xe nâng container mAP below required threshold", failures)
 
 
 if __name__ == "__main__":

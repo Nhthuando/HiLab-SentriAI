@@ -48,33 +48,6 @@ vehiclesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
     const limitNum = Math.max(1, Math.min(200, parseInt(String(limit), 10) || 50));
     const skip = (pageNum - 1) * limitNum;
 
-    // 1. Auto-sync any detected plates from gateEvent table into registeredVehicle table
-    try {
-      const distinctGatePlates = await prisma.gateEvent.findMany({
-        select: { licensePlate: true, status: true },
-        distinct: ['licensePlate'],
-      });
-
-      for (const ge of distinctGatePlates) {
-        if (ge.licensePlate && ge.licensePlate !== '—') {
-          const cleanP = normalizePlate(ge.licensePlate);
-          if (cleanP) {
-            await prisma.registeredVehicle.upsert({
-              where: { plateNumber: cleanP },
-              update: {},
-              create: {
-                plateNumber: cleanP,
-                status: ge.status === 'KNOWN' ? 'KNOWN' : 'STRANGER',
-                note: 'Tự động nhận diện từ Cổng',
-              },
-            });
-          }
-        }
-      }
-    } catch (syncErr) {
-      console.warn('Auto-sync gateEvent to registeredVehicle notice:', syncErr);
-    }
-
     const where: any = {};
 
     if (status && String(status).toLowerCase() !== 'all') {

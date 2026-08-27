@@ -43,10 +43,47 @@ class TestExternalYoloImporter(unittest.TestCase):
             self.assertEqual(result["sourceCount"], 3)
             self.assertEqual(result["splits"], {"train": 1, "val": 1, "test": 1})
             manifest = json.loads(Path(result["manifestPath"]).read_text(encoding="utf-8"))
-            train_sample = next(sample for sample in manifest["samples"] if sample["split"] == "train")
-            self.assertEqual(train_sample["label"], "Xe nâng")
-            self.assertEqual(train_sample["baseClass"], "reach stacker")
-            self.assertEqual(train_sample["bbox"], {"x": 0.2, "y": 0.2, "w": 0.6, "h": 0.4})
+            polygon_sample = next(sample for sample in manifest["samples"] if sample["bbox"]["w"] == 0.6)
+            self.assertEqual(polygon_sample["label"], "Xe nâng container")
+            self.assertEqual(polygon_sample["baseClass"], "reach_stacker")
+            self.assertEqual(polygon_sample["bbox"], {"x": 0.2, "y": 0.2, "w": 0.6, "h": 0.4})
+
+    def test_filters_multiclass_archive_rebuilds_source_splits_and_keeps_hard_negatives(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive_path = root / "nrmm.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("data.yaml", "names: ['Reach Stacker', 'Dump Truck']\n")
+                fixtures = [
+                    ("train", "yard-a_jpg.rf.111.jpg", "0 0.5 0.5 0.3 0.4\n", 10),
+                    ("valid", "yard-a_jpg.rf.222.jpg", "0 0.5 0.5 0.3 0.4\n", 20),
+                    ("test", "yard-b_jpg.rf.333.jpg", "0 0.5 0.5 0.3 0.4\n", 30),
+                    ("train", "yard-c_jpg.rf.444.jpg", "0 0.5 0.5 0.3 0.4\n", 40),
+                    # Confuser annotations are used only to select negative images;
+                    # a degenerate non-target box must not poison valid target data.
+                    ("valid", "truck-a_jpg.rf.555.jpg", "1 0 0 0 0\n", 50),
+                    ("test", "truck-b_jpg.rf.666.jpg", "1 0.5 0.5 0.3 0.4\n", 60),
+                ]
+                for split, filename, label, value in fixtures:
+                    stem = Path(filename).stem
+                    archive.writestr(f"{split}/images/{filename}", self._image_bytes(value))
+                    archive.writestr(f"{split}/labels/{stem}.txt", label)
+
+            result = import_external_yolo_archive(archive_path, root / "datasets")
+            manifest = json.loads(Path(result["manifestPath"]).read_text(encoding="utf-8"))
+
+            self.assertEqual(manifest["requiredClasses"], [{
+                "label": "Xe nâng container", "baseClass": "reach_stacker",
+            }])
+            yard_a_splits = {
+                sample["split"] for sample in manifest["samples"]
+                if sample["sourceId"].endswith(":yard-a_jpg")
+            }
+            self.assertEqual(len(yard_a_splits), 1)
+            self.assertGreaterEqual(len(manifest["negativeMedia"]), 1)
+            self.assertTrue(all(item["reasonClasses"] == ["Dump Truck"] for item in manifest["negativeMedia"]))
+            self.assertEqual(result["labels"], ["Xe nâng container"])
+            self.assertEqual(result["sourceLeakageCount"], 0)
 
     def test_rejects_archive_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

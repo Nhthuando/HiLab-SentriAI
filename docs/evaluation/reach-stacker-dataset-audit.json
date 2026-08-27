@@ -1,0 +1,1554 @@
+{
+  "schemaVersion": 1,
+  "snapshot": "826106ce49746e9a5e3dd934c4bc711333549d1a9e38f82e8ea2a3f818a64c12",
+  "origin": {
+    "kind": "external_yolo_archive",
+    "archiveName": "reach stacker.v1i.yolov8.zip",
+    "sourceLabelMap": {
+      "stacker": {
+        "label": "Xe nâng",
+        "baseClass": "reach stacker"
+      }
+    }
+  },
+  "trainingProfile": null,
+  "requiredClasses": [],
+  "summary": {
+    "imageCount": 200,
+    "bboxCount": 222,
+    "classCount": 1,
+    "sourceCount": 200,
+    "negativeImageCount": 0,
+    "negativeRatio": 0.0,
+    "edgeTouchCount": 58,
+    "missingLabelFileCount": 0,
+    "invalidAnnotationCount": 0,
+    "unreadableImageCount": 0
+  },
+  "perClass": {
+    "Xe nâng": 222
+  },
+  "perSource": {
+    "external:051e80e52f92b6119642806d3f9cc943b1f25efc9baf15b78a31c92082789278": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:07d930298acd2a88cce0f744fae11a40b6051d802fa9e7bcc91287ea07399bea": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:0ac1550629f3b2cef2d919669bba735d0c54f48082ca2241f4f1e7c806f5b94c": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:0d08a75b33ac395fa49f581942211b41a4c534bcf47bba05582af0a5ae87de8b": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:0d72e4bfe667db51b8b7c560470386851e339f3baf7f417b31eb2d3e0fc75e7b": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:0de9b42787eeb097e2ad9c806e1894ca5b2a78cfd66a9b6015e3e004db868d95": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:0e6d13f52212f07118bee88a68d727535ee26403f24b41d109c4a03ebe88f312": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:10d988aa8f0f953c7e76cdde362325412c25a0973feb1540bddea1aedea621ce": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:121d51b4279de83056621fb06aa35a62f8a1e19698b941e8edc9280cba4b83cb": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:12cebe3b9e31e08b8138a08479f6ead6aa6310255edd4f62a76712dfaa65e8c7": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:14543507814dbefc68a0483f408640a8d5f24b3c29d8934b351362ea89d13489": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:14c44b3e1f6a8529c4048517c9de2aad7e5ebb89b98887184f0731c3386e58de": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:16fe9110deb3f73a19ce845b5cd80410fa46ecdaa3a2b86ee39089cd4f1d2784": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:180bb837b6502741349c596b14d33855444c9b2bdd1862e0f9630d542ca01b5d": {
+      "images": 1,
+      "boxes": 4,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:184b86eb812923a54bcbdf773e49c9233999ac978b5c23d34534131a62bbbaeb": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:1ad863f5a19111c0c6ce3d64a25b5fc55822ec7fb7905b54506e7b1668fb75b8": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:1e818d091737d163e04432ecb29ffce2b9b2dae685d85dfa68ba186e550652db": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:1ee2c2a49f3e2c7e25dfdc71e1e7ecfb95924bd1d2d14aa61327cba62d69ff59": {
+      "images": 1,
+      "boxes": 4,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:217b4654933a4f59db679e0d26411a4d6b5d368752926a5624eb30edba12c141": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:21bc70e22252eca5a5223938ec382da37625f83a4eeccd39c8dc8951439a1c6e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:21ece5144b01e6b4f82de93e222a97d195f2cb986300de973f6e244373998630": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:22c35b3232bdf2dd7f5dcaece459736796f4e8bf5073005d5074ac9df3968469": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:2381321cb07eb4f50e1ab37230df009ccd6df29f36687da48a5d8f5a07751e49": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:238b5b6372cc08d3c508df0b47990f07b1f7cd78ecd689da5615b50a23a10981": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:26131c4670f88de2b1872bc5e3df20c000870835a7ce802dc0276a1bd873a563": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:271a440f89bbdd692f0d4db13ac808f3e455fb5873ce82b4783c17fdee241175": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:2ac441a171f9d95045fc40fcaa710764e166401ba319fc3bf1e57c58be1e471f": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:2c04d39cc3d42798cd401a6963c0a8f7edbaf4c364c9b0934a3aeda022fae02a": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:2cc499e2e6e5f028d8b2a55b5b755f49d3df83d22fc5032478976faf3d970f82": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:2dd6d1ca12c5b0457823e4fa4cec41886a23b9ff4704794b5631c1403cf1961f": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:2e4291b237255e6e908c0c6ce281d4e52cd3bcfcd721bccf572f77ac928bf8cd": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:2e72bd13f99680e8a2a96257063331a1cd70d01570a4c29eee632f6f3b76efd6": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:305daf5a7d9098918a5d1aaabe4af06601eb5c0c67ec9642f6788878731af8c5": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:327e508280e414d47480ea375556f0ca9763b411d040df9d45eb193e15608952": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:330fb954075dd71acb7a5dd81da4fe4289abe4065b633522320e949b07881d18": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:33e4386abc815f62aa562267e2b3e74c1b19e5411d586321b6c1e5dac483f257": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:341f336360852cc7482f67d1639cf1bafbd8f04f474f888a5b8ccdac20936b03": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:345d2f589684b50419920ec4a40d71fc681e32284dae9bb7b21194980d22c390": {
+      "images": 1,
+      "boxes": 3,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:38b128633db262cdaaaa791688418cc3b32dc03a5be44dee78813c81725ea726": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:39255d7e298a14f1824e391da9a751dcb17474464d2fbec48ace73d2a3478094": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:3a0442204a32ca4cf50779f41594809371de35fab9349f4439b0c1470fbaf2d9": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:3a5e3ac26099c773ec66948c8debf0323b945f00e9bcbf3a7044a6f0c5abdc9b": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:3b31c54dd1a8797324a648008b1fa3f80c999a2445cdf3a3f01a3f9cbe6b7be4": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:3e473ca760135f057b3a0214d53e48c1ba5ee43cba1589931cb292b9a12ea5ba": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:42e27a57a4e38f699522cbf379e045644de9892390261bbdc1f49211da21e6ed": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:433caf75feab7dccfcd0627cb04dbdffb3fc228b684f9fe4bacb63b30e585e5e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:434672334cefdfb1a55c1afd8701b4bb28c94bdf260dd7a784d6a62af6f880fb": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:4374cc13547205f4e65b89102703c2613225769bef47fb21b99a44621d33888e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:43d2ca49aa024ad0eec3970b856d719bb146b4add3b377cb1a9f2cf8f73ddfcb": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:45b55d4fe03909f6bb6991dafedd45ca2b1d0c23277faa03b40474f2f92b1ded": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:46de41a240e323a0d25e0a27a8bc96c48ffb53fee0d7a1b8062e5aec310103c2": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:47bf5df3a354c7bfa812a34b05e04e8ba062ccdb78cf8208d04b706ded9655f5": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:489e45ea94cfcdfadda68fcda481946bb524b377cf7e46fc6590734697f69526": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:496d217b0c0912c538d3b48a7c6865c71cb5752c66da9ef15b7388cbc0f5ac1c": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:4b511b0d21401785e7727f2f10718e2233112ce91213ef2a6014e3416266f9ce": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:4b6a0d1d51377049c4b6f43df9d8606a09c7893a60b2a0fe6699a68fe643c083": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:4f504cd2e295e2a253b292101ca130645a9396452f7a8418511ab1613ef310f4": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:4f8aa0dfcc53e9d500b8eb314120fcc4aaec369ffc26fdfcfdaf8d885ac66ee2": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:4fec789745e5fec75d239a21f65e978d0da8457a5665f136bb760277020ee015": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:507afcb4af8b633a2242f3d7bded3d7eb627be0b529b5a9a2a485e5a9dfc25ca": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:5266901e09f44efe9a4732bc78674dd49d0293002e6390628bce7d4a2b987e38": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:52daa72a1664601777e644ba30f7e2c6013e534c205f4d5bb322692caeaf8218": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:52fecbd96db514ecb6040ddcf03c61c3f628604bdff5f13fbbf4fe3f557875c8": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:5538a003bfb288dd4f6f9fe99673e34b8c265a379888da40da07ac13ce2a9ba9": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:56f0390ebdd396bed199f19c4c6722da2a834b38d22eda9efe1b0dc7ff0c4aa1": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:5841ee419cbde45dcd78f25bba9ea86131e50bdd5681615d3a76677306277465": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:58a69b1a19c2d7f0ee422f84c95369e08c7c2411df53541f2a22bf53b201172f": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:59bab6f726365fe569666414faecfa4f7ef1f541d949ac87eba27b8b8a242dd3": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:5b2230dac4374c08c466c77d066d1a3a6f68d47d53c59b03985be6053d4764b9": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:5bb2493fbce9d669a2cfaaa14529c625def3ae1bfbe52295058bfe2bdc2fb83d": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:5c558e8b1c53dbdfd106705bf9d850dd236c74448c1ae9cf00dd07421e4303dc": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:5e06e3f2a55bb67ba9d9af7475642c61a60891180e223e286bebab9e0cc06b4d": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:5ede5c3112807cf35f43baf675db77cb3169c855216ca280cfc1db98eeb7f66a": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:6116e74809e27be7a99a39a9428766b5d7531e744d552c7904e2046d593b0c1f": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:6297aa07e20b02de3c458c45870bdfc7fe2d2cabe75f55125422c744b7c337cc": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:62e25a186653fbe064f5d34de1f0b8208fb211d987991373c1b60004cf582bc7": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:63078abdddb2493ace2a6162c91bda38a4f7773ce8fb3c672b34fd0bc2bac78f": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:6336aca2fbe5b945bc3d0461eded875b84fe4028c8340cedc590540c754c9e13": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:64f9ce9ed4e5e2d11574a38441f9ed9b95cfde09a2e21c0745e127ad40ed95c9": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:6c2d1dfa83bed64b46923d3e5f4f0a0976c019f15b2970fd886ee23b94ffe7ef": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:6d63cac1c32f44440954a77c39263d9ac8347171f942890a2297c5ebd9215d92": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:6e965f120a35bf4469ef821f2b79006f5373da0551a2c0ff29422a57609062ab": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:703ef4267bae55cbed628aaefdd2319b7f987622eac5ee88edf7d19ce3805737": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:73cb7520ea5b332db7b2063f81a81e5e27308a31ab2f036b80b88b56234b5d72": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:766971d7f3c2b1fc33dfef48c7149a9045ac68445e175d5af2f811f59c4bc2f1": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:76b66e31c6f2c67ffc630747dc0be450b60ab5ca24162e787c15b0063bf024c7": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:7983a81a6c192fb2cdf7b4e51ea1b22bb808b49965e498c20eefbc8c6e1381cd": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:7a2c81950056d008320a8404c35eddb96f575b744e410be856f40a25a00d8cab": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:7cb0f5ade1f85ede49d34eba1796cfb2f87da12fe7b39050d36c1df6d008a335": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:7d53e57f18cecdb29d3188533a31a0595dc123df58fe59f82bdf69902a18e161": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:7d66951ad8ba6d5bcf57d6ce3678f8e7d03a7c04cdc77b728c3a2866f117fc08": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:7dd867a1efdb88b7c9e1c995f9d292158ea3c23d708a79e92906e0e127d40972": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:7de05c693f2c2a0cc5d698deb0c9a4171478c817dc01c1838d6754d2f001f67e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:7ec68c94f6ad2cdc2b20efbcd8363848d663960994e02ddb3345eab84a50b691": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:7ed46a58f8fe803e7ad57a6c987144cea6cae01e4d8de86e90bf939287d848a3": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:7ee830494636d6db5141a3022cd2884f4aef85875adc61d7248a1cd45996435c": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:7f5850da34f666084c5d4396add39161ee320f61531ecbd1a7ae9ba63be1e599": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:816dd20bee17a864f16cbfbd6025ae2d69d7962c422b917650ad384fdc11e3a7": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:83869ac14597f666c514bb3674c8a2aaf6905191b2ae7b057391d04cf1ba5f1e": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:8557700433e7c5fb088bce9fb71262e7c8f23fa0c64f9ad4efe5cf3171e31c29": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:858b76d189a1746edd1cba386ede209c434050bc4b8d041fba26ceab5daac711": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:89927541a63118e21989e610353efb8bab4f95657778b7344464ceb64f44bccb": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:89aee80ea93e0fffe0ef9a9c07f76345697c35dbb305875ef7526448c02595db": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:8a7092485e12ee8e36b7abab75b91fbdb76b65a90ab8c7282c3aad69f1292157": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:8bf087dee6e136edd130a82c4007003c2ec2dbd8a54fd009d8588c1732353065": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:8c712e2cdfebc0d44dec4d48dbfae5ca79740a5a56c5a36f74df33fa5f545ce9": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:8cec1f7943c796002648420b10e00ea280800dbbb8ba69433a82af50c0e443f0": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:8d83ad2bf4ee7dae619f010c41e10dfd01d1a21dd6f4204da247aacef7c53002": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:8df8569e4054bcfa2b77d1fafd766feb91a769ca7802ab2a2c489f56ad6abcf2": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:915018908828950e0be003d8a00eeb5e8c3da7be286d934fa4125b2889852979": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:921865056d02b780e47a6fb164ceccca7c7a3c36242ebf784fc41b4e52112643": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:924d6e7f2761fee75f9bd2366754669b918b467c91f3b7f2ae7ebc95c6a9edcd": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:93169c747623e9c09b8aa5fa935f82ea41fff56103c055b395b5c8eb7baf3960": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:931826b0a545fff64b61dc6adc2c7e3c1437d1ebbb18f4b2f56b0b630cd64ed7": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:9322188d8789a3d9ecc2b96258d8cb3ab7ae4e7fb3fcfd3864b32cd6a5a21443": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:94efbbe448c0ffc5b36a2019c24c3a04cf4662de09f076e5b5f9948a840e515a": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:979243055f32f17195074be1261c54448c2996db772ce75a76b78d32390b7d44": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:98ece6089f69a092c197f219fe4e62c1c5ed16cf126c63ed5ede8430b8f9c10e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:9949d34fbd9d4a992e659f00ccd007bbb7a72e2e7db9b87b94502e3270207883": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:996b679ac4f19e0d7fad06781eb9fdfa087a3fbb23016aea8e6acdf7494b2a77": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:9be6551f172490d5ce61377930791d04c9709bb71433b1fcf90898c028114cde": {
+      "images": 1,
+      "boxes": 3,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:9d2c85fffa1cba626483c26a8ff63a4916df37b4f6d8fe7c79324e923668a394": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:a3a45e2d7262ea4f05d96bc58cd360fb82966d99465d85b6f9be6de0fe835f19": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:a48de00b75201d539fd52662554b4baf27e257b0e95f1301a8710df7e2574691": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:a6cf760b37608c447f55fc5114ebf33137f112dba9843be0bcccf19ea5880394": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:a8d1a209d368e440591e9e37c1ba658c118c462c6a363b4f6a8e7fcac30c7c6f": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:aed6bfe53d9982a37836cb3a9949c4926b0e1cd9a94b8af123fac4933f36856d": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:aee5b83a158f6eb19dcf21b101b9ca46263621301bcbdd7334585a0d11a7907e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:aef2226455a9a009bdfa178934ac19fb3c242f99eee319ac957abe29d4bfb527": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:b033b552401e660ec382df8ad788aab6f5df93c304e8c7751a570ffe81b75d9f": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:b1ce782bdf964d15f72777ec547dba8a7cefdef3ea7212ddc7824a94387b0f3e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:b2282bea9d3d83377653fc7ec59b4ffae67450d2307f5a28caef1df32c8918f4": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:b2c521ff361086ace5cfb8b6848afcdc038c64a51996255a85b4b45657d35a74": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:b4518ac53f0ba612a09640365a464e129e2f5037f817a9d13018fd88c23aed39": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:b4b51c2deb270bc696f35cc87901097c6bca6583e97f74b154781d267fb391af": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:b76670a01777332db561691f6aa1d391875273709b405152592ca0dcd241868d": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:b889884b28080764aa928e0c1d5c42b98f3344ed2bd7d0fdf2ded7b025654e2c": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:b8b3aa8999c77225497d5d2a8e4bd17b1405ffebaa9b1003c6fed2b7bcd5df11": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:b968e6a62e56027c5b39ef3957d10269f9b781cc18f9d11de18f7010d31bea68": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:ba3787d69dbe23da228d0dd5ff8866e9c01f5114bf4421193d2e30811b4d898e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:bf3d67d4c8de038284b694699ced9e0a3c81c8396a98cd9e205d1edcd4003748": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:bf681f4b38ea833576d8dc70f15e535f7bab1b977afdb1f820d21f60a9430f8e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:c07e0f0040eb237de3036b93b80786e47be88e3732ba08a44e1495a646078790": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:c0c1608773ae4fa88bf0225f8853c3832a3ae30be05a94e555771c027b452c44": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:c35a76e12ec8b729b5a16c0a6b026c5b75ed542e17402ebb8acdb74b2e75c996": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:c51b12a1db72818041ad8b3d344ff430b9d9162738c210a2ae9219cd93e47998": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:c58806ee0727f8bd12437b545d1b1b1367c7f89d38e2034faa715cbb07d0af23": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:c6e835ba241525960d9250d64166817cf1ba231e30725c465775e4ec5ec2b3f6": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:c8709b81ccd6a9b822fd435cb0af70d00214aa2c54e5a387ed33299aa9e53bc3": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:c98019cebaed13e531ff17c3ce8f9db3d6227ea113f86d002dffa3d097e4c9bc": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:c9a13ecd501070f842873b16dc32357c7c2bb452df45e58d007a1730b1d7e249": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:ca89c283103b60e34d09c16fec61d2ce3df32d6f2a7ad1314b7a578c72e26bde": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:cbbf865f6977340dcf41eac147a9cda763d888a70760505a46eab396aa1c855b": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:ccaff13dcf6b90e864716ef76ba2777db356689e18e5f843410a0989c69d9fe7": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:ccbf702a957b3ab0f05b2e308ba2a5483afad29957042e0c6e5f1094b6c0504e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:cf75ace927e78ba5bc31db0e9f6731fa457f1413e61417433478b6bac2259f70": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:d174eb5307befa99272f2f25ef773a7b7bf63f9952fa6d2f9ac3cfa97132a203": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:d1a8a2919aa3664044abe40bacda1a8e049a82e7b47fb7c2f169a709cbc2b685": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:d20bb7edd3f4f8477798a8c85e85e36ddf734bb6f4cbf93aba9dc47781a4884e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:d20dc0a875ecdd858152db19bcb27cd0c3e27e2baa9eb79b18e488ab2ecfc339": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:d43b1b5c15b52962a575f5f1f8cf09d7aeb0e2e29b5c869d21eb35c81981540b": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:d58f987ddc7f18426cdee9ec7fd176c90d4abe4844a30b35db09ecc588c41076": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:d93b6d4c4adb102f1a217ce5fe5108cfd84390d61aa998ce2c089db1e173df8d": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:da124b88265089d74de5e2ef798c0b8f13f5fbbbc8e9bc88a1fe9a51054adee8": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:dbb619f0e4249c9de81395d4dfe9bd9bbe8c0c335d1f3b9926b44e4edb9db827": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:dd5d0fb65ad0ffab0e29bac3b8d46ecc13de7c6e4731d82e46b083e6d81552db": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:de42c735f213333cc12bc90082dc299ea0be32d7884a3283d8f70db7a96ca99d": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:de725f796ccbce21e4ae5a98e0945ccf8703dab1df6f488e9b603829faa3c8af": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:decddababd8626df949afcb8b052f3d9917433d02064de30bb893f06aee63546": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:df0f3999962df5a24e5410df6e9a88c8e2d5e42f0614df968dba841ab831e318": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:e2515204436e29c9635393f66a78b5b8f2765f865dbdcb4cfa0eff0df4c8e442": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:e3b5dd490f87d4b3471987b882fb2e1d4cc3225e985c6062d83f93333399a5b6": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:e3f916b0522f7a9a0319bc98a8aa09364bd68d088ed0cf95df3300e6928f3117": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:e419d8cfde48ce109622c31080c0b451ffb75791ba60890c46cbda53f44fdd46": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:e6e053763595fff1e702f09b64a45459e19f45ac91868dac1441a6574c4dce7c": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:ea37fd10d071fd77f8889296f78f3e4944dd2a60181f027b82c63657f6108def": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:ea8146d82713c40209972e969245dfa2176641bd5251e7b61b7df6c7fda040b5": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:ea91f53ed87fb7ff6e36d431b93b5ac536a8b3d8fe1766c9144efb9a23a48a8f": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:ecb00b2568b45088e20ea88f03c8b4a75351f94b9a7649f322d82339dd612ed3": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:ece3facd50feb8ff0d2f7788b5e1b434de3b27bc5b9b8e7db1ecc4dcd5274394": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:ed444ef171e0a1ade7ee431d618725918d439628d3b9526b4655a2d1fd58054a": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:edc70f0e66b7dc4ad61b15d75918c55f98961d0e2e7d1f5d30d01500c8fa74db": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:f0d394c1b05197e61a07465497e277f7abea49c86a8deb6d47fc52b2257e2d0c": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:f17dc7be8bbd4e39b91b185d9e1cf9aa8c706a39d236e250ea545402ffad1663": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:f220b7e9b0af068b9e7e271075dbf2875de507508a5c4672908881c73461073a": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:f4e063894ee21316467debb6190325945d82c22f4577830e9c3fc01df15ad020": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:f67f7d94eeec4d7e0ac35e656b601af1fb4fcb7d4a790ec29157940defb6683b": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:f6a1ed1eb107bb1457ebaf6997f4215371e972ab485161f1cee3706b678354a6": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:f6b4bbc03bb80f076b1f685057722cf0093fbd8319a07a9b95c153f71dc2de84": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:f7cb2ad312ffd642a741e4a0f043e9d6d994af017b71d20e54d3fa47c34c814a": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:f9e206e39d80415ddb34bc85aa1b83d4d6316c6dd5be8f8e19b715c9e0c11327": {
+      "images": 1,
+      "boxes": 2,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:fb04db0aedd6642f2d25f5d5e5af697787081e840175280e82402a070d0ecf21": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:fb427090c5b9700d2cfcfec8379aa150c1f5578cd00876b655e2849a3983e77c": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:fbbd7fd15ac10eb8d97023c79a57c143aea023202dcb7ca5c55697bede63e5ea": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:fdd71699b75a953ba457beaedd333572548d4fa4553ad32870a9ec4521471ed2": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:fde8195656095d4a1b7d6960b364aa073ae8e90b8a122409b5372267f810b604": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:ff1158153b9cdd0b8e3be7326fc90e8c29407fa51f26e2866cecf1cb2d201cf9": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "train"
+      ]
+    },
+    "external:ffb781201141daad56339e628fbd0b98436e0bf67d3499f8ccfb8aea9365e98e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    },
+    "external:ffc6081504dac58dcde807ec6e99cf2e50a40eb0886632c14a4eaaa0704745e0": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "test"
+      ]
+    },
+    "external:ffd7cc6d24da3732ab8c2cf4d0f8e3904aad28c2cd2e128230cf551d991f993e": {
+      "images": 1,
+      "boxes": 1,
+      "splits": [
+        "val"
+      ]
+    }
+  },
+  "splits": {
+    "train": {
+      "images": 140,
+      "boxes": 156,
+      "negatives": 0,
+      "sources": 140
+    },
+    "val": {
+      "images": 40,
+      "boxes": 46,
+      "negatives": 0,
+      "sources": 40
+    },
+    "test": {
+      "images": 20,
+      "boxes": 20,
+      "negatives": 0,
+      "sources": 20
+    }
+  },
+  "bboxAreas": {
+    "buckets": {
+      "smallLt1Pct": 0,
+      "medium1To10Pct": 6,
+      "largeGte10Pct": 216
+    },
+    "percentiles": {
+      "p0": 0.0155001731,
+      "p10": 0.2183769381,
+      "p25": 0.3639227661,
+      "p50": 0.5460948156,
+      "p75": 0.7009784956,
+      "p90": 0.8174012675,
+      "p100": 0.9822822519
+    }
+  },
+  "evidenceReconciliation": {
+    "priorDocumentedMedianPercent": 54.77,
+    "verifiedMedianPercent": 54.60948156,
+    "differencePercentagePoints": -0.16051844
+  },
+  "resolutions": {
+    "194x259": 3,
+    "208x243": 1,
+    "213x237": 1,
+    "220x229": 1,
+    "224x225": 1,
+    "225x224": 1,
+    "225x225": 15,
+    "227x222": 1,
+    "229x220": 1,
+    "234x215": 1,
+    "239x211": 1,
+    "241x209": 2,
+    "245x205": 2,
+    "246x204": 1,
+    "247x204": 1,
+    "248x203": 1,
+    "251x201": 3,
+    "252x200": 2,
+    "253x199": 1,
+    "256x197": 1,
+    "258x196": 1,
+    "259x194": 35,
+    "259x195": 4,
+    "260x194": 2,
+    "261x193": 2,
+    "262x192": 4,
+    "263x192": 2,
+    "265x190": 2,
+    "265x191": 1,
+    "266x190": 1,
+    "267x189": 1,
+    "268x188": 3,
+    "273x184": 1,
+    "274x184": 2,
+    "275x183": 36,
+    "276x182": 1,
+    "276x183": 6,
+    "277x182": 3,
+    "278x181": 1,
+    "279x181": 1,
+    "280x180": 4,
+    "282x178": 1,
+    "284x177": 3,
+    "284x178": 1,
+    "286x176": 1,
+    "288x175": 2,
+    "290x174": 2,
+    "293x172": 1,
+    "294x172": 1,
+    "297x170": 2,
+    "299x168": 5,
+    "300x168": 13,
+    "301x167": 3,
+    "304x166": 1,
+    "308x163": 1,
+    "310x163": 1,
+    "313x161": 1,
+    "323x156": 1,
+    "325x155": 1,
+    "339x149": 1,
+    "365x138": 1,
+    "375x134": 1,
+    "408x124": 1,
+    "409x123": 1
+  },
+  "duplicates": {
+    "exactGroups": [],
+    "nearDuplicateDistance": 5,
+    "nearPairs": []
+  },
+  "leakage": {
+    "sourcesAcrossSplits": [],
+    "exactDuplicatesAcrossSplits": []
+  },
+  "qualityIssues": {
+    "missingLabelFiles": [],
+    "invalidAnnotations": [],
+    "unreadableImages": []
+  }
+}

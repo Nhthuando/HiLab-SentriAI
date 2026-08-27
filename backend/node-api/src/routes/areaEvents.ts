@@ -7,6 +7,12 @@
 import { Request, Response, Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
+import {
+  AreaEventClipUnavailableError,
+  type AreaClipState,
+  type AreaClipStatus,
+  requestAreaEventClip,
+} from '../services/areaEventClipService';
 import { sendError, sendSuccess } from '../utils/response';
 
 const areaEventsRouter = Router();
@@ -43,6 +49,8 @@ export interface AreaViolationDto {
   enteredAt: string;
   exitedAt: string | null;
   durationSeconds: number | null;
+  clipStatus: AreaClipStatus;
+  clipAvailable: boolean;
   clipUrl: string | null;
 }
 
@@ -117,8 +125,9 @@ areaEventsRouter.get('/', async (req: Request, res: Response) => {
     ]);
 
     const items: AreaViolationDto[] = rows.map((r) => {
+      const clipStatus = (r.clipStatus || (r.clipPath ? 'READY' : 'NOT_REQUESTED')) as AreaClipStatus;
       let clipUrl: string | null = null;
-      if (r.clipPath) {
+      if (clipStatus === 'READY' && r.clipPath) {
         const cleanName = r.clipPath.replace(/^.*[\\/]/, '');
         clipUrl = `/data/clips/${encodeURIComponent(cleanName)}`;
       }
@@ -133,6 +142,8 @@ areaEventsRouter.get('/', async (req: Request, res: Response) => {
         enteredAt: r.enteredAt.toISOString(),
         exitedAt: r.exitedAt ? r.exitedAt.toISOString() : null,
         durationSeconds: r.durationSeconds,
+        clipStatus,
+        clipAvailable: clipStatus === 'READY' && Boolean(clipUrl),
         clipUrl,
       };
     });
@@ -148,6 +159,78 @@ areaEventsRouter.get('/', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[areaEventsRouter] Error fetching area events:', err);
     return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Failed to retrieve area violation events');
+  }
+});
+
+function clipStateFromRecord(record: {
+  id: string;
+  clipStatus: string;
+  clipPath: string | null;
+  clipError: string | null;
+}): AreaClipState {
+  const status = (record.clipStatus || (record.clipPath ? 'READY' : 'NOT_REQUESTED')) as AreaClipStatus;
+  const cleanName = status === 'READY' && record.clipPath
+    ? record.clipPath.replace(/^.*[\\/]/, '')
+    : null;
+  return {
+    violationId: record.id,
+    status,
+    clipUrl: cleanName ? `/data/clips/${encodeURIComponent(cleanName)}` : null,
+    ...(record.clipError ? { message: record.clipError } : {}),
+  };
+}
+
+areaEventsRouter.post('/:id/clip', async (req: Request, res: Response) => {
+  const violationId = req.params.id;
+  if (!UUID_PATTERN.test(violationId)) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'Event id must be a UUID');
+  }
+  try {
+    const exists = await prisma.zoneViolation.findFirst({
+      where: { id: violationId, cameraId: 'BAI-KIEM' },
+      select: { id: true },
+    });
+    if (!exists) {
+      return sendError(res, 404, 'NOT_FOUND', 'Area violation event not found');
+    }
+    const state = await requestAreaEventClip(violationId);
+    return sendSuccess(res, state, state.status === 'QUEUED' ? 202 : 200);
+  } catch (error) {
+    if (error instanceof AreaEventClipUnavailableError) {
+      return sendError(
+        res,
+        503,
+        'AREA_CLIP_UNAVAILABLE',
+        'Không thể bắt đầu tạo video lúc này. Hãy thử lại.',
+      );
+    }
+    console.error('[areaEventsRouter] Error requesting Area clip:', error);
+    return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Failed to request Area event clip');
+  }
+});
+
+areaEventsRouter.get('/:id/clip', async (req: Request, res: Response) => {
+  const violationId = req.params.id;
+  if (!UUID_PATTERN.test(violationId)) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'Event id must be a UUID');
+  }
+  try {
+    const record = await prisma.zoneViolation.findFirst({
+      where: { id: violationId, cameraId: 'BAI-KIEM' },
+      select: {
+        id: true,
+        clipStatus: true,
+        clipPath: true,
+        clipError: true,
+      },
+    });
+    if (!record) {
+      return sendError(res, 404, 'NOT_FOUND', 'Area violation event not found');
+    }
+    return sendSuccess(res, clipStateFromRecord(record));
+  } catch (error) {
+    console.error('[areaEventsRouter] Error reading Area clip status:', error);
+    return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Failed to read Area event clip status');
   }
 });
 
