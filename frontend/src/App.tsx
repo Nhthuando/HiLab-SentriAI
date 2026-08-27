@@ -9,12 +9,11 @@ import type {
   AnnotationSource,
   AnnotationSample,
   ChatMessage,
-  FloatingNotification
+  FloatingNotification,
+  Vehicle,
+  GateEvent
 } from './types';
 import {
-  INITIAL_VEHICLES,
-  INITIAL_LABELS,
-  INITIAL_GATE_EVENTS,
   INITIAL_ZONES,
   INITIAL_OBJ_LABELS,
   INITIAL_ANN_SOURCES,
@@ -43,6 +42,7 @@ import {
   zoneRecordToView,
   zoneViewToWrite,
 } from './api/zones';
+import { getVehicles } from './api/vehicles';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('mon');
@@ -64,9 +64,9 @@ export const App: React.FC = () => {
   });
 
   // Domain states
-  const [vehicles] = useState(INITIAL_VEHICLES);
-  const [labels, setLabels] = useState<Record<string, 'quen' | 'la'>>(INITIAL_LABELS);
-  const [gateEvents] = useState(INITIAL_GATE_EVENTS);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [labels, setLabels] = useState<Record<string, 'quen' | 'la'>>({});
+  const [gateEvents] = useState<GateEvent[]>([]);
   const [zonesByCam, setZonesByCam] = useState<Record<string, PolygonZone[]>>(() => ({
     'GATE-01': INITIAL_ZONES['GATE-01'] || [],
     'BAI-KIEM': [],
@@ -160,6 +160,32 @@ export const App: React.FC = () => {
       [plate]: prev[plate] === 'la' ? 'quen' : 'la'
     }));
   };
+
+  useEffect(() => {
+    let active = true;
+    const refreshVehicles = () => {
+      getVehicles()
+        .then((records) => {
+          if (!active) return;
+          setVehicles(records);
+          setLabels(Object.fromEntries(records.map((vehicle) => [
+            vehicle.plate,
+            vehicle.status === 'KNOWN' ? 'quen' : 'la',
+          ])));
+        })
+        .catch(() => {
+          if (!active) return;
+          setVehicles([]);
+          setLabels({});
+        });
+    };
+    refreshVehicles();
+    const timer = window.setInterval(refreshVehicles, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const [snapshotImageByCam, setSnapshotImageByCam] = useState<Record<string, string | null>>({
     'BAI-KIEM': null,
@@ -535,7 +561,6 @@ export const App: React.FC = () => {
         {/* Tab 1: Giám sát cổng */}
         {activeTab === 'mon' && (
           <GateMonitor
-            clock={clockStr}
             zones={zonesByCam['GATE-01'] || []}
             events={gateEvents}
             labels={labels}

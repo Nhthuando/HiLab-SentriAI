@@ -30,4 +30,5 @@ async def test_full_pipeline():
     await pipeline.stop()
     await close_db_pool()
 
-asyncio.run(test_full_pipeline())
+if __name__ == "__main__":
+    asyncio.run(test_full_pipeline())

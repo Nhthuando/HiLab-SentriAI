@@ -60,6 +60,7 @@ class VehicleTrack:
         self.status_locked = bool(plate and status in {"KNOWN", "STRANGER"})
         self.confidence = confidence or 0.85
         self.last_seen = last_seen
+        self.last_vehicle_seen = last_seen
         self.last_plate_seen = last_seen if plate_bbox else 0.0
         self.first_plate_seen = last_seen if plate else 0.0
         self.last_observation_at = last_seen if plate else 0.0
@@ -70,20 +71,37 @@ class VehicleTrack:
         self.last_event_plate = ""
         self.live_plate = ""
         self.live_conf = 0.0
+        self.display_confirmed = False
+        self.display_plate_bbox: Optional[List[int]] = None
         self.latest_plate_crop: Optional[np.ndarray] = None
         self.lane = "IN_1"
-        self.motion_ratio_ema = 1.0
+        # Start neutral so a vehicle already stopped when it enters the frame can
+        # use the stationary OCR path after the intended settling window.
+        self.motion_ratio_ema = 0.0
         self.stationary_since = 0.0
         self.last_ocr_at = 0.0
         self.is_zone_fallback = False
         self.zone_name = "Làn cổng"
 
+        # Follow an already verified plate between detector/OCR observations.
+        self.visual_points: Optional[np.ndarray] = None
+        self.visual_prev_gray: Optional[np.ndarray] = None
+        self.visual_anchor_template: Optional[np.ndarray] = None
+        self.visual_bbox: Optional[List[int]] = None
+        self.visual_last_seen = 0.0
+        self.visual_quality = 0.0
+        self.visual_failures = 0
+        self.provisional_plate_bbox: Optional[List[int]] = None
+        self.provisional_last_seen = 0.0
+
+        self.active_plates: Dict[str, Dict[str, Any]] = {}
         # Relative coordinates inside vehicle crop [rx1, ry1, rx2, ry2] in [0..1]
         self.rel_plate_box: Optional[List[float]] = None
         self.plate_anchor_box: Optional[List[int]] = None
         self.plate_anchor_vehicle_box: Optional[List[int]] = None
         if plate_bbox and vehicle_bbox:
             self._update_rel_box(vehicle_bbox, plate_bbox)
+            self.update_plate_detection(plate_bbox, plate, confidence, status, last_seen)
 
         # Plate vote history: {normalized_plate: {'count': int, 'max_conf': float, 'score': float}}
         self.plate_votes: Dict[str, Dict[str, Any]] = {}
@@ -95,6 +113,32 @@ class VehicleTrack:
     @staticmethod
     def _compact_plate(value: str) -> str:
         return value.replace(" ", "").replace("-", "").replace(".", "").upper()
+
+    def update_plate_detection(self, p_box: List[int], plate_str: str, conf: float, status: str, now: float) -> None:
+        """Track each visible plate independently with relative bounding box."""
+        if not plate_str or not p_box or len(p_box) != 4:
+            return
+        compact = self._compact_plate(plate_str)
+        if not compact:
+            return
+        vx1, vy1, vx2, vy2 = self.vehicle_bbox
+        vw = max(1, vx2 - vx1)
+        vh = max(1, vy2 - vy1)
+        px1, py1, px2, py2 = p_box
+        rel_box = [
+            max(0.0, min(1.0, (px1 - vx1) / float(vw))),
+            max(0.0, min(1.0, (py1 - vy1) / float(vh))),
+            max(0.0, min(1.0, (px2 - vx1) / float(vw))),
+            max(0.0, min(1.0, (py2 - vy1) / float(vh))),
+        ]
+        self.active_plates[compact] = {
+            "plate": plate_str,
+            "bbox": [int(v) for v in p_box],
+            "rel_box": rel_box,
+            "confidence": conf,
+            "status": status or self.status,
+            "last_seen": now,
+        }
 
     def _update_rel_box(self, v_box: List[int], p_box: List[int]) -> None:
         """Calculate and store plate coordinates relative to vehicle bounding box."""
@@ -111,27 +155,42 @@ class VehicleTrack:
             max(0.0, min(1.0, (py2 - vy1) / float(vh))),
         ]
 
-    def get_interpolated_plate_box(self, v_box: List[int]) -> Optional[List[int]]:
-        """Translate the plate with vehicle motion without distorting its aspect ratio."""
-        if self.plate_anchor_box is not None and self.plate_anchor_vehicle_box is not None:
-            avx1, avy1, avx2, avy2 = self.plate_anchor_vehicle_box
-            vx1, vy1, vx2, vy2 = v_box
-            dx = int(round(((vx1 + vx2) - (avx1 + avx2)) / 2.0))
-            dy = int(round(((vy1 + vy2) - (avy1 + avy2)) / 2.0))
-            px1, py1, px2, py2 = self.plate_anchor_box
-            return [px1 + dx, py1 + dy, px2 + dx, py2 + dy]
-        if self.rel_plate_box is None:
-            return self.plate_bbox
+    @staticmethod
+    def get_interpolated_plate_box_for_rel(v_box: List[int], rel_box: Optional[List[float]]) -> Optional[List[int]]:
+        if not v_box or not rel_box or len(v_box) != 4 or len(rel_box) != 4:
+            return None
         vx1, vy1, vx2, vy2 = v_box
-        vw = vx2 - vx1
-        vh = vy2 - vy1
-        rx1, ry1, rx2, ry2 = self.rel_plate_box
+        vw = max(1, vx2 - vx1)
+        vh = max(1, vy2 - vy1)
+        rx1, ry1, rx2, ry2 = rel_box
         return [
             int(vx1 + rx1 * vw),
             int(vy1 + ry1 * vh),
             int(vx1 + rx2 * vw),
             int(vy1 + ry2 * vh),
         ]
+
+    def get_interpolated_plate_box(self, v_box: List[int]) -> Optional[List[int]]:
+        """Translate the plate with vehicle motion without distorting its aspect ratio."""
+        if not v_box or len(v_box) != 4:
+            return self.plate_bbox
+        if self.rel_plate_box is not None:
+            vx1, vy1, vx2, vy2 = v_box
+            vw = max(1, vx2 - vx1)
+            vh = max(1, vy2 - vy1)
+            rx1, ry1, rx2, ry2 = self.rel_plate_box
+            center_x = vx1 + ((rx1 + rx2) / 2.0) * vw
+            center_y = vy1 + ((ry1 + ry2) / 2.0) * vh
+            anchor = self.plate_anchor_box or self.plate_bbox
+            width = max(1, anchor[2] - anchor[0])
+            height = max(1, anchor[3] - anchor[1])
+            return [
+                int(round(center_x - width / 2.0)),
+                int(round(center_y - height / 2.0)),
+                int(round(center_x - width / 2.0)) + width,
+                int(round(center_y - height / 2.0)) + height,
+            ]
+        return self.plate_bbox
 
     def update_vehicle_motion(self, vehicle_bbox: List[int], now: float) -> None:
         """Track normalized movement so stationary vehicles can use heavier OCR."""
@@ -303,6 +362,7 @@ class VehicleTrack:
 
         observed_at = self.last_seen if now is None else now
         previous_best = self.best_plate
+        previous_best_conf = self.best_conf
         self.last_observation_at = observed_at
 
         if plate_str not in self.plate_votes:
@@ -311,13 +371,18 @@ class VehicleTrack:
         self.plate_votes[plate_str]["count"] += 1
         self.plate_votes[plate_str]["max_conf"] = max(self.plate_votes[plate_str]["max_conf"], conf)
 
-        # Format bonus for standard VN (e.g. 15R-102.53) and UK/EU plates
+        # Format bonus for standard VN (e.g. 15R-102.53) and trailer plates
         c_len = len(clean_p)
+        is_new_trailer = bool(re.match(r"^[0-9]{2}R[0-9]{4,5}$", clean_p) or re.match(r"^[0-9]{2}RM[0-9]{4,5}$", clean_p))
+        current_clean = self._compact_plate(self.best_plate) if self.best_plate else ""
+        is_current_trailer = bool(re.match(r"^[0-9]{2}R[0-9]{4,5}$", current_clean) or re.match(r"^[0-9]{2}RM[0-9]{4,5}$", current_clean))
+
         has_full_vn_five_digits = bool(
             re.fullmatch(r"[1-9][0-9][A-Z]{1,2}[0-9]{5}", clean_p)
         )
-        format_bonus = 5.8 if has_full_vn_five_digits else (5.0 if c_len in [7, 8, 9] else 2.0)
-        cand_score = (format_bonus * 2.0) + (conf * 4.0) + (min(5, self.plate_votes[plate_str]["count"]) * 1.8)
+        format_bonus = 6.8 if is_new_trailer else (5.8 if has_full_vn_five_digits else (5.0 if c_len in [7, 8, 9] else 2.0) )
+        trailer_priority_boost = 15.0 if (is_new_trailer and not is_current_trailer) else 0.0
+        cand_score = (format_bonus * 2.0) + (conf * 4.0) + (min(5, self.plate_votes[plate_str]["count"]) * 1.8) + trailer_priority_boost
         self.plate_votes[plate_str]["score"] = max(self.plate_votes[plate_str]["score"], cand_score)
 
         frame_variants: Dict[str, Dict[str, Any]] = {}
@@ -338,7 +403,7 @@ class VehicleTrack:
             self.observation_history.append(list(frame_variants.values()))
             self.observation_history = self.observation_history[-12:]
 
-        if cand_score > (self.best_score + 0.15):
+        if (is_new_trailer and not is_current_trailer) or cand_score > (self.best_score + 0.15):
             self.best_score = cand_score
             self.best_conf = float(self.plate_votes[plate_str]["max_conf"])
             self.best_plate = plate_str
@@ -349,6 +414,18 @@ class VehicleTrack:
             self.confidence = self.best_conf
 
         self._update_character_consensus()
+
+        # Once a near-certain read exists, weaker observations from a receding
+        # vehicle may contribute evidence but cannot replace the displayed plate.
+        consensus_corrected_rm = (
+            self._compact_plate(previous_best).startswith("15RH")
+            and self._compact_plate(self.best_plate).startswith("15RM")
+        )
+        if previous_best and previous_best_conf >= 0.98 and conf < previous_best_conf and not consensus_corrected_rm:
+            self.best_plate = previous_best
+            self.plate = previous_best
+            self.best_conf = previous_best_conf
+            self.confidence = previous_best_conf
 
         if self.best_plate != previous_best:
             self.best_plate_changed_at = observed_at
@@ -422,6 +499,269 @@ class PlateTracker:
         self._next_id = 1
 
     @staticmethod
+    def _clip_box(box: List[int], width: int, height: int) -> Optional[List[int]]:
+        if not box or len(box) != 4 or width <= 1 or height <= 1:
+            return None
+        x1 = max(0, min(width - 1, int(round(box[0]))))
+        y1 = max(0, min(height - 1, int(round(box[1]))))
+        x2 = max(x1 + 1, min(width, int(round(box[2]))))
+        y2 = max(y1 + 1, min(height, int(round(box[3]))))
+        if x2 - x1 < 6 or y2 - y1 < 5:
+            return None
+        return [x1, y1, x2, y2]
+
+    @staticmethod
+    def _visual_context_box(box: List[int], width: int, height: int) -> Optional[List[int]]:
+        """Use only a narrow plate margin to avoid anchoring to road texture."""
+        x1, y1, x2, y2 = box
+        bw = max(1, x2 - x1)
+        bh = max(1, y2 - y1)
+        return PlateTracker._clip_box([
+            x1 - int(round(bw * 0.18)),
+            y1 - int(round(bh * 0.25)),
+            x2 + int(round(bw * 0.18)),
+            y2 + int(round(bh * 0.25)),
+        ], width, height)
+
+    @staticmethod
+    def _visual_template(gray: np.ndarray, box: List[int]) -> Optional[np.ndarray]:
+        x1, y1, x2, y2 = box
+        crop = gray[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        return cv2.resize(crop, (64, 40), interpolation=cv2.INTER_AREA)
+
+    def _seed_visual_track(self, track: VehicleTrack, gray: np.ndarray, now: float) -> bool:
+        box = track.display_plate_bbox or track.plate_bbox
+        if box is None:
+            return False
+        height, width = gray.shape[:2]
+        clipped = self._clip_box(box, width, height)
+        context = self._visual_context_box(clipped, width, height) if clipped else None
+        if clipped is None or context is None:
+            return False
+        current_template = self._visual_template(gray, clipped)
+        if current_template is None:
+            return False
+        if track.visual_anchor_template is not None and track.visual_last_seen > 0.0:
+            similarity = float(cv2.matchTemplate(
+                current_template,
+                track.visual_anchor_template,
+                cv2.TM_CCOEFF_NORMED,
+            )[0, 0])
+            if not np.isfinite(similarity) or similarity < 0.35:
+                return False
+        mask = np.zeros_like(gray)
+        cx1, cy1, cx2, cy2 = context
+        mask[cy1:cy2, cx1:cx2] = 255
+        points = cv2.goodFeaturesToTrack(
+            gray,
+            maxCorners=60,
+            qualityLevel=0.01,
+            minDistance=4,
+            mask=mask,
+            blockSize=5,
+        )
+        if points is None or len(points) < 4:
+            return False
+        track.visual_points = points.astype(np.float32)
+        track.visual_prev_gray = gray.copy()
+        if track.visual_anchor_template is None:
+            track.visual_anchor_template = current_template
+        track.visual_bbox = clipped
+        track.visual_last_seen = now
+        track.visual_quality = 1.0
+        track.visual_failures = 0
+        return True
+
+    def seed_visual_track(self, track: VehicleTrack, frame: np.ndarray, now: float) -> bool:
+        """Seed from the exact OCR frame so delayed background results stay aligned."""
+        if frame is None or frame.size == 0 or not track.plate_bbox:
+            return False
+        track.visual_points = None
+        track.visual_prev_gray = None
+        track.visual_anchor_template = None
+        track.visual_bbox = [int(value) for value in track.plate_bbox]
+        track.display_plate_bbox = [int(value) for value in track.plate_bbox]
+        track.visual_quality = 0.0
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return self._seed_visual_track(track, gray, now)
+
+    def prepare_visual_track(self, track: VehicleTrack) -> None:
+        """Reset flow so the next live frame seeds from the latest projected OCR box."""
+        track.visual_points = None
+        track.visual_prev_gray = None
+        track.visual_anchor_template = None
+        track.visual_bbox = list(track.plate_bbox) if track.plate_bbox else None
+        track.display_plate_bbox = list(track.plate_bbox) if track.plate_bbox else None
+        track.visual_quality = 0.0
+        track.provisional_plate_bbox = None
+        track.provisional_last_seen = 0.0
+
+    def update_provisional_plate_box(
+        self,
+        track: VehicleTrack,
+        plate_bbox: List[int],
+        now: float,
+    ) -> None:
+        """Expose detector-only localization without admitting an OCR result."""
+        if not self._is_plausible_plate_box(plate_bbox, track.vehicle_bbox):
+            return
+        track.provisional_plate_bbox = [int(value) for value in plate_bbox]
+        track.provisional_last_seen = now
+
+    def update_visual_tracks(self, frame: np.ndarray, now: float) -> None:
+        """Advance verified plate boxes with guarded Lucas-Kanade optical flow."""
+        if frame is None or frame.size == 0:
+            return
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        height, width = gray.shape[:2]
+
+        for track in list(self.tracks.values()):
+            if not track.display_confirmed or not track.best_plate or not track.plate_bbox:
+                continue
+            parent_seen = track.last_seen if track.is_zone_fallback else track.last_vehicle_seen
+            parent_max_age = 2.4 if track.is_zone_fallback else 1.0
+            if (now - parent_seen) > parent_max_age:
+                track.visual_points = None
+                track.visual_prev_gray = None
+                track.visual_bbox = None
+                track.visual_quality = 0.0
+                continue
+            if track.visual_points is None or track.visual_prev_gray is None or track.visual_bbox is None:
+                can_seed = (
+                    (now - track.last_seen) <= (2.4 if track.is_zone_fallback else 1.2)
+                )
+                if can_seed:
+                    self._seed_visual_track(track, gray, now)
+                else:
+                    track.visual_bbox = None
+                    track.visual_quality = 0.0
+                continue
+
+            try:
+                next_points, status, errors = cv2.calcOpticalFlowPyrLK(
+                    track.visual_prev_gray,
+                    gray,
+                    track.visual_points,
+                    None,
+                    winSize=(21, 21),
+                    maxLevel=3,
+                    criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 24, 0.01),
+                )
+            except cv2.error:
+                next_points, status, errors = None, None, None
+
+            if next_points is None or status is None:
+                track.visual_failures += 1
+                track.visual_points = None
+                track.visual_prev_gray = None
+                continue
+
+            valid = status.reshape(-1) == 1
+            if errors is not None:
+                valid &= errors.reshape(-1) <= 24.0
+            previous = track.visual_points.reshape(-1, 2)[valid]
+            current = next_points.reshape(-1, 2)[valid]
+            if len(previous) < 4:
+                track.visual_failures += 1
+                track.visual_points = None
+                track.visual_prev_gray = None
+                continue
+
+            matrix, inliers = cv2.estimateAffinePartial2D(
+                previous,
+                current,
+                method=cv2.RANSAC,
+                ransacReprojThreshold=2.5,
+                maxIters=100,
+                confidence=0.98,
+            )
+            inlier_ratio = float(np.mean(inliers)) if inliers is not None and len(inliers) else 0.0
+            if matrix is None or inlier_ratio < 0.55:
+                track.visual_failures += 1
+                track.visual_points = None
+                track.visual_prev_gray = None
+                continue
+
+            scale = float(np.hypot(matrix[0, 0], matrix[0, 1]))
+            translation = float(np.hypot(matrix[0, 2], matrix[1, 2]))
+            old_box = track.visual_bbox
+            old_diagonal = max(1.0, float(np.hypot(old_box[2] - old_box[0], old_box[3] - old_box[1])))
+            if not (0.82 <= scale <= 1.20) or translation > max(45.0, old_diagonal * 0.85):
+                track.visual_failures += 1
+                track.visual_points = None
+                track.visual_prev_gray = None
+                continue
+
+            # Optical-flow scale compounds quickly on a stationary textured
+            # truck. Move only the center and retain the OCR box dimensions.
+            old_center = np.float32([[
+                [(old_box[0] + old_box[2]) / 2.0, (old_box[1] + old_box[3]) / 2.0]
+            ]])
+            transformed_center = cv2.transform(old_center, matrix).reshape(2)
+            box_width = old_box[2] - old_box[0]
+            box_height = old_box[3] - old_box[1]
+            candidate = self._clip_box([
+                int(round(transformed_center[0] - box_width / 2.0)),
+                int(round(transformed_center[1] - box_height / 2.0)),
+                int(round(transformed_center[0] + box_width / 2.0)),
+                int(round(transformed_center[1] + box_height / 2.0)),
+            ], width, height)
+            if candidate is None:
+                track.visual_points = None
+                track.visual_prev_gray = None
+                continue
+
+            template = self._visual_template(gray, candidate)
+            appearance = 0.0
+            if template is not None and track.visual_anchor_template is not None:
+                appearance = float(cv2.matchTemplate(
+                    template,
+                    track.visual_anchor_template,
+                    cv2.TM_CCOEFF_NORMED,
+                )[0, 0])
+            if not np.isfinite(appearance) or appearance < 0.35:
+                track.visual_failures += 1
+                track.visual_points = None
+                track.visual_prev_gray = None
+                continue
+
+            alpha = 0.72
+            smoothed = [
+                int(round(alpha * candidate[index] + (1.0 - alpha) * old_box[index]))
+                for index in range(4)
+            ]
+            track.visual_bbox = smoothed
+            track.display_plate_bbox = list(smoothed)
+            track.visual_last_seen = now
+            track.visual_quality = min(1.0, (0.55 * inlier_ratio) + (0.45 * max(0.0, appearance)))
+            track.visual_failures = 0
+            if template is not None and track.visual_anchor_template is not None:
+                track.visual_anchor_template = cv2.addWeighted(
+                    track.visual_anchor_template,
+                    0.92,
+                    template,
+                    0.08,
+                    0.0,
+                )
+
+            kept = current[inliers.reshape(-1) == 1] if inliers is not None else current
+            track.visual_points = kept.reshape(-1, 1, 2).astype(np.float32)
+            track.visual_prev_gray = gray.copy()
+            if len(track.visual_points) < 12:
+                self._seed_visual_track(track, gray, now)
+
+    def get_visual_active_lanes(self, now: float, max_age: float = 0.55) -> set[str]:
+        return {
+            track.lane
+            for track in self.tracks.values()
+            if track.visual_bbox is not None
+            and track.visual_quality >= 0.28
+            and (now - track.visual_last_seen) <= max_age
+        }
+
+    @staticmethod
     def _is_plausible_plate_box(plate_bbox: List[int], vehicle_bbox: List[int]) -> bool:
         """Reject latch/pillar boxes before they can become a plate anchor."""
         px1, py1, px2, py2 = plate_bbox
@@ -460,6 +800,8 @@ class PlateTracker:
         self,
         vehicle_bbox: List[int],
         now: float,
+        excluded_track_ids: Optional[set[str]] = None,
+        lane: Optional[str] = None,
     ) -> str:
         """
         Associate vehicle bbox with existing active tracks using IoU + Centroid distance.
@@ -467,26 +809,49 @@ class PlateTracker:
         """
         vx1, vy1, vx2, vy2 = vehicle_bbox
         vcx, vcy = (vx1 + vx2) / 2.0, (vy1 + vy2) / 2.0
+        vw = max(1, vx2 - vx1)
+        vh = max(1, vy2 - vy1)
+        diag = max(1.0, float(np.hypot(vw, vh)))
 
         best_id = None
         best_score = -1.0
 
+        excluded = excluded_track_ids or set()
         for tid, track in self.tracks.items():
+            if tid in excluded:
+                continue
+            track_age = now - track.last_seen
+            if track_age > 0.90:
+                continue
+            if lane and track.lane and lane != track.lane:
+                continue
             tx1, ty1, tx2, ty2 = track.vehicle_bbox
             tcx, tcy = (tx1 + tx2) / 2.0, (ty1 + ty2) / 2.0
+            tw = max(1, tx2 - tx1)
+            th = max(1, ty2 - ty1)
 
             iou = compute_iou(vehicle_bbox, track.vehicle_bbox)
             dist = np.hypot(vcx - tcx, vcy - tcy)
+            width_ratio = vw / float(tw)
+            height_ratio = vh / float(th)
+            comparable_size = 0.48 <= width_ratio <= 2.10 and 0.48 <= height_ratio <= 2.10
 
-            # Combined match score
-            if iou > 0.30:
-                score = iou + 1.0
-            elif dist < 160.0:
-                score = 1.0 - (dist / 160.0)
+            # Once a plate is locked, a weak centroid-only match is too risky:
+            # the old overlay can otherwise jump onto an adjacent truck.
+            required_iou = 0.32 if (track.display_confirmed or track.event_emitted) else 0.15
+            if comparable_size and iou > required_iou:
+                score = iou + 1.0 - min(0.25, track_age * 0.15)
+            elif (
+                comparable_size
+                and not track.display_confirmed
+                and not track.event_emitted
+                and dist < (diag * 0.38)
+            ):
+                score = 1.0 - (dist / (diag * 0.38))
             else:
                 score = 0.0
 
-            if score > best_score and score > 0.35:
+            if score > best_score and score > 0.25:
                 best_score = score
                 best_id = tid
 
@@ -496,6 +861,21 @@ class PlateTracker:
         new_id = f"V{self._next_id:03d}"
         self._next_id += 1
         return new_id
+
+    def match_detections(self, detections: List[Dict[str, Any]], now: float) -> List[str]:
+        """Assign at most one vehicle detection to each active track in a frame."""
+        claimed: set[str] = set()
+        assigned: List[str] = []
+        for detection in detections:
+            track_id = self.match_or_create_track(
+                [int(value) for value in detection["bbox"]],
+                now,
+                excluded_track_ids=claimed,
+                lane=str(detection.get("lane") or "") or None,
+            )
+            claimed.add(track_id)
+            assigned.append(track_id)
+        return assigned
 
     @staticmethod
     def project_box_between_vehicle_boxes(
@@ -531,10 +911,50 @@ class PlateTracker:
                 continue
             track.vehicle_bbox = vehicle_bbox
             track.last_seen = now
+            track.last_vehicle_seen = now
             if track.is_zone_fallback:
                 continue
             if track.rel_plate_box is not None:
                 track.plate_bbox = track.get_interpolated_plate_box(vehicle_bbox)
+
+    def find_vehicle_track_for_plate(
+        self,
+        plate_bbox: List[int],
+        lane: str,
+        now: float,
+    ) -> Optional[str]:
+        """Find the live physical vehicle that owns an absolute zone-scan plate box."""
+        if len(plate_bbox) != 4:
+            return None
+        px = (plate_bbox[0] + plate_bbox[2]) / 2.0
+        py = (plate_bbox[1] + plate_bbox[3]) / 2.0
+        best: Optional[tuple[float, str]] = None
+        for track_id, track in self.tracks.items():
+            if track.is_zone_fallback or track_id.startswith("ZONE_FALLBACK:"):
+                continue
+            if lane and track.lane and lane != track.lane:
+                continue
+            parent_seen = track.last_seen if track.is_zone_fallback else track.last_vehicle_seen
+            if (now - parent_seen) > 0.90:
+                continue
+            vx1, vy1, vx2, vy2 = track.vehicle_bbox
+            vw = max(1, vx2 - vx1)
+            vh = max(1, vy2 - vy1)
+            margin_x = vw * 0.05
+            margin_y = vh * 0.05
+            if not (
+                vx1 - margin_x <= px <= vx2 + margin_x
+                and vy1 - margin_y <= py <= vy2 + margin_y
+            ):
+                continue
+            normalized_distance = float(np.hypot(
+                (px - ((vx1 + vx2) / 2.0)) / vw,
+                (py - ((vy1 + vy2) / 2.0)) / vh,
+            ))
+            rank = (normalized_distance, track_id)
+            if best is None or rank < best:
+                best = rank
+        return best[1] if best is not None else None
 
     def update_track(
         self,
@@ -554,6 +974,7 @@ class PlateTracker:
             if not plate_text:
                 track.update_vehicle_motion(vehicle_bbox, now)
                 vehicle_bbox = self._smooth_vehicle_bbox(track.vehicle_bbox, vehicle_bbox)
+                track.last_vehicle_seen = now
             track.vehicle_bbox = [int(value) for value in vehicle_bbox]
             track.last_seen = now
 
@@ -651,59 +1072,95 @@ class PlateTracker:
     def get_live_detections(self, now: float, min_confidence: float = 0.0) -> List[Dict[str, Any]]:
         """
         Return active plate detections for all tracked vehicles currently in the zone.
-        Maintains rock-solid continuous display for active vehicles without flickering.
+        Renders all visible plates on active vehicles and removes bounding boxes immediately when vehicles leave.
         """
-        active_by_passage: Dict[str, Dict[str, Any]] = {}
+        active_by_passage: Dict[str, tuple[tuple[int, int, float], Dict[str, Any]]] = {}
         dead = []
 
-        for tid, track in self.tracks.items():
-            # Vehicle expired from zone / camera view
-            expiry_seconds = 8.0 if track.is_zone_fallback else 2.5
-            if (now - track.last_seen) > expiry_seconds:
+        for tid, track in list(self.tracks.items()):
+            # A short grace period bridges occasional YOLO misses without keeping
+            # an overlay alive long enough to attach to the following vehicle.
+            max_track_age = 2.4 if track.is_zone_fallback else 1.0
+            parent_seen = track.last_seen if track.is_zone_fallback else track.last_vehicle_seen
+            visual_alive = (
+                track.visual_bbox is not None
+                and track.visual_quality >= 0.28
+                and (now - track.visual_last_seen) <= 0.55
+                and (now - parent_seen) <= max_track_age
+            )
+            if (now - parent_seen) > max_track_age and not visual_alive:
                 dead.append(tid)
                 continue
 
-            # Compute current plate box (interpolated smoothly from vehicle position)
-            track.is_locked = track.event_emitted or bool(track.live_plate) or track.has_stable_plate(now)
-            pbox = track.get_interpolated_plate_box(track.vehicle_bbox)
-            if pbox is not None and track.plate and track.is_locked:
-                if not track.event_emitted and (
-                    not track.live_plate or track.confidence > track.live_conf + 0.005
-                ):
-                    track.live_plate = track.plate
-                    track.live_conf = track.confidence
-                display_plate = track.last_event_plate if track.event_emitted else track.live_plate
-                display_conf = track.emitted_conf if track.event_emitted else track.live_conf
-                if display_conf < min_confidence:
-                    continue
+            exact_votes = int(track.plate_votes.get(track.best_plate, {}).get("count", 0))
+            if track.event_emitted or (
+                track.plate_bbox
+                and (
+                    (track.best_conf >= 0.98 and track.bbox_confirmation_count >= 1)
+                    or (
+                        track.bbox_confirmation_count >= 2
+                        and (exact_votes >= 2 or track.consensus_frame_count >= 2)
+                    )
+                )
+            ):
+                track.display_confirmed = True
+
+            if track.plate_bbox and track.best_plate and track.display_confirmed:
+                target_box = (
+                    track.visual_bbox
+                    if visual_alive
+                    else (track.get_interpolated_plate_box(track.vehicle_bbox) or track.plate_bbox)
+                )
+                if track.display_plate_bbox is None:
+                    track.display_plate_bbox = [int(value) for value in target_box]
+                else:
+                    alpha = 0.55
+                    track.display_plate_bbox = [
+                        int(round(alpha * target_box[index] + (1.0 - alpha) * track.display_plate_bbox[index]))
+                        for index in range(4)
+                    ]
+                display_conf = track.best_conf or 0.85
+                if display_conf >= min_confidence:
+                    detection = {
+                        "class": "license_plate",
+                        "bbox": list(track.display_plate_bbox),
+                        "plate": track.best_plate,
+                        "lpr_status": track.status,
+                        "confidence": display_conf,
+                        "is_locked": True,
+                        "track_id": track.track_id,
+                    }
+                    group_key = str(getattr(track, "passage_id", None) or track.track_id)
+                    rank = (
+                        0 if track.is_zone_fallback else 1,
+                        int(track.bbox_confirmation_count),
+                        float(track.best_bbox_quality) + display_conf,
+                    )
+                    if group_key not in active_by_passage or rank > active_by_passage[group_key][0]:
+                        active_by_passage[group_key] = (rank, detection)
+
+            provisional_alive = (
+                not track.best_plate
+                and track.provisional_plate_bbox is not None
+                and (now - track.provisional_last_seen) <= 1.2
+                and (now - track.last_vehicle_seen) <= 1.0
+            )
+            if provisional_alive:
                 detection = {
                     "class": "license_plate",
-                    "bbox": pbox,
-                    "plate": display_plate,
-                    "lpr_status": track.status,
-                    "confidence": display_conf,
-                    "is_locked": track.is_locked,
+                    "bbox": list(track.provisional_plate_bbox),
+                    "plate": "",
+                    "lpr_status": "SCANNING",
+                    "confidence": 0.0,
+                    "is_locked": False,
                     "track_id": track.track_id,
                 }
-                passage_key = str(getattr(track, "passage_id", "") or track.track_id)
-                rank = (
-                    int(track.bbox_confirmation_count),
-                    float(track.best_bbox_quality),
-                    float(display_conf),
-                    float(track.last_seen),
-                )
-                existing = active_by_passage.get(passage_key)
-                if existing is None or rank > existing["_rank"]:
-                    detection["_rank"] = rank
-                    active_by_passage[passage_key] = detection
+                group_key = str(getattr(track, "passage_id", None) or track.track_id)
+                rank = (-1, 0, 0.0)
+                if group_key not in active_by_passage or rank > active_by_passage[group_key][0]:
+                    active_by_passage[group_key] = (rank, detection)
 
         for tid in dead:
             self.tracks.pop(tid, None)
 
-        active = []
-        for detection in active_by_passage.values():
-            detection.pop("_rank", None)
-            active.append(detection)
-        return active
-
-
+        return [item[1] for item in active_by_passage.values()]

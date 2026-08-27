@@ -17,7 +17,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -119,6 +119,8 @@ class GatePipeline:
             conf_threshold=float(os.getenv("GATE_VEHICLE_CONFIDENCE", "0.18")),
             target_classes=["car", "truck", "bus"],
         )
+        if hasattr(self.detector, "enable_high_angle_aliases"):
+            self.detector.enable_high_angle_aliases = True
         self.lpr_reader = lpr_reader or LicensePlateReader()
         self.tracker = PlateTracker(smoothing_alpha=0.82)
         self.buffer = CircularBuffer(max_seconds=12.0, target_fps=target_fps)
@@ -129,9 +131,12 @@ class GatePipeline:
 
         self._ai_busy = False
         self._recent_events: Dict[str, float] = {}
+        self._recent_passage_results: List[Dict[str, Any]] = []
         self._event_ids_by_key: Dict[str, str] = {}
         self._lane_passages: Dict[str, Dict[str, Any]] = {}
         self._lane_fallback_last_ocr: Dict[str, float] = {}
+        self._lane_last_activity: Dict[str, float] = {}
+        self._recent_unknown_lanes: Dict[str, float] = {}
         self._next_passage_id = 1
         self._cooldown_seconds = 20.0
         self._config_path = Path(
@@ -166,6 +171,7 @@ class GatePipeline:
         self._ocr_cycle = 0
         self._cached_vehicle_detections: List[Dict[str, Any]] = []
         self._cached_vehicle_detections_at = 0.0
+        self._last_video_timecode = "00:00"
 
     async def _sync_active_zones(self, now: float) -> None:
         """Fetch active monitoring zones for GATE-01 from database."""
@@ -179,6 +185,28 @@ class GatePipeline:
     @staticmethod
     def _compact_plate(value: str) -> str:
         return str(value or "").upper().replace(" ", "").replace("-", "").replace(".", "")
+
+    def _get_video_timecode(self) -> str:
+        """Read a stable video position, preferring playback milliseconds."""
+        reader = getattr(self, "reader", None)
+        if reader is None:
+            return str(getattr(self, "_last_video_timecode", "00:00"))
+        try:
+            playback = reader.get_playback_status()
+            if playback.get("seekable"):
+                total_seconds = max(0, int(float(playback.get("positionMs", 0)) / 1000.0))
+                current = f"{total_seconds // 60:02d}:{total_seconds % 60:02d}"
+            else:
+                current = str(reader.get_timecode() or "")
+        except Exception:
+            try:
+                current = str(reader.get_timecode() or "")
+            except Exception:
+                current = ""
+        if current and current not in {"00:00", "00:00:00"}:
+            self._last_video_timecode = current
+            return current
+        return str(getattr(self, "_last_video_timecode", current or "00:00"))
 
     async def _sync_registered_vehicle_statuses(self, now: float) -> None:
         """Refresh the single label snapshot used by both overlays and events."""
@@ -276,6 +304,20 @@ class GatePipeline:
     def _event_meets_confidence_threshold(self, confidence: float) -> bool:
         return float(confidence) >= float(getattr(self, "min_confidence", 0.70))
 
+    @staticmethod
+    def _is_high_angle_vehicle(vehicle_box: List[int], frame_w: int, frame_h: int) -> bool:
+        """Enable the overhead-camera supplement only for close, foreshortened vehicles."""
+        if len(vehicle_box) != 4 or frame_w <= 0 or frame_h <= 0:
+            return False
+        x1, y1, x2, y2 = vehicle_box
+        width = max(1, x2 - x1)
+        height = max(1, y2 - y1)
+        return (
+            y2 >= int(frame_h * 0.94)
+            and height >= int(frame_h * 0.42)
+            and height >= width * 1.12
+        )
+
     def _resolve_plate_box(
         self,
         observed_plate_box: List[int],
@@ -326,6 +368,91 @@ class GatePipeline:
             deduped.append(candidate)
         return deduped
 
+    def _recover_localized_candidate(
+        self,
+        crop: np.ndarray,
+        allow_geometry: bool = False,
+        on_localized: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Run the bounded weak-detector/geometry proposals through strict OCR."""
+        if not (
+            hasattr(self.lpr_reader, "localize_unread_plate_regions")
+            or hasattr(self.lpr_reader, "localize_unread_plate_region")
+        ):
+            return None, []
+        if hasattr(self.lpr_reader, "localize_unread_plate_regions"):
+            try:
+                regions = self.lpr_reader.localize_unread_plate_regions(
+                    crop,
+                    min_center_y=0.05 if allow_geometry else 0.45,
+                )
+            except TypeError:
+                regions = self.lpr_reader.localize_unread_plate_regions(crop)
+        else:
+            try:
+                localized = self.lpr_reader.localize_unread_plate_region(
+                    crop,
+                    min_center_y=0.05 if allow_geometry else 0.45,
+                )
+            except TypeError:
+                localized = self.lpr_reader.localize_unread_plate_region(crop)
+            regions = [localized] if localized is not None else []
+        if not allow_geometry:
+            regions = [
+                region
+                for region in regions
+                if region.get("source") != "recessed_plate_geometry"
+            ]
+        if on_localized is not None:
+            published = False
+            for region in regions:
+                # Only the trained plate detector is safe to expose before OCR.
+                if not region.get("source"):
+                    on_localized(region)
+                    published = True
+                    break
+            if not published:
+                two_line_regions = []
+                crop_h, crop_w = crop.shape[:2]
+                for region in regions:
+                    if region.get("source") != "recessed_plate_geometry":
+                        continue
+                    x1, y1, x2, y2 = region.get("bbox_in_crop", [0, 0, 0, 0])
+                    box_w = max(1, int(x2) - int(x1))
+                    box_h = max(1, int(y2) - int(y1))
+                    aspect = box_w / float(box_h)
+                    center_y = (float(y1) + float(y2)) / (2.0 * max(1, crop_h))
+                    if 0.68 <= aspect <= 1.45 and center_y >= 0.45:
+                        two_line_regions.append(region)
+                if two_line_regions:
+                    on_localized(max(
+                        two_line_regions,
+                        key=lambda item: (
+                            (float(item["bbox_in_crop"][1]) + float(item["bbox_in_crop"][3])) / max(1, crop_h),
+                            (float(item["bbox_in_crop"][0]) + float(item["bbox_in_crop"][2])) / max(1, crop_w),
+                        ),
+                    ))
+        if not hasattr(self.lpr_reader, "recognize_localized_plate_region"):
+            return None, regions
+
+        recovered = None
+        for localized in regions:
+            candidate = self.lpr_reader.recognize_localized_plate_region(crop, localized)
+            if candidate is None:
+                continue
+            if (
+                recovered is None
+                or (float(candidate.get("confidence", 0.0)), float(candidate.get("score", 0.0)))
+                > (
+                    float(recovered.get("confidence", 0.0)),
+                    float(recovered.get("score", 0.0)),
+                )
+            ):
+                recovered = candidate
+            if float(candidate.get("confidence", 0.0)) >= 0.92:
+                break
+        return recovered, regions
+
     @staticmethod
     def _dedupe_vehicle_detections(detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Collapse nested YOLO boxes so one truck cannot consume both OCR slots."""
@@ -350,7 +477,7 @@ class GatePipeline:
                 intersection = max(0, ix2 - ix1) * max(0, iy2 - iy1)
                 other_area = max(1, (other[2] - other[0]) * (other[3] - other[1]))
                 overlap_smaller = intersection / float(min(area, other_area))
-                if compute_iou(box, other) >= 0.35 or overlap_smaller >= 0.72:
+                if compute_iou(box, other) >= 0.65 or overlap_smaller >= 0.86:
                     duplicate = True
                     break
             if not duplicate:
@@ -439,12 +566,80 @@ class GatePipeline:
             })
         return fallbacks
 
-    def _touch_lane_passage(self, lane: str, now: float) -> Dict[str, Any]:
-        """Keep fragmented tracks in one vehicle passage while plate evidence continues."""
+    @staticmethod
+    def _plate_edit_distance(left: str, right: str) -> int:
+        if not left:
+            return len(right)
+        if not right:
+            return len(left)
+        previous = list(range(len(right) + 1))
+        for index, char_left in enumerate(left, start=1):
+            current = [index]
+            for offset, char_right in enumerate(right, start=1):
+                current.append(min(
+                    current[-1] + 1,
+                    previous[offset] + 1,
+                    previous[offset - 1] + (char_left != char_right),
+                ))
+            previous = current
+        return previous[-1]
+
+    def _touch_vehicle_passage(
+        self,
+        track_id: str,
+        lane: str,
+        now: float,
+        track: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Attach short track fragments to one physical vehicle passage."""
         if not hasattr(self, "_lane_passages"):
             self._lane_passages = {}
             self._next_passage_id = 1
-        passage = self._lane_passages.get(lane)
+        passage = self._lane_passages.get(track_id)
+        if passage is None and track is not None:
+            compact_plate = self._compact_plate(getattr(track, "best_plate", ""))
+            vehicle_box = [int(value) for value in getattr(track, "vehicle_bbox", [])]
+            seen_passages: set[str] = set()
+            for candidate in self._lane_passages.values():
+                passage_id = str(candidate.get("id") or "")
+                if not passage_id or passage_id in seen_passages:
+                    continue
+                seen_passages.add(passage_id)
+                if candidate.get("event_plate") or candidate.get("filtered"):
+                    continue
+                if candidate.get("lane") != lane or (now - float(candidate.get("last_seen", 0.0))) > 4.0:
+                    continue
+                aggregate = candidate.get("aggregate_track")
+                aggregate_plate = self._compact_plate(getattr(aggregate, "best_plate", ""))
+                previous_box = candidate.get("last_vehicle_bbox") or []
+                same_plate = (
+                    compact_plate
+                    and aggregate_plate
+                    and self._plate_edit_distance(compact_plate, aggregate_plate) <= 2
+                )
+                spatial_match = False
+                strong_iou_match = False
+                if len(vehicle_box) == 4 and len(previous_box) == 4:
+                    px1, py1, px2, py2 = previous_box
+                    vx1, vy1, vx2, vy2 = vehicle_box
+                    diagonal = max(1.0, float(np.hypot(px2 - px1, py2 - py1)))
+                    distance = float(np.hypot(
+                        ((vx1 + vx2) - (px1 + px2)) / 2.0,
+                        ((vy1 + vy2) - (py1 + py2)) / 2.0,
+                    ))
+                    overlap = compute_iou(vehicle_box, previous_box)
+                    strong_iou_match = overlap >= 0.25
+                    spatial_match = overlap >= 0.08 or distance <= diagonal * 0.45
+                track_fragment_without_plate = (
+                    not compact_plate
+                    and not aggregate_plate
+                    and (now - float(candidate.get("last_seen", 0.0))) <= 1.0
+                    and strong_iou_match
+                )
+                if (same_plate and spatial_match) or track_fragment_without_plate:
+                    passage = candidate
+                    self._lane_passages[track_id] = passage
+                    break
         if passage is None or (now - float(passage["last_seen"])) > 6.0:
             passage = {
                 "id": f"P{self._next_passage_id:05d}",
@@ -452,14 +647,122 @@ class GatePipeline:
                 "event_plate": "",
                 "aggregate_track": None,
                 "crop": None,
+                "best_plate": "",
+                "best_confidence": -1.0,
                 "lane": lane,
                 "zone_name": "Làn cổng",
+                "video_timecode": "00:00",
+                "last_vehicle_bbox": [],
+                "vehicle_observations": 0,
+                "first_vehicle_seen": now,
+                "high_angle": False,
             }
             self._next_passage_id += 1
-            self._lane_passages[lane] = passage
+            self._lane_passages[track_id] = passage
         else:
             passage["last_seen"] = now
+        if track is not None:
+            passage["last_vehicle_bbox"] = [int(value) for value in track.vehicle_bbox]
         return passage
+
+    def _emit_unknown_passage(self, passage: Dict[str, Any], now: float) -> bool:
+        """Persist one unread result only from an actual recognized plate crop."""
+        crop = passage.get("crop")
+        if crop is None or not isinstance(crop, np.ndarray) or crop.size == 0:
+            passage["filtered"] = True
+            return False
+        passage["event_plate"] = "UNKNOWN"
+        # A physical truck can be fragmented into several tracker IDs. Retire
+        # nearby unread fragments in the same lane with the emitted passage.
+        for candidate in getattr(self, "_lane_passages", {}).values():
+            if candidate is passage or candidate.get("event_plate"):
+                continue
+            if candidate.get("lane") != passage.get("lane"):
+                continue
+            if abs(float(candidate.get("last_seen", 0.0)) - float(passage.get("last_seen", 0.0))) <= 8.0:
+                candidate["filtered"] = True
+        aggregate = passage.get("aggregate_track")
+        if aggregate is not None:
+            aggregate.mark_event_emitted()
+        for track in self.tracker.tracks.values():
+            if getattr(track, "passage_id", None) == passage["id"]:
+                track.mark_event_emitted()
+        asyncio.create_task(
+            self._handle_detected_plate(
+                plate="UNKNOWN",
+                confidence=0.0,
+                crop=crop.copy(),
+                lane=passage["lane"],
+                zone_name=passage["zone_name"],
+                now=now,
+                event_key=f"{self.camera_id}:{passage['id']}",
+                video_timecode=(
+                    str(passage.get("video_timecode"))
+                    if passage.get("video_timecode") not in {None, "", "00:00", "00:00:00"}
+                    else self._get_video_timecode()
+                ),
+            )
+        )
+        return True
+
+    def _is_recent_passage_variant(self, plate: str, lane: str, now: float) -> bool:
+        compact = self._compact_plate(plate)
+        recent = []
+        duplicate = False
+        for result in getattr(self, "_recent_passage_results", []):
+            age = now - float(result["timestamp"])
+            if age > 45.0:
+                continue
+            recent.append(result)
+            if result["lane"] == lane and self._plate_edit_distance(compact, result["plate"]) <= 2:
+                duplicate = True
+        self._recent_passage_results = recent
+        return duplicate
+
+    def _remember_passage_result(self, plate: str, confidence: float, lane: str, now: float) -> None:
+        if not hasattr(self, "_recent_passage_results"):
+            self._recent_passage_results = []
+        self._recent_passage_results.append({
+            "plate": self._compact_plate(plate),
+            "confidence": float(confidence),
+            "lane": lane,
+            "timestamp": now,
+        })
+
+    @staticmethod
+    def _select_rear_plate_candidate(
+        candidates: List[Dict[str, Any]],
+        vehicle_width: int,
+        vehicle_height: int,
+        high_angle: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Choose the highest confidence verified rear plate on the vehicle, prioritizing trailer plates (R/RM)."""
+        if not candidates or vehicle_width <= 0 or vehicle_height <= 0:
+            return None
+
+        rear_candidates = []
+        for candidate in candidates:
+            _x1, y1, _x2, y2 = candidate.get("bbox_in_crop", [0, 0, 0, 0])
+            center_y = ((float(y1) + float(y2)) / 2.0) / float(vehicle_height)
+            # Rear plate must strictly be in lower half of vehicle (cản sau)
+            is_overhead_far_rear = high_angle and str(candidate.get("source", "")).startswith("high_angle_far_rear_")
+            if center_y < 0.44 and not is_overhead_far_rear:
+                continue
+            rear_candidates.append(candidate)
+
+        if not rear_candidates:
+            return None
+
+        def candidate_rank(item: Dict[str, Any]) -> Tuple[int, float, float]:
+            plate = str(item.get("plate", "")).upper()
+            # Trailer plates (e.g. 15R-158.45, 15RM-032.88) are the true rear plates of container trucks
+            is_trailer = 1 if ("R-" in plate or "RM-" in plate or "R" in plate) else 0
+            conf = float(item.get("confidence", 0.0))
+            score = float(item.get("score", 0.0))
+            return (is_trailer, conf, score)
+
+        rear_candidates.sort(key=candidate_rank, reverse=True)
+        return rear_candidates[0]
 
     def _save_crop_image(self, crop: np.ndarray, plate: str) -> Optional[str]:
         """Save cropped license plate image to data/crops/."""
@@ -510,9 +813,11 @@ class GatePipeline:
         zone_name: str,
         now: float,
         event_key: Optional[str] = None,
+        video_timecode: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Process event logging and clip extraction in background."""
-        if confidence < self.min_confidence:
+        is_unknown = plate.strip().upper() == "UNKNOWN"
+        if not is_unknown and confidence < self.min_confidence:
             logger.debug(
                 "[%s] Plate %s confidence %.2f is below threshold %.2f. Skipping right-side event logging.",
                 self.camera_id,
@@ -522,18 +827,31 @@ class GatePipeline:
             )
             return None
 
+        compact_plate = self._compact_plate(plate)
+        if not compact_plate:
+            return None
+
+        self._recent_events[compact_plate] = now
+
+        # Save the exact crop that will be persisted with the journal event.
+        crop_path = await asyncio.to_thread(self._save_crop_image, crop, plate)
+
         # 1. Database lookup: Check registered_vehicles (AP-01)
         db_status = None
-        try:
-            db_status = await get_vehicle_status_by_plate(plate)
-        except Exception as exc:
-            logger.debug("Database lookup failed (%s). Defaulting status.", exc)
+        if not is_unknown:
+            try:
+                db_status = await get_vehicle_status_by_plate(plate)
+            except Exception as exc:
+                logger.debug("Database lookup failed (%s). Defaulting status.", exc)
 
-        status = str(db_status).upper() if db_status else self.resolve_vehicle_status(plate)
-        self._registered_vehicle_statuses[self._compact_plate(plate)] = status
-        for track in self.tracker.tracks.values():
-            if self._compact_plate(track.best_plate) == self._compact_plate(plate):
-                track.status = status
+        status = "STRANGER" if db_status is None else str(db_status).upper()
+
+        self._recent_events[compact_plate] = now
+        if not is_unknown:
+            self._registered_vehicle_statuses[compact_plate] = status
+            for track in self.tracker.tracks.values():
+                if self._compact_plate(track.best_plate) == compact_plate:
+                    track.status = status
 
         # 2. Save media artifacts
         ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -541,9 +859,6 @@ class GatePipeline:
         clip_filename = f"gate_clip_{ts_str}_{clean_plate}.mp4"
         clip_filepath = self.clips_dir / clip_filename
         clip_path = f"/data/clips/{clip_filename}"
-
-        # Fast synchronous crop save (takes < 1ms)
-        crop_path = await asyncio.to_thread(self._save_crop_image, crop, plate)
 
         # Fire-and-forget non-blocking background clip extraction (never blocks live stream!)
         try:
@@ -566,6 +881,8 @@ class GatePipeline:
                     confidence=confidence,
                     crop_path=crop_path,
                     clip_path=clip_path,
+                    zone_name=zone_name,
+                    video_timecode=video_timecode,
                     event_timestamp=datetime.now(timezone.utc),
                 )
                 event_id = event_record.get("id") if event_record else None
@@ -581,14 +898,14 @@ class GatePipeline:
             "cameraId": self.camera_id,
             "lane": lane,
             "licensePlate": plate,
-            "status": "quen" if status == "KNOWN" else "la",
+            "status": "unknown" if is_unknown else ("quen" if status == "KNOWN" else "la"),
             "confidence": confidence,
             "cropPath": crop_path,
             "clipPath": clip_path,
-            "time": datetime.now().strftime("%H:%M"),
+            "time": video_timecode or "00:00",
             "plate": plate,
             "zone": zone_name or ("Làn IN 2 · Làn phụ" if lane == "IN_2" else "Làn IN 1 · Cổng chính"),
-            "conf": int(confidence * 100),
+            "conf": None if is_unknown else int(confidence * 100),
         }
 
         # Broadcast gate event via WebSocket to Node.js proxy
@@ -598,6 +915,7 @@ class GatePipeline:
 
     def _sync_plate_detection(self, frame: np.ndarray, in_zone_detections: List[Dict[str, Any]], now: float, main_loop: Optional[asyncio.AbstractEventLoop] = None, generation: Optional[int] = None) -> None:
         """Run multi-stage OCR on detected vehicle crops inside active zones and update plate tracker."""
+        processing_started = time.monotonic()
         h, w = frame.shape[:2]
 
         for d in in_zone_detections:
@@ -617,21 +935,202 @@ class GatePipeline:
                 lane = d.get("lane") or ("IN_2" if ("2" in zone_name or "phụ" in zone_name.lower()) else "IN_1")
 
                 observed_vehicle_box = [vx1, vy1, vx2, vy2]
-                vehicle_track_id = d.get("_track_id") or self.tracker.match_or_create_track(observed_vehicle_box, now)
+                if d.get("_track_id"):
+                    vehicle_track_id = str(d["_track_id"])
+                elif d.get("_zone_fallback"):
+                    # Zone-wide OCR must never borrow a physical vehicle track;
+                    # otherwise its absolute plate box can migrate to a neighbor.
+                    vehicle_track_id = f"ZONE_FALLBACK:{lane}"
+                else:
+                    vehicle_track_id = self.tracker.match_or_create_track(
+                        observed_vehicle_box,
+                        now,
+                        lane=lane,
+                    )
                 current_track = self.tracker.tracks.get(vehicle_track_id)
                 stationary = bool(d.get("_force_stationary") or (current_track and current_track.is_stationary(now)))
-
-                # High-precision scan with fast-alpr CCT Transformer
-                candidates = self.lpr_reader.scan_plate_from_frame_or_vehicle(
-                    frame,
-                    crop,
-                    [vx1, vy1, vx2, vy2],
-                    stationary=stationary,
+                high_angle = bool(
+                    not d.get("_zone_fallback")
+                    and (d.get("_top_view_alias") or self._is_high_angle_vehicle(observed_vehicle_box, w, h))
                 )
+
+                # A zone-wide crop has no YOLO vehicle box. Try the bounded
+                # recessed-plate path first so a stopped truck is not delayed by
+                # every expensive stationary ROI. Normal vehicle scans are unchanged.
+                quick_recovered = None
+                zone_weak_recovered = None
+                zone_regions: List[Dict[str, Any]] = []
+                allow_geometry = bool(
+                    d.get("_zone_fallback")
+                    or (high_angle and stationary)
+                )
+
+                def publish_provisional(region: Dict[str, Any]) -> None:
+                    track_for_box = self.tracker.tracks.get(vehicle_track_id)
+                    if track_for_box is None or d.get("_zone_fallback"):
+                        return
+                    rbx1, rby1, rbx2, rby2 = region.get("bbox_in_crop", [0, 0, 0, 0])
+                    observed_box = [
+                        max(0, vx1 + int(rbx1)),
+                        max(0, vy1 + int(rby1)),
+                        min(w, vx1 + int(rbx2)),
+                        min(h, vy1 + int(rby2)),
+                    ]
+                    projected_box = self._resolve_plate_box(
+                        observed_box,
+                        observed_vehicle_box,
+                        track_for_box.vehicle_bbox,
+                        False,
+                    )
+                    self.tracker.update_provisional_plate_box(
+                        track_for_box,
+                        projected_box,
+                        max(now, track_for_box.last_seen),
+                    )
+
+                if d.get("_zone_fallback") or high_angle:
+                    quick_recovered, zone_regions = self._recover_localized_candidate(
+                        crop,
+                        allow_geometry=allow_geometry,
+                        on_localized=publish_provisional,
+                    )
+                    if quick_recovered is not None and float(quick_recovered.get("confidence", 0.0)) < 0.90:
+                        zone_weak_recovered = quick_recovered
+                        quick_recovered = None
+                candidates = [quick_recovered] if quick_recovered is not None else []
+                if not candidates:
+                    candidates = self.lpr_reader.scan_plate_from_frame_or_vehicle(
+                        frame,
+                        crop,
+                        [vx1, vy1, vx2, vy2],
+                        stationary=stationary,
+                        high_angle=high_angle,
+                    )
 
                 best_plate_crop: Optional[np.ndarray] = None
                 ranked_candidates = self._dedupe_plate_candidates(candidates)
-                for cand in ranked_candidates[:1]:
+                rear_candidate = self._select_rear_plate_candidate(
+                    ranked_candidates,
+                    vw,
+                    vh,
+                    high_angle=high_angle,
+                )
+                if (
+                    rear_candidate is None
+                    and hasattr(self.lpr_reader, "localize_unread_plate_region")
+                ):
+                    if zone_weak_recovered is not None:
+                        recovered_candidate = zone_weak_recovered
+                        unread_regions = zone_regions
+                    elif zone_regions:
+                        recovered_candidate = None
+                        unread_regions = zone_regions
+                    else:
+                        recovered_candidate, unread_regions = self._recover_localized_candidate(
+                            crop,
+                            allow_geometry=bool(
+                                d.get("_zone_fallback")
+                                or (high_angle and stationary)
+                            ),
+                        )
+                    unread_region = unread_regions[0] if unread_regions else None
+                    if (
+                        (d.get("_zone_fallback") or high_angle)
+                        and recovered_candidate is not None
+                        and float(recovered_candidate.get("confidence", 0.0)) < 0.90
+                    ):
+                        unread_region = {
+                            "bbox_in_crop": recovered_candidate["bbox_in_crop"],
+                            "detector_confidence": 0.15,
+                        }
+                        recovered_candidate = None
+                    if recovered_candidate is not None:
+                        rear_candidate = recovered_candidate
+                    current_track = self.tracker.tracks.get(vehicle_track_id)
+                    if (
+                        current_track is None
+                        and unread_region is not None
+                        and d.get("_zone_fallback")
+                    ):
+                        current_track = self.tracker.update_track(
+                            track_id=vehicle_track_id,
+                            vehicle_bbox=observed_vehicle_box,
+                            plate_bbox=None,
+                            plate_text="",
+                            status="SCANNING",
+                            conf=0.0,
+                            now=now,
+                        )
+                        current_track.lane = lane
+                        current_track.zone_name = zone_name
+                        current_track.is_zone_fallback = True
+                    if (
+                        rear_candidate is None
+                        and unread_region is not None
+                        and current_track is not None
+                    ):
+                        ubx1, uby1, ubx2, uby2 = unread_region["bbox_in_crop"]
+                        unread_box = [
+                            max(0, vx1 + int(ubx1) - 2),
+                            max(0, vy1 + int(uby1) - 2),
+                            min(w, vx1 + int(ubx2) + 2),
+                            min(h, vy1 + int(uby2) + 2),
+                        ]
+                        is_plate_in_zone, _, _ = self._find_matching_zone(unread_box, w, h)
+                        if (
+                            is_plate_in_zone
+                            and unread_box[2] > unread_box[0]
+                            and unread_box[3] > unread_box[1]
+                        ):
+                            unread_crop = frame[
+                                unread_box[1]:unread_box[3],
+                                unread_box[0]:unread_box[2],
+                            ]
+                            passage = self._touch_vehicle_passage(
+                                vehicle_track_id,
+                                lane,
+                                max(now, current_track.last_seen),
+                                current_track,
+                            )
+                            current_track.passage_id = passage["id"]
+                            passage["zone_name"] = zone_name
+                            if d.get("_zone_fallback"):
+                                passage["vehicle_observations"] = int(
+                                    passage.get("vehicle_observations", 0)
+                                ) + 1
+                            previous_box = passage.get("unread_last_bbox")
+                            stable = bool(
+                                previous_box
+                                and compute_iou(previous_box, unread_box) >= 0.35
+                                and (now - float(passage.get("unread_last_seen", 0.0))) <= 1.5
+                            )
+                            passage["unread_support"] = (
+                                int(passage.get("unread_support", 0)) + 1 if stable else 1
+                            )
+                            passage["unread_last_bbox"] = unread_box
+                            passage["unread_last_seen"] = now
+                            if unread_crop.size > 0:
+                                gray_crop = cv2.cvtColor(unread_crop, cv2.COLOR_BGR2GRAY)
+                                sharpness = float(cv2.Laplacian(gray_crop, cv2.CV_64F).var())
+                                brightness = float(np.mean(gray_crop))
+                                if (
+                                    sharpness >= 8.0
+                                    and 18.0 <= brightness <= 238.0
+                                    and sharpness > float(passage.get("unread_best_sharpness", -1.0))
+                                ):
+                                    passage["unread_crop"] = unread_crop.copy()
+                                    passage["unread_best_sharpness"] = sharpness
+                                    passage["video_timecode"] = str(d.get("_video_timecode") or "00:00")
+                            if (
+                                int(passage.get("unread_support", 0)) >= 2
+                                and isinstance(passage.get("unread_crop"), np.ndarray)
+                            ):
+                                passage["crop"] = passage["unread_crop"].copy()
+                                passage["crop_confidence"] = float(
+                                    unread_region.get("detector_confidence", 0.0)
+                                )
+                                passage["localized_unread_only"] = True
+                for cand in [rear_candidate] if rear_candidate is not None else []:
                     plate_text = cand.get("plate", "")
                     plate_text = self._canonicalize_verified_plate(plate_text)
                     conf = float(cand.get("confidence", 0.0))
@@ -660,13 +1159,28 @@ class GatePipeline:
                     if not is_plate_in_zone:
                         continue
 
+                    zone_fallback = bool(d.get("_zone_fallback"))
+                    completed_at = now + max(0.0, time.monotonic() - processing_started)
+                    owner_track_id = None
+                    if hasattr(self.tracker, "find_vehicle_track_for_plate"):
+                        owner_track_id = self.tracker.find_vehicle_track_for_plate(
+                            observed_plate_box,
+                            lane,
+                            completed_at,
+                        )
+                        if owner_track_id is not None:
+                            previous_track_id = vehicle_track_id
+                            vehicle_track_id = owner_track_id
+                            if zone_fallback and previous_track_id != owner_track_id:
+                                self.tracker.tracks.pop(previous_track_id, None)
+
                     current_track = self.tracker.tracks.get(vehicle_track_id)
                     current_vehicle_box = current_track.vehicle_bbox if current_track else observed_vehicle_box
                     plate_box = self._resolve_plate_box(
                         observed_plate_box,
                         observed_vehicle_box,
                         current_vehicle_box,
-                        bool(d.get("_zone_fallback")),
+                        zone_fallback,
                     )
                     plate_box = [
                         max(0, min(w - 1, plate_box[0])),
@@ -676,7 +1190,7 @@ class GatePipeline:
                     ]
                     if plate_box[2] <= plate_box[0] or plate_box[3] <= plate_box[1]:
                         continue
-                    update_now = max(now, current_track.last_seen) if current_track else now
+                    update_now = max(completed_at, now, current_track.last_seen) if current_track else completed_at
                     status = self.resolve_vehicle_status(plate_text)
                     if generation is not None and generation != self._tracking_generation:
                         return
@@ -691,18 +1205,28 @@ class GatePipeline:
                         variants=variants,
                         bbox_quality=float(cand.get("score", conf * 2.0)),
                     )
+                    if not zone_fallback and owner_track_id is None and current_track is None:
+                        track.last_vehicle_seen = now
                     track.lane = lane
                     track.zone_name = zone_name
-                    track.is_zone_fallback = bool(d.get("_zone_fallback"))
-                    passage = self._touch_lane_passage(lane, update_now)
+                    track.is_zone_fallback = zone_fallback and vehicle_track_id.startswith("ZONE_FALLBACK:")
+                    passage = self._touch_vehicle_passage(vehicle_track_id, lane, update_now, track)
                     track.passage_id = passage["id"]
+                    passage["zone_name"] = zone_name
+                    if zone_fallback:
+                        passage["vehicle_observations"] = int(
+                            passage.get("vehicle_observations", 0)
+                        ) + 1
+                    passage["localized_unread_only"] = False
+                    passage["unread_support"] = 0
+                    if conf > float(passage.get("best_confidence", -1.0)):
+                        passage["best_plate"] = plate_text
+                        passage["best_confidence"] = conf
                     aggregate = passage.get("aggregate_track")
                     if aggregate is None:
                         passage["aggregate_track"] = track
                         aggregate = track
                     elif aggregate is not track:
-                        if aggregate.first_plate_seen <= 0.0:
-                            aggregate.first_plate_seen = update_now
                         aggregate.last_seen = update_now
                         aggregate.last_plate_seen = update_now
                         aggregate.add_plate_vote(
@@ -715,7 +1239,6 @@ class GatePipeline:
                         track.plate = aggregate.best_plate
                         track.best_conf = aggregate.best_conf
                         track.confidence = aggregate.best_conf
-                    passage["zone_name"] = zone_name
 
                     pcx1, pcy1, pcx2, pcy2 = [
                         max(0, min(w, int(observed_plate_box[0]) - 2)),
@@ -723,12 +1246,15 @@ class GatePipeline:
                         max(0, min(w, int(observed_plate_box[2]) + 2)),
                         max(0, min(h, int(observed_plate_box[3]) + 2)),
                     ]
-                    best_plate_crop = frame[pcy1:pcy2, pcx1:pcx2].copy() if (pcx2 > pcx1 and pcy2 > pcy1) else best_plate_crop
-                    if best_plate_crop is not None and best_plate_crop.size > 0:
-                        track.latest_plate_crop = best_plate_crop.copy()
+                    crop_img = frame[pcy1:pcy2, pcx1:pcx2].copy() if (pcx2 > pcx1 and pcy2 > pcy1) else None
+                    if crop_img is not None and crop_img.size > 0:
+                        track.latest_plate_crop = crop_img.copy()
                         if conf >= float(passage.get("crop_confidence", -1.0)):
-                            passage["crop"] = best_plate_crop.copy()
+                            passage["crop"] = crop_img.copy()
                             passage["crop_confidence"] = conf
+                            passage["video_timecode"] = str(d.get("_video_timecode") or "00:00")
+                    if hasattr(self.tracker, "prepare_visual_track"):
+                        self.tracker.prepare_visual_track(track)
 
     async def _run_ai_in_background(self, frame: np.ndarray, in_zone_detections: List[Dict[str, Any]], now: float, generation: Optional[int] = None) -> None:
         """Trigger AI OCR in thread pool."""
@@ -752,37 +1278,36 @@ class GatePipeline:
             self._ai_busy = False
 
     def _schedule_ready_track_events(self, now: float) -> None:
-        """Finalize stable tracks even when the plate has just left the OCR-visible area."""
+        """Emit gate event as soon as a valid plate is detected and confirmed."""
         if getattr(self, "_ai_busy", False):
             return
         for track_id, track in list(self.tracker.tracks.items()):
             if getattr(track, "passage_id", None):
                 continue
-            if not hasattr(track, "should_emit_event") or not track.should_emit_event(now):
+            if getattr(track, "event_emitted", False):
+                continue
+            if not getattr(track, "best_plate", ""):
+                continue
+            compact_p = self._compact_plate(track.best_plate)
+            if not compact_p or len(compact_p) < 6:
+                continue
+            if not self._event_meets_confidence_threshold(track.best_conf):
+                continue
+            if (now - self._recent_events.get(compact_p, 0.0)) < 120.0:
+                track.mark_event_emitted()
                 continue
             crop = track.latest_plate_crop
             if crop is None or crop.size == 0:
                 continue
-            plate = track.best_plate
-            passage = getattr(self, "_lane_passages", {}).get(track.lane)
-            if (
-                passage
-                and getattr(track, "passage_id", None) == passage.get("id")
-                and passage.get("event_plate")
-            ):
-                track.mark_event_emitted()
-                continue
-            if (now - self._recent_events.get(plate, 0.0)) < self._cooldown_seconds:
-                continue
-            if not self._event_meets_confidence_threshold(track.best_conf):
-                track.mark_event_emitted()
-                continue
 
-            self._recent_events[plate] = now
+            self._recent_events[compact_p] = now
             confidence = track.best_conf
+            plate = track.best_plate
             track.mark_event_emitted()
+            passage = getattr(self, "_lane_passages", {}).get(track_id)
             if passage and getattr(track, "passage_id", None) == passage.get("id"):
                 passage["event_plate"] = plate
+
             asyncio.create_task(
                 self._handle_detected_plate(
                     plate=plate,
@@ -792,6 +1317,7 @@ class GatePipeline:
                     zone_name=track.zone_name,
                     now=now,
                     event_key=f"{self.camera_id}:{track_id}",
+                    video_timecode=self._get_video_timecode(),
                 )
             )
 
@@ -799,32 +1325,72 @@ class GatePipeline:
         """Finalize one aggregate result after every fragmented track in a lane goes quiet."""
         if getattr(self, "_ai_busy", False):
             return
+        seen_passage_ids: set[str] = set()
         for passage in list(getattr(self, "_lane_passages", {}).values()):
+            passage_id = str(passage.get("id") or "")
+            if not passage_id or passage_id in seen_passage_ids:
+                continue
+            seen_passage_ids.add(passage_id)
             if passage.get("event_plate") or passage.get("filtered") or (now - float(passage["last_seen"])) < 3.0:
+                continue
+            if passage.get("localized_unread_only"):
+                if int(passage.get("unread_support", 0)) < 2:
+                    continue
+                lane_last_activity = float(
+                    getattr(self, "_lane_last_activity", {}).get(passage.get("lane"), 0.0)
+                )
+                if lane_last_activity > 0.0 and (now - lane_last_activity) < 2.0:
+                    continue
+            if (
+                int(passage.get("vehicle_observations", 3)) < 3
+                or (
+                    float(passage.get("last_seen", now))
+                    - float(passage.get("first_vehicle_seen", float(passage.get("last_seen", now)) - 0.25))
+                ) < 0.25
+            ):
                 continue
             aggregate = passage.get("aggregate_track")
             crop = passage.get("crop")
-            if aggregate is None or crop is None or crop.size == 0:
+            if aggregate is None:
+                self._emit_unknown_passage(passage, now)
                 continue
-            if not aggregate.has_finalizable_plate(now):
+            if crop is None or crop.size == 0 or not aggregate.has_finalizable_plate(now):
+                if (now - float(passage["last_seen"])) >= 4.5:
+                    self._emit_unknown_passage(passage, now)
                 continue
-            plate = aggregate.best_plate
-            confidence = aggregate.best_conf
-            if not self._event_meets_confidence_threshold(confidence):
-                passage["filtered"] = True
+            plate = str(passage.get("best_plate") or aggregate.best_plate)
+            confidence = float(passage.get("best_confidence", aggregate.best_conf))
+            compact_p = self._compact_plate(plate)
+            if not compact_p:
+                self._emit_unknown_passage(passage, now)
+                continue
+            if self._is_recent_passage_variant(plate, passage["lane"], now):
+                passage["event_plate"] = plate
+                aggregate.mark_event_emitted()
+                continue
+            recent_events = getattr(self, "_recent_events", {})
+            if (now - recent_events.get(compact_p, 0.0)) < 120.0:
+                passage["event_plate"] = plate
                 aggregate.mark_event_emitted()
                 for track in self.tracker.tracks.values():
                     if getattr(track, "passage_id", None) == passage["id"]:
                         track.mark_event_emitted()
+                continue
+            if not self._event_meets_confidence_threshold(confidence):
                 logger.info(
-                    "[%s] Filtered plate %s at %.0f%% below configured %.0f%% threshold",
+                    "[%s] Logging unread passage: best plate %s at %.0f%% is below configured %.0f%% threshold",
                     self.camera_id,
                     plate,
                     confidence * 100,
                     self.min_confidence * 100,
                 )
+                self._emit_unknown_passage(passage, now)
                 continue
             passage["event_plate"] = plate
+            if not hasattr(self, "_recent_events"):
+                self._recent_events = {}
+            self._recent_events[compact_p] = now
+            self._remember_passage_result(plate, confidence, passage["lane"], now)
             aggregate.mark_event_emitted()
             for track in self.tracker.tracks.values():
                 if getattr(track, "passage_id", None) == passage["id"]:
@@ -840,6 +1406,11 @@ class GatePipeline:
                     zone_name=passage["zone_name"],
                     now=now,
                     event_key=f"{self.camera_id}:{passage['id']}",
+                    video_timecode=(
+                        str(passage.get("video_timecode"))
+                        if passage.get("video_timecode") not in {None, "", "00:00", "00:00:00"}
+                        else self._get_video_timecode()
+                    ),
                 )
             )
 
@@ -857,36 +1428,39 @@ class GatePipeline:
         h, w = frame.shape[:2]
 
         raw_detections = self.detector.detect(frame)
-        in_zone_vehicles = []
-        for d in raw_detections:
-            if d["class"] in ["car", "truck", "bus"]:
-                is_in, zname, lane = self._find_matching_zone(d["bbox"], w, h)
-                if is_in:
-                    d["zone_name"] = zname
-                    d["lane"] = lane
-                    in_zone_vehicles.append(d)
+        in_zone_vehicles: List[Dict[str, Any]] = []
+        for det in raw_detections:
+            in_zone, lane, z_name = self._find_matching_zone(det["bbox"], w, h)
+            if in_zone:
+                det["lane"] = lane
+                det["zone_name"] = z_name
+                in_zone_vehicles.append(det)
 
         self._sync_plate_detection(frame, in_zone_vehicles, now)
+        if hasattr(self.tracker, "update_visual_tracks"):
+            self.tracker.update_visual_tracks(frame, now)
         live_detections = self.tracker.get_live_detections(now, getattr(self, "min_confidence", 0.70))
-
-        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
-        ret, buf = cv2.imencode(".jpg", frame, encode_params)
-        b64_str = f"data:image/jpeg;base64,{base64.b64encode(buf.tobytes()).decode('ascii')}" if ret else ""
 
         return {
             "success": True,
             "camera_id": self.camera_id,
             "timestamp": int(now * 1000),
             "frame": frame,
-            "image_base64": b64_str,
             "detections": live_detections,
-            "fps": self.fps_measured or self.target_fps,
+            "fps": self.target_fps,
+            "timecode": self._get_video_timecode(),
+            "frame_width": w,
+            "frame_height": h,
         }
 
     async def process_gate_frame(self) -> Dict[str, Any]:
         """
-        Ultra-fast stream processing (< 3ms per frame).
-        Combines fast vehicle detection with smooth real-time Plate Tracking.
+        Processes one video frame:
+        1. Reads frame from RTSP stream / video file.
+        2. Runs YOLO vehicle detection and maps detections into active zones.
+        3. Updates continuous vehicle tracking and smooth plate bounding boxes.
+        4. Triggers throttled Plate Detection & OCR in background.
+        5. Returns streaming frame and real-time bounding boxes.
         """
         success, frame = self.reader.read_frame()
         if not success or frame is None:
@@ -929,7 +1503,7 @@ class GatePipeline:
                 self._cached_vehicle_detections = [dict(item) for item in raw_detections]
                 self._cached_vehicle_detections_at = now
         cached_at = getattr(self, "_cached_vehicle_detections_at", 0.0)
-        if not raw_detections and (now - cached_at) <= 0.8:
+        if not raw_detections and (now - cached_at) <= 0.25:
             raw_detections = [dict(item) for item in getattr(self, "_cached_vehicle_detections", [])]
 
         # 3. Filter vehicles strictly inside active configured zones (car/truck/bus only)
@@ -953,11 +1527,25 @@ class GatePipeline:
         in_zone_vehicles = self._dedupe_vehicle_detections(in_zone_vehicles)
         occupied_lanes = {item["lane"] for item in in_zone_vehicles}
         in_zone_vehicles.extend(self._zone_fallback_detections(w, h, occupied_lanes))
+        video_timecode = self._get_video_timecode()
+        for item in in_zone_vehicles:
+            item["_video_timecode"] = video_timecode
+        tracked_vehicles = [item for item in in_zone_vehicles if not item.get("_zone_fallback")]
+        if hasattr(self.tracker, "match_detections"):
+            assigned_track_ids = self.tracker.match_detections(tracked_vehicles, now)
+        else:
+            assigned_track_ids = [
+                self.tracker.match_or_create_track(item["bbox"], now)
+                for item in tracked_vehicles
+            ]
+
+        assigned_index = 0
         for d in in_zone_vehicles:
             if d.get("_zone_fallback"):
                 continue
             vx1, vy1, vx2, vy2 = d["bbox"]
-            track_id = self.tracker.match_or_create_track([vx1, vy1, vx2, vy2], now)
+            track_id = assigned_track_ids[assigned_index]
+            assigned_index += 1
             d["_track_id"] = track_id
             # Keep tracking vehicle position smoothly without fake plate boxes
             self.tracker.update_track(
@@ -973,8 +1561,31 @@ class GatePipeline:
             if vehicle_track is not None:
                 vehicle_track.lane = d["lane"]
                 vehicle_track.zone_name = d["zone_name"]
-            if vehicle_track is not None:
+                passage = self._touch_vehicle_passage(track_id, d["lane"], now, vehicle_track)
+                vehicle_track.passage_id = passage["id"]
+                passage["zone_name"] = d["zone_name"]
+                passage["video_timecode"] = str(d.get("_video_timecode") or video_timecode)
+                passage["vehicle_observations"] = int(passage.get("vehicle_observations", 0)) + 1
+                passage["high_angle"] = bool(
+                    passage.get("high_angle")
+                    or d.get("_top_view_alias")
+                    or self._is_high_angle_vehicle(vehicle_track.vehicle_bbox, w, h)
+                )
+                crop_y1 = vy1 if passage["high_angle"] else vy1 + int((vy2 - vy1) * 0.35)
+                vehicle_crop = frame[max(0, crop_y1):min(h, vy2), max(0, vx1):min(w, vx2)]
+                if vehicle_crop.size > 0:
+                    passage["vehicle_crop"] = vehicle_crop.copy()
                 self.tracker.update_related_plate_tracks(track_id, vehicle_track.vehicle_bbox, now)
+
+        if hasattr(self.tracker, "update_visual_tracks"):
+            self.tracker.update_visual_tracks(frame, now)
+        if not hasattr(self, "_lane_last_activity"):
+            self._lane_last_activity = {}
+        for item in tracked_vehicles:
+            self._lane_last_activity[item["lane"]] = now
+        if hasattr(self.tracker, "get_visual_active_lanes"):
+            for lane in self.tracker.get_visual_active_lanes(now):
+                self._lane_last_activity[lane] = now
 
         # 4. Trigger throttled Plate Detection & OCR in background.
         if (
@@ -987,6 +1598,14 @@ class GatePipeline:
             ocr_pool = in_zone_vehicles
             if self._active_zones and (self._ocr_cycle % 3 == 0):
                 ocr_pool = self._zone_fallback_detections(w, h, set())
+            else:
+                physical_ocr_pool = [
+                    item for item in in_zone_vehicles if not item.get("_zone_fallback")
+                ]
+                if physical_ocr_pool:
+                    ocr_pool = physical_ocr_pool
+            for item in ocr_pool:
+                item.setdefault("_video_timecode", video_timecode)
             prioritized_vehicles = self._prioritize_ocr_detections(ocr_pool, now, limit=2)
             asyncio.create_task(
                 self._run_ai_in_background(
@@ -1014,7 +1633,7 @@ class GatePipeline:
             self._fps_counter = 0
             self._last_fps_calc = now
 
-        timecode = self.reader.get_timecode()
+        timecode = video_timecode
 
         return {
             "success": True,
@@ -1070,9 +1689,12 @@ class GatePipeline:
         """Reset passage-local state after a playback seek or source discontinuity."""
         self.tracker.tracks.clear()
         self._recent_events.clear()
+        self._recent_passage_results.clear()
         self._event_ids_by_key.clear()
         self._lane_passages.clear()
         self._lane_fallback_last_ocr.clear()
+        self._lane_last_activity.clear()
+        self._recent_unknown_lanes.clear()
         self._tracking_generation += 1
         self._last_ocr_dispatch = 0.0
         self._ocr_cycle = 0

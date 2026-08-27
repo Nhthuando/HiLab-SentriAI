@@ -1,0 +1,3 @@
+ALTER TABLE "gate_events"
+  ADD COLUMN IF NOT EXISTS "zone_name" VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS "video_timecode" VARCHAR(20);

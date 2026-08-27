@@ -74,16 +74,19 @@ eventsRouter.get('/gate', async (req: Request, res: Response, next: NextFunction
     ]);
 
     const formatted = records.map((r) => {
+      const isUnknown = r.licensePlate === 'UNKNOWN';
       const isKnown = r.status === 'KNOWN';
-      const confPercent = r.confidence ? Math.round(r.confidence * 100) : null;
-      const laneLabel = r.lane === 'IN_2' ? 'Làn IN 2 · Làn phụ' : 'Làn IN 1 · Cổng chính';
+      const confPercent = isUnknown ? null : Math.round(r.confidence * 100);
+      const laneLabel = r.zoneName || (r.lane === 'IN_2' ? 'Làn IN 2 · Làn phụ' : 'Làn IN 1 · Cổng chính');
 
       return {
         id: r.id,
         cameraId: r.cameraId,
         lane: r.lane,
-        licensePlate: r.licensePlate,
-        status: isKnown ? ('quen' as const) : ('la' as const),
+        zoneName: r.zoneName,
+        videoTimecode: r.videoTimecode,
+        licensePlate: isUnknown ? 'Không xác định' : r.licensePlate,
+        status: isUnknown ? ('unknown' as const) : (isKnown ? ('quen' as const) : ('la' as const)),
         dbStatus: r.status,
         confidence: r.confidence,
         cropPath: r.cropPath,
@@ -91,8 +94,8 @@ eventsRouter.get('/gate', async (req: Request, res: Response, next: NextFunction
         eventTimestamp: r.eventTimestamp.toISOString(),
         createdAt: r.createdAt.toISOString(),
         // UI helper properties
-        time: formatTime(new Date(r.eventTimestamp)),
-        plate: r.licensePlate,
+        time: r.videoTimecode || formatTime(new Date(r.eventTimestamp)),
+        plate: isUnknown ? 'Không xác định' : r.licensePlate,
         zone: laneLabel,
         conf: confPercent,
       };
@@ -119,6 +122,8 @@ eventsRouter.post('/gate', async (req: Request, res: Response, next: NextFunctio
       confidence = 0.95,
       cropPath,
       clipPath,
+      zoneName,
+      videoTimecode,
       timestamp,
     } = req.body;
 
@@ -128,15 +133,21 @@ eventsRouter.post('/gate', async (req: Request, res: Response, next: NextFunctio
     }
 
     const normalizedPlate = String(rawPlate).trim().toUpperCase();
+    const isUnknown = normalizedPlate === 'UNKNOWN';
     const isKnown = String(status).toUpperCase() === 'KNOWN' || String(status).toLowerCase() === 'quen';
     const canonicalStatus = isKnown ? 'KNOWN' : 'STRANGER';
-    const confVal = Math.max(0.0, Math.min(1.0, parseFloat(confidence) || 0.95));
+    const parsedConfidence = Number.parseFloat(String(confidence));
+    const confVal = isUnknown
+      ? 0
+      : Math.max(0.0, Math.min(1.0, Number.isFinite(parsedConfidence) ? parsedConfidence : 0.95));
     const eventTime = timestamp ? new Date(timestamp) : new Date();
 
     const created = await prisma.gateEvent.create({
       data: {
         cameraId: String(cameraId),
         lane: String(lane),
+        zoneName: zoneName ? String(zoneName) : null,
+        videoTimecode: videoTimecode ? String(videoTimecode) : null,
         licensePlate: normalizedPlate,
         status: canonicalStatus,
         confidence: confVal,
@@ -147,24 +158,26 @@ eventsRouter.post('/gate', async (req: Request, res: Response, next: NextFunctio
     });
 
     const confPercent = Math.round(confVal * 100);
-    const laneLabel = created.lane === 'IN_2' ? 'Làn IN 2 · Làn phụ' : 'Làn IN 1 · Cổng chính';
+    const laneLabel = created.zoneName || (created.lane === 'IN_2' ? 'Làn IN 2 · Làn phụ' : 'Làn IN 1 · Cổng chính');
 
     const formatted = {
       id: created.id,
       cameraId: created.cameraId,
       lane: created.lane,
-      licensePlate: created.licensePlate,
-      status: isKnown ? ('quen' as const) : ('la' as const),
+      zoneName: created.zoneName,
+      videoTimecode: created.videoTimecode,
+      licensePlate: isUnknown ? 'Không xác định' : created.licensePlate,
+      status: isUnknown ? ('unknown' as const) : (isKnown ? ('quen' as const) : ('la' as const)),
       dbStatus: created.status,
       confidence: created.confidence,
       cropPath: created.cropPath,
       clipPath: created.clipPath,
       eventTimestamp: created.eventTimestamp.toISOString(),
       createdAt: created.createdAt.toISOString(),
-      time: formatTime(new Date(created.eventTimestamp)),
-      plate: created.licensePlate,
+      time: created.videoTimecode || formatTime(new Date(created.eventTimestamp)),
+      plate: isUnknown ? 'Không xác định' : created.licensePlate,
       zone: laneLabel,
-      conf: confPercent,
+      conf: isUnknown ? null : confPercent,
     };
 
     // Broadcast event to connected WebSocket clients via channelManager

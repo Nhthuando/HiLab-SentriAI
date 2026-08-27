@@ -2,7 +2,7 @@ export type TabId = 'mon' | 'area' | 'set' | 'qa';
 export type SettingsSubTab = 'label' | 'zone' | 'obj' | 'theme';
 export type ThemeMode = 'dark' | 'light' | 'system';
 export type AccentColor = 'blue' | 'emerald' | 'cyan' | 'purple' | 'amber';
-export type VehicleStatus = 'quen' | 'la';
+export type VehicleStatus = 'quen' | 'la' | 'unknown';
 export type ObjectKind = 'xe' | 'nguoi';
 
 export interface Vehicle {
@@ -10,7 +10,10 @@ export interface Vehicle {
   type: string;
   visits: number;
   last: string;
+  lastSeenAt?: string;
   tint: string;
+  status?: 'KNOWN' | 'STRANGER';
+  cropPath?: string | null;
 }
 
 export interface GateEvent {

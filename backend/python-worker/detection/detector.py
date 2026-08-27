@@ -36,6 +36,8 @@ COCO_VIETNAMESE_MAPPING: Dict[str, str] = {
 
 
 class YoloDetector:
+    TOP_VIEW_VEHICLE_ALIASES = {"parking meter", "toilet", "suitcase"}
+
     def __init__(
         self,
         model_path: str = "yolo11n.pt",
@@ -45,6 +47,7 @@ class YoloDetector:
         self.model_path = self._resolve_model_path(model_path)
         self.conf_threshold = conf_threshold
         self.target_classes = target_classes or ["car", "truck", "motorcycle", "bus", "person", "bicycle"]
+        self.enable_high_angle_aliases = False
         self.model: Optional[YOLO] = None
         self._load_model()
 
@@ -157,9 +160,19 @@ class YoloDetector:
                     confidence = float(boxes.conf[i].item())
                     class_name = self.model.names.get(cls_id, f"class_{cls_id}")
 
+                    is_high_angle_alias = (
+                        self.enable_high_angle_aliases
+                        and class_name in self.TOP_VIEW_VEHICLE_ALIASES
+                        and self._is_high_angle_vehicle_alias(xyxy, w, h)
+                    )
+
                     # Filter target classes if specified
-                    if self.target_classes and class_name not in self.target_classes:
+                    if self.target_classes and class_name not in self.target_classes and not is_high_angle_alias:
                         continue
+
+                    source_class = class_name
+                    if is_high_angle_alias:
+                        class_name = "truck"
 
                     vietnamese_label = COCO_VIETNAMESE_MAPPING.get(class_name, class_name)
 
@@ -181,12 +194,25 @@ class YoloDetector:
                         "class": class_name,
                         "label": vietnamese_label,
                         "confidence": round(confidence, 3),
+                        "_top_view_alias": is_high_angle_alias,
+                        "_source_class": source_class,
                     })
 
             return detections
         except Exception as exc:
             logger.error("Error during YOLO inference: %s", exc)
             return []
+
+    @staticmethod
+    def _is_high_angle_vehicle_alias(box: List[float], frame_w: int, frame_h: int) -> bool:
+        """Reject ordinary small COCO objects while recovering large top-view vehicles."""
+        if len(box) != 4 or frame_w <= 0 or frame_h <= 0:
+            return False
+        x1, y1, x2, y2 = [float(value) for value in box]
+        width = max(1.0, x2 - x1)
+        height = max(1.0, y2 - y1)
+        area_ratio = (width * height) / float(frame_w * frame_h)
+        return height >= width * 1.15 and y2 >= frame_h * 0.80 and area_ratio >= 0.045
 
     @staticmethod
     def crop_bbox(frame: np.ndarray, bbox: List[int]) -> Optional[np.ndarray]:

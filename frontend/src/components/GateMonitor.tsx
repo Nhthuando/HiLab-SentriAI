@@ -1,12 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { GateEvent, PolygonZone } from '../types';
 import { useCameraFeed } from '../hooks/useCameraFeed';
 import { useWebSocket } from '../hooks/useWebSocket';
-import { getGateEvents } from '../api/events';
+import { getCropImageUrl, getGateEvents } from '../api/events';
 import { getCameraPlayback, seekCamera } from '../api/zones';
 
 interface GateMonitorProps {
-  clock: string;
   zones: PolygonZone[];
   events: GateEvent[];
   labels: Record<string, 'quen' | 'la'>;
@@ -14,12 +14,17 @@ interface GateMonitorProps {
 
 function normalizeGateEvent(raw: any): GateEvent | null {
   if (!raw || typeof raw !== 'object') return null;
-  const plate = raw.plate || raw.licensePlate;
+  const rawPlate = raw.plate || raw.licensePlate;
+  const isUnknown = rawPlate === 'UNKNOWN' || raw.status === 'unknown';
+  const plate = isUnknown ? 'Không xác định' : rawPlate;
   if (!plate || plate === '—' || plate === 'â€”') return null;
   const rawStatus = raw.status;
-  const status: 'quen' | 'la' = rawStatus === 'KNOWN' || rawStatus === 'quen' ? 'quen' : 'la';
-  const confidence =
-    typeof raw.conf === 'number'
+  const status: 'quen' | 'la' | 'unknown' = isUnknown
+    ? 'unknown'
+    : rawStatus === 'KNOWN' || rawStatus === 'quen' ? 'quen' : 'la';
+  const confidence = isUnknown
+    ? null
+    : typeof raw.conf === 'number'
       ? raw.conf
       : typeof raw.confidence === 'number'
         ? Math.round(raw.confidence * 100)
@@ -27,9 +32,9 @@ function normalizeGateEvent(raw: any): GateEvent | null {
 
   return {
     id: raw.id || `${plate}-${raw.time || Date.now()}`,
-    time: raw.time || new Date().toTimeString().slice(0, 5),
+    time: raw.videoTimecode || raw.time || '00:00',
     plate,
-    zone: raw.zone || (raw.lane === 'IN_2' ? 'Làn IN 2 · Làn phụ' : 'Làn IN 1 · Cổng chính'),
+    zone: raw.zoneName || raw.zone || (raw.lane === 'IN_2' ? 'Làn IN 2 · Làn phụ' : 'Làn IN 1 · Cổng chính'),
     conf: confidence,
     status,
     clipPath: raw.clipPath ?? null,
@@ -56,7 +61,7 @@ function mergeGateEvent(prev: GateEvent[], next: GateEvent): GateEvent[] {
   return merged;
 }
 
-export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: initialEvents, labels }) => {
+export const GateMonitor: React.FC<GateMonitorProps> = ({ zones, events: initialEvents, labels }) => {
   const [liveEvents, setLiveEvents] = useState<GateEvent[]>(initialEvents);
   const [hoveredEventId, setHoveredEventId] = useState<string | null>(null);
   const [hoveredPlate, setHoveredPlate] = useState<string | null>(null);
@@ -64,6 +69,7 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
   const [searchFilter, setSearchFilter] = useState<string>('');
   const [playback, setPlayback] = useState({ seekable: false, positionMs: 0, durationMs: 0 });
   const [isSeeking, setIsSeeking] = useState(false);
+  const [selectedCrop, setSelectedCrop] = useState<{ plate: string; url: string } | null>(null);
 
   // 1. Live Video Feed from WebSocket proxy (/ws/feed/gate)
   const {
@@ -115,6 +121,9 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
     const secs = total % 60;
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
+  const displayedTimecode = playback.seekable
+    ? formatDuration(playback.positionMs)
+    : (/^\d{1,3}:\d{2}$/.test(timecode || '') ? timecode : '00:00');
 
   const handleSeekCommit = (value: number) => {
     setIsSeeking(false);
@@ -207,9 +216,11 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
     return liveEvents.filter((e) => {
       // 1. Status Filter
       if (filterMode === 'la') {
+        if (e.status === 'unknown') return false;
         const isKnown = (labels[e.plate] || e.status) === 'quen';
         if (isKnown && e.plate !== '—') return false;
       } else if (filterMode === 'quen') {
+        if (e.status === 'unknown') return false;
         const isKnown = (labels[e.plate] || e.status) === 'quen';
         if (!isKnown) return false;
       }
@@ -289,6 +300,46 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
       >
         {/* Left: Feed & Controls */}
         <div>
+          <div
+            className="glass-panel"
+            style={{
+              borderRadius: '8px',
+              padding: '8px 12px',
+              marginBottom: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <span
+                className={isOnline ? 'animate-live' : ''}
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: isOnline ? 'var(--p0)' : 'var(--ink3)',
+                  display: 'inline-block',
+                }}
+              />
+              <span style={{ fontSize: '11.5px', fontWeight: 700, color: isOnline ? 'var(--p0)' : 'var(--ink3)' }}>
+                {isOnline ? 'TRỰC TIẾP' : 'NGOẠI TUYẾN'}
+              </span>
+              <span style={{ color: 'var(--line2)' }}>|</span>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink)' }}>
+                GATE-01 · Làn xe vào chính
+              </span>
+              <span style={{ fontSize: '10.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink3)' }}>
+                {frameWidth}x{frameHeight} · {fps.toFixed(0)} FPS
+              </span>
+            </div>
+            <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink)', fontWeight: 600 }}>
+              {displayedTimecode}
+            </span>
+          </div>
+
           {/* Feed Container */}
           <div
             style={{
@@ -390,66 +441,6 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
               </div>
             )}
 
-            {/* Top Floating Glass HUD Bar */}
-            <div
-              className="glass-panel"
-              style={{
-                position: 'absolute',
-                left: '12px',
-                right: '12px',
-                top: '12px',
-                borderRadius: '10px',
-                padding: '8px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                zIndex: 20,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span
-                  className={isOnline ? 'animate-live' : ''}
-                  style={{
-                    width: '8px',
-                    height: '8px',
-                    borderRadius: '50%',
-                    backgroundColor: isOnline ? 'var(--p0)' : 'var(--ink3)',
-                    display: 'inline-block',
-                  }}
-                />
-                <span
-                  style={{
-                    fontSize: '11.5px',
-                    fontWeight: 700,
-                    color: isOnline ? 'var(--p0)' : 'var(--ink3)',
-                    letterSpacing: '0.04em',
-                  }}
-                >
-                  {isOnline ? 'TRỰC TIẾP' : 'NGOẠI TUYẾN'}
-                </span>
-                <span style={{ color: 'var(--line2)' }}>|</span>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: '#ffffff' }}>GATE-01 · Làn xe vào chính</span>
-                <span
-                  style={{
-                    fontSize: '10.5px',
-                    fontFamily: 'var(--font-mono)',
-                    color: 'var(--ink3)',
-                    backgroundColor: 'rgba(255,255,255,0.06)',
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                  }}
-                >
-                  {frameWidth}x{frameHeight} · {fps.toFixed(0)} FPS
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--ink)', fontWeight: 600 }}>
-                  {timecode || clock}
-                </span>
-              </div>
-            </div>
-
             {/* SVG Polygon Zones */}
             <svg
               viewBox="0 0 100 100"
@@ -517,12 +508,14 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
               const heightPct = isNorm ? (y2 - y1) * 100 : isPct ? (y2 - y1) : ((y2 - y1) / frameHeight) * 100;
 
               const plateText = (det as any).plate || '';
-              const isStranger = (det as any).lpr_status === 'STRANGER';
+              const rawConf = Number((det as any).confidence ?? (det as any).conf ?? 0.95);
+              const confPercent = Math.round(rawConf <= 1.0 ? rawConf * 100 : rawConf);
+              const isStranger = labels[plateText] !== 'quen';
               const isBoxHovered = plateText && (hoveredPlate === plateText || hoveredEventId === plateText);
 
               return (
                 <div
-                  key={`det-${idx}`}
+                  key={(det as any).track_id || `det-${idx}`}
                   onMouseEnter={() => plateText && setHoveredPlate(plateText)}
                   onMouseLeave={() => setHoveredPlate(null)}
                   style={{
@@ -565,6 +558,18 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
                       }}
                     >
                       <span>{plateText}</span>
+                      <span
+                        style={{
+                          fontSize: '9.5px',
+                          padding: '1px 5px',
+                          borderRadius: '3px',
+                          backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                          color: confPercent >= 85 ? 'var(--ok)' : 'var(--cyan)',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {confPercent}%
+                      </span>
                       <span
                         style={{
                           fontSize: '9px',
@@ -814,7 +819,8 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
               </div>
             ) : (
               filteredEvents.map((ev) => {
-                const isStranger = (labels[ev.plate] || ev.status) === 'la';
+                const isUnknown = ev.status === 'unknown';
+                const isStranger = !isUnknown && labels[ev.plate] !== 'quen';
                 const isHovered = hoveredEventId === ev.id || hoveredPlate === ev.plate;
 
                 return (
@@ -850,6 +856,36 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
                       >
                         {ev.time}
                       </div>
+
+                      {ev.cropPath ? (
+                        <button
+                          type="button"
+                          title={`Xem ảnh crop biển số ${ev.plate}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedCrop({ plate: ev.plate, url: getCropImageUrl(ev.cropPath) });
+                          }}
+                          style={{
+                            width: '46px',
+                            height: '30px',
+                            padding: 0,
+                            border: '1px solid var(--line2)',
+                            borderRadius: '5px',
+                            overflow: 'hidden',
+                            backgroundColor: 'var(--raise)',
+                            cursor: 'pointer',
+                            flexShrink: 0,
+                          }}
+                        >
+                          <img
+                            src={getCropImageUrl(ev.cropPath)}
+                            alt={`Biển số ${ev.plate}`}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                          />
+                        </button>
+                      ) : (
+                        <div style={{ width: '46px', height: '30px', borderRadius: '5px', backgroundColor: 'var(--raise)' }} />
+                      )}
 
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -892,12 +928,12 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
                           fontWeight: 700,
                           padding: '3px 8px',
                           borderRadius: '12px',
-                          backgroundColor: isStranger ? 'var(--p0q)' : 'var(--okq)',
-                          color: isStranger ? 'var(--p0)' : 'var(--ok)',
-                          border: `1px solid ${isStranger ? 'var(--p0)' : 'var(--ok)'}`,
+                          backgroundColor: isUnknown ? 'var(--raise)' : (isStranger ? 'var(--p0q)' : 'var(--okq)'),
+                          color: isUnknown ? 'var(--ink2)' : (isStranger ? 'var(--p0)' : 'var(--ok)'),
+                          border: `1px solid ${isUnknown ? 'var(--line2)' : (isStranger ? 'var(--p0)' : 'var(--ok)')}`,
                         }}
                       >
-                        {isStranger ? 'Xe lạ' : 'Xe quen'}
+                        {isUnknown ? 'Không xác định' : (isStranger ? 'Xe lạ' : 'Xe quen')}
                       </span>
                     </div>
                   </div>
@@ -907,6 +943,48 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ clock, zones, events: 
           </div>
         </div>
       </div>
+      {selectedCrop && createPortal((
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Ảnh crop biển số ${selectedCrop.plate}`}
+          onClick={() => setSelectedCrop(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 200,
+            backgroundColor: 'rgba(0,0,0,0.72)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+          }}
+        >
+          <div
+            className="glass-panel"
+            onClick={(event) => event.stopPropagation()}
+            style={{ width: 'min(680px, 100%)', padding: '12px', borderRadius: '8px' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <strong style={{ color: 'var(--ink)', fontFamily: 'var(--font-mono)' }}>{selectedCrop.plate}</strong>
+              <button
+                type="button"
+                onClick={() => setSelectedCrop(null)}
+                title="Đóng ảnh"
+                aria-label="Đóng ảnh"
+                style={{ border: 0, background: 'transparent', color: 'var(--ink)', cursor: 'pointer', fontSize: '20px' }}
+              >
+                ×
+              </button>
+            </div>
+            <img
+              src={selectedCrop.url}
+              alt={`Ảnh crop biển số ${selectedCrop.plate}`}
+              style={{ width: '100%', maxHeight: '70vh', objectFit: 'contain', display: 'block' }}
+            />
+          </div>
+        </div>
+      ), document.body)}
     </div>
   );
 };

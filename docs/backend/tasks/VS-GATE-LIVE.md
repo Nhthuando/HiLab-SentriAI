@@ -31,6 +31,15 @@
 
   - 2026-08-21T09:25:00+07:00 | backend_verified -> in_progress | upgrading vehicle detection to YOLO11n and correcting bbox, label and threshold regressions | team1-backend
   - 2026-08-21T10:22:00+07:00 | in_progress -> backend_verified | YOLO11n CUDA replay, passage finalization, stable bbox and DB-owned labels verified | team1-backend
+  - 2026-08-25T00:00:00+07:00 | backend_verified -> in_progress | restricting unread events to real plate-region evidence and deduplicating fragmented unread passages | team1-backend
+  - 2026-08-26T14:56:00+07:00 | in_progress -> backend_verified | exact plate-crop unread gating, branding rejection and overlapping-fragment suppression verified | team1-backend
+  - 2026-08-26T15:10:00+07:00 | backend_verified -> in_progress | reverting unread-evidence experiment and restoring the previously stable OCR/tracking path | team1-backend
+  - 2026-08-26T15:25:00+07:00 | in_progress -> backend_verified | stable OCR/tracking restored; unknown output limited to localized plate crops below the configured threshold | team1-backend
+  - 2026-08-26T16:20:00+07:00 | backend_verified -> in_progress | recovering low-confidence plate localization in Gate-Out and stabilizing confirmed stationary fallback overlays without changing accepted OCR candidates | team1-backend
+  - 2026-08-26T17:05:00+07:00 | in_progress -> backend_verified | isolated unread plate localization and stationary fallback overlay grace verified against Gate-Out and Gate-In replays | team1-backend
+  - 2026-08-26T18:35:00+07:00 | backend_verified -> in_progress | replacing timer-only fallback with frame-validated visual plate tracking and stable low-detector OCR recovery | team1-backend
+  - 2026-08-27T02:30:00+07:00 | in_progress -> backend_verified | fixed-size OCR-anchored bbox tracking, stationary high-angle geometry recovery and Gate-Out dark rear-text localization verified | team1-backend
+  - 2026-08-27T03:15:00+07:00 | backend_verified -> backend_verified | detector-first provisional bbox, delayed-OCR track reattachment and parent-bound overlay expiry verified | team1-backend
 
 ## Inputs and dependencies
 
@@ -324,5 +333,13 @@
 - 2026-08-21 decision: Publish a plate bbox only after spatial confirmation, retain the highest-confidence published snapshot, and reject implausibly vertical latch/pillar boxes.
 - 2026-08-21 decision: Passage finalization applies the user threshold inclusively to the best observation; a valid single-frame fast-vehicle read is retained after the passage closes.
 - Accepted limitation: Historical wrong events already stored before this fix are preserved; no existing database records were deleted or rewritten.
+- 2026-08-26 decision: An unread gate event requires a detector-localized rear plate crop plus plate-like OCR evidence; vehicle crops, short logos and branding without enough digits are never persisted as `UNKNOWN`.
+- 2026-08-26 evidence: 67 focused LPR/stream/database tests passed; live replay from 03:50 through 04:50 produced no false unread event for the previously captured `TM` and `VẬN TẢI TRÀNG AN` regions. Runtime remained healthy at 1600x900 on YOLO11n CUDA.
+- 2026-08-26 superseding decision: Restore the established valid-candidate and tracker path without injecting low-quality evidence candidates. Emit `UNKNOWN` only from an actual localized plate crop whose accepted OCR result is below the user-configured event threshold; a vehicle/body crop alone never creates an unread event.
+- 2026-08-26 evidence: 65 focused LPR, stream, tracking and gate-event tests passed. Live worker and API health checks passed with GATE-01 at 1600x900, YOLO11n CUDA and FastALPR CUDA.
+- 2026-08-26 decision: A failed standard OCR scan may run one detector-only 15% rear-plate localization pass on a physical vehicle. The localized crop can support one `UNKNOWN` passage but never becomes an OCR candidate or tracking vote. Confirmed absolute zone-fallback overlays use a 2.4-second grace period; physical tracks retain the existing 1.2-second expiry.
+- 2026-08-26 evidence: 69 focused tests passed. Offline 1600x900 CUDA replay detected Gate-Out `16R-119.86` at 100%; Gate-In replay rendered `15RM-032.88` for 58 consecutive frames and stationary `15R-102.53` for 223 consecutive frames with zero frame gaps. A live replay confirmed that detector-only evidence no longer emits `UNKNOWN` before the later valid plate result.
+- 2026-08-27 decision: Restore raw-first ALPR for ordinary physical vehicles so supplementary unread localization cannot reduce clear-plate accuracy. Keep the supplementary pre-pass limited to zone fallback and high-angle vehicles. Physical overlays expire after 1.0 second without their parent vehicle; confirmed zone-fallback overlays retain a 2.4-second bridge across OCR cycles so stationary plates remain visible without flicker.
+- 2026-08-27 evidence: 7 focused bbox/visual-tracking tests passed and `gate_pipeline.py`, `lpr.py`, and `plate_tracker.py` compiled successfully. Coverage verifies fixed bbox dimensions, stationary tracking, provisional lifecycle, late-OCR expiry, parent-vehicle expiry, and zone-fallback bridging.
 - Blocker: none
 - Exact next action: User replay validation in the running frontend; retain original-resolution imports when the plate occupies fewer than roughly 20 pixels in the compressed image.

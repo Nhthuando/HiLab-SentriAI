@@ -39,6 +39,8 @@ model GateEvent {
   id             String   @id @default(uuid()) @db.Uuid
   cameraId       String   @db.VarChar(50) @map("camera_id")
   lane           String   @db.VarChar(20)
+  zoneName       String?  @db.VarChar(100) @map("zone_name")
+  videoTimecode  String?  @db.VarChar(20) @map("video_timecode")
   licensePlate   String   @db.VarChar(20) @map("license_plate")
   status         String   @db.VarChar(20)
   confidence     Float    @db.Real
