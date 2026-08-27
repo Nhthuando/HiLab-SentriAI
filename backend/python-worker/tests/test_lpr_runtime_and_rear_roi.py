@@ -445,7 +445,7 @@ def test_plate_tracker_collapses_duplicate_bboxes_to_one_vehicle_result():
     ]
 
     for plate, plate_bbox, conf, ts in reads:
-        tracker.update_track(
+        track = tracker.update_track(
             track_id=track_id,
             vehicle_bbox=vehicle_bbox,
             plate_bbox=plate_bbox,
@@ -454,6 +454,7 @@ def test_plate_tracker_collapses_duplicate_bboxes_to_one_vehicle_result():
             conf=conf,
             now=ts,
         )
+        track.last_vehicle_seen = ts
 
     detections = tracker.get_live_detections(now + 1.10)
     assert len(detections) == 1
@@ -482,7 +483,11 @@ def test_single_late_wrong_read_cannot_emit_before_stable_green_truck_plate():
     )
     track = tracker.tracks[track_id]
     assert not track.should_emit_event(268.60)
-    assert tracker.get_live_detections(268.60) == []
+    early = tracker.get_live_detections(268.60)
+    assert len(early) == 1
+    assert early[0]["plate"] == ""
+    assert early[0]["lpr_status"] == "SCANNING"
+    assert not early[0]["is_locked"]
 
     tracker.update_track(
         track_id=track_id,
@@ -495,7 +500,9 @@ def test_single_late_wrong_read_cannot_emit_before_stable_green_truck_plate():
     )
     assert track.best_plate == "16R-102.53"
     assert not track.should_emit_event(269.00)
-    assert tracker.get_live_detections(269.00) == []
+    early = tracker.get_live_detections(269.00)
+    assert len(early) == 1
+    assert early[0]["plate"] == ""
 
     tracker.update_track(
         track_id=track_id,
@@ -510,6 +517,7 @@ def test_single_late_wrong_read_cannot_emit_before_stable_green_truck_plate():
     assert track.best_conf == 0.95
     assert not track.should_emit_event(269.40)
     assert track.should_emit_event(270.20)
+    track.last_vehicle_seen = 270.0
     assert tracker.get_live_detections(270.20)[0]["plate"] == "16R-102.53"
 
 
@@ -870,6 +878,74 @@ def test_fragmented_tracks_in_same_lane_passage_emit_only_one_event():
         assert sum(track.event_emitted for track in pipeline.tracker.tracks.values()) == 2
 
     asyncio.run(exercise())
+
+
+def test_overlapping_track_after_event_reuses_passage_and_frozen_best_plate():
+    from detection.gate_pipeline import GatePipeline
+
+    pipeline = GatePipeline.__new__(GatePipeline)
+    pipeline.tracker = PlateTracker()
+    pipeline._lane_passages = {}
+    pipeline._next_passage_id = 2
+
+    original = pipeline.tracker.update_track(
+        "V001",
+        [650, 330, 1590, 895],
+        [1386, 721, 1442, 770],
+        "15RM-032.98",
+        "STRANGER",
+        0.99,
+        100.0,
+    )
+    original.lane = "IN_1"
+    original.passage_id = "P00001"
+    original.mark_event_emitted()
+    passage = {
+        "id": "P00001",
+        "last_seen": 100.0,
+        "event_plate": "15RM-032.98",
+        "aggregate_track": original,
+        "best_plate": "15RM-032.98",
+        "best_confidence": 0.99,
+        "last_vehicle_bbox": [650, 330, 1590, 895],
+        "lane": "IN_1",
+    }
+    pipeline._lane_passages["V001"] = passage
+
+    fragment = pipeline.tracker.update_track(
+        "V002",
+        [670, 340, 1580, 895],
+        None,
+        "",
+        "SCANNING",
+        0.0,
+        102.0,
+    )
+    fragment.lane = "IN_1"
+
+    reused = pipeline._touch_vehicle_passage("V002", "IN_1", 102.0, fragment)
+
+    assert reused is passage
+    assert fragment.event_emitted
+    assert fragment.best_plate == "15RM-032.98"
+    assert fragment.best_conf == 0.99
+
+
+def test_receding_plate_variant_is_deduped_for_long_stationary_passage():
+    from detection.gate_pipeline import GatePipeline
+
+    pipeline = GatePipeline.__new__(GatePipeline)
+    pipeline._recent_passage_results = [
+        {
+            "plate": "15RM03298",
+            "confidence": 0.99,
+            "lane": "IN_1",
+            "timestamp": 100.0,
+        }
+    ]
+
+    assert pipeline._is_recent_passage_variant("15RM-032.68", "IN_1", 190.0)
+    assert not pipeline._is_recent_passage_variant("15R-158.45", "IN_1", 190.0)
 
 
 def test_emitted_track_freezes_overlay_and_rejects_later_ocr_variants():
@@ -1320,6 +1396,7 @@ def test_configured_fifty_percent_threshold_keeps_best_fifty_one_percent_result(
 
     track = tracker.tracks[track_id]
     assert track.best_conf == 0.51
+    track.last_vehicle_seen = 915.2
     assert tracker.get_live_detections(915.6, min_confidence=0.50)[0]["confidence"] == 0.51
     assert tracker.get_live_detections(915.6, min_confidence=0.52) == []
 
@@ -1402,7 +1479,7 @@ def test_lower_confidence_variant_cannot_replace_published_live_plate():
     assert tracker.get_live_detections(922.0, 0.50)[0]["plate"] == "15RM-032.88"
 
     for index, now in enumerate((922.2, 922.6, 923.0)):
-        tracker.update_track(
+        track = tracker.update_track(
             track_id="V001",
             vehicle_bbox=vehicle_bbox,
             plate_bbox=[1386, 721, 1442, 770],
@@ -1411,6 +1488,7 @@ def test_lower_confidence_variant_cannot_replace_published_live_plate():
             conf=0.93,
             now=now,
         )
+        track.last_vehicle_seen = now
 
     assert tracker.get_live_detections(923.2, 0.50)[0]["plate"] == "15RM-032.88"
 
@@ -1440,6 +1518,28 @@ def test_fragmented_tracks_in_one_passage_publish_only_best_confirmed_bbox():
 
     assert len(detections) == 1
     assert compute_iou(detections[0]["bbox"], boxes["V002"][0]) >= 0.95
+
+
+def test_first_valid_plate_observation_publishes_unlabeled_bbox_immediately():
+    tracker = PlateTracker()
+    track = tracker.update_track(
+        "V001",
+        [650, 330, 1590, 895],
+        [1386, 721, 1442, 770],
+        "15R-102.53",
+        "STRANGER",
+        0.91,
+        930.0,
+    )
+    track.lane = "IN_1"
+
+    detections = tracker.get_live_detections(930.1, 0.95)
+
+    assert len(detections) == 1
+    assert detections[0]["bbox"] == [1386, 721, 1442, 770]
+    assert detections[0]["plate"] == ""
+    assert detections[0]["lpr_status"] == "SCANNING"
+    assert not detections[0]["is_locked"]
 
 
 def test_vehicle_motion_translation_preserves_plate_bbox_size_and_aspect():
@@ -1817,7 +1917,7 @@ def test_confirmed_zone_fallback_bbox_bridges_ocr_cycles_but_still_expires():
     assert tracker.get_live_detections(202.5, 0.50) == []
 
 
-def test_localized_unread_passage_waits_for_later_valid_plate_before_unknown():
+def test_localized_unread_passage_without_valid_ocr_is_filtered_not_unknown():
     from detection.gate_pipeline import GatePipeline
 
     async def exercise():
@@ -1871,8 +1971,8 @@ def test_localized_unread_passage_waits_for_later_valid_plate_before_unknown():
         pipeline.tracker.tracks.clear()
         pipeline._schedule_ready_passage_events(316.0)
         await asyncio.sleep(0)
-        assert len(captured) == 1
-        assert captured[0]["plate"] == "UNKNOWN"
+        assert captured == []
+        assert pipeline._lane_passages["V001"]["filtered"] is True
 
     asyncio.run(exercise())
 

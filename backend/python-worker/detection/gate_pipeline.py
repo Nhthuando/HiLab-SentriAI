@@ -605,9 +605,12 @@ class GatePipeline:
                 if not passage_id or passage_id in seen_passages:
                     continue
                 seen_passages.add(passage_id)
-                if candidate.get("event_plate") or candidate.get("filtered"):
+                if candidate.get("filtered"):
                     continue
-                if candidate.get("lane") != lane or (now - float(candidate.get("last_seen", 0.0))) > 4.0:
+                candidate_age = now - float(candidate.get("last_seen", 0.0))
+                candidate_emitted = bool(candidate.get("event_plate"))
+                max_candidate_age = 8.0 if candidate_emitted else 4.0
+                if candidate.get("lane") != lane or candidate_age > max_candidate_age:
                     continue
                 aggregate = candidate.get("aggregate_track")
                 aggregate_plate = self._compact_plate(getattr(aggregate, "best_plate", ""))
@@ -636,9 +639,35 @@ class GatePipeline:
                     and (now - float(candidate.get("last_seen", 0.0))) <= 1.0
                     and strong_iou_match
                 )
-                if (same_plate and spatial_match) or track_fragment_without_plate:
+                emitted_track_continuation = (
+                    candidate_emitted
+                    and candidate_age <= 4.0
+                    and strong_iou_match
+                )
+                if (
+                    (same_plate and spatial_match)
+                    or track_fragment_without_plate
+                    or emitted_track_continuation
+                ):
                     passage = candidate
                     self._lane_passages[track_id] = passage
+                    emitted_plate = str(
+                        candidate.get("best_plate")
+                        or candidate.get("event_plate")
+                        or ""
+                    )
+                    if (
+                        candidate_emitted
+                        and emitted_plate
+                        and emitted_plate != "UNKNOWN"
+                    ):
+                        track.best_plate = emitted_plate
+                        track.plate = emitted_plate
+                        track.best_conf = float(candidate.get("best_confidence", 0.0))
+                        aggregate = candidate.get("aggregate_track")
+                        if aggregate is not None:
+                            track.status = aggregate.status
+                        track.mark_event_emitted()
                     break
         if passage is None or (now - float(passage["last_seen"])) > 6.0:
             passage = {
@@ -711,7 +740,7 @@ class GatePipeline:
         duplicate = False
         for result in getattr(self, "_recent_passage_results", []):
             age = now - float(result["timestamp"])
-            if age > 45.0:
+            if age > 120.0:
                 continue
             recent.append(result)
             if result["lane"] == lane and self._plate_edit_distance(compact, result["plate"]) <= 2:
@@ -1341,6 +1370,10 @@ class GatePipeline:
                 )
                 if lane_last_activity > 0.0 and (now - lane_last_activity) < 2.0:
                     continue
+                # Geometry/detector localization without a valid OCR plate is
+                # not enough evidence for UNKNOWN (road dividers can look like plates).
+                passage["filtered"] = True
+                continue
             if (
                 int(passage.get("vehicle_observations", 3)) < 3
                 or (
@@ -1352,7 +1385,7 @@ class GatePipeline:
             aggregate = passage.get("aggregate_track")
             crop = passage.get("crop")
             if aggregate is None:
-                self._emit_unknown_passage(passage, now)
+                passage["filtered"] = True
                 continue
             if crop is None or crop.size == 0 or not aggregate.has_finalizable_plate(now):
                 if (now - float(passage["last_seen"])) >= 4.5:
@@ -1362,7 +1395,7 @@ class GatePipeline:
             confidence = float(passage.get("best_confidence", aggregate.best_conf))
             compact_p = self._compact_plate(plate)
             if not compact_p:
-                self._emit_unknown_passage(passage, now)
+                passage["filtered"] = True
                 continue
             if self._is_recent_passage_variant(plate, passage["lane"], now):
                 passage["event_plate"] = plate

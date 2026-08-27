@@ -1139,6 +1139,31 @@ class PlateTracker:
                     if group_key not in active_by_passage or rank > active_by_passage[group_key][0]:
                         active_by_passage[group_key] = (rank, detection)
 
+            # Show the first valid plate localization immediately, but keep it
+            # unlabeled until temporal confirmation. This reduces bbox latency
+            # without publishing an unstable OCR string or journal event.
+            early_plate_box = (
+                track.plate_bbox
+                and track.best_plate
+                and not track.display_confirmed
+                and (now - track.last_plate_seen) <= 1.2
+                and (now - parent_seen) <= max_track_age
+            )
+            if early_plate_box:
+                detection = {
+                    "class": "license_plate",
+                    "bbox": list(track.plate_bbox),
+                    "plate": "",
+                    "lpr_status": "SCANNING",
+                    "confidence": 0.0,
+                    "is_locked": False,
+                    "track_id": track.track_id,
+                }
+                group_key = str(getattr(track, "passage_id", None) or track.track_id)
+                rank = (-1, int(track.bbox_confirmation_count), float(track.best_bbox_quality))
+                if group_key not in active_by_passage or rank > active_by_passage[group_key][0]:
+                    active_by_passage[group_key] = (rank, detection)
+
             provisional_alive = (
                 not track.best_plate
                 and track.provisional_plate_bbox is not None
