@@ -23,3 +23,6 @@ __all__ = [
     "evaluate_zone_rule",
     "resolve_candidate_labels",
 ]
+from zone.activity_tracker import ActivityTracker, ActivityTransition
+
+__all__ = ["ActivityTracker", "ActivityTransition"]
