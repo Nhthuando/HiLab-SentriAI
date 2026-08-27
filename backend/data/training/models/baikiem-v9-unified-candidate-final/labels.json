@@ -1,0 +1,12 @@
+{
+  "person": "person",
+  "car": "car",
+  "truck": "truck",
+  "forklift": "forklift",
+  "reach_stacker": "reach_stacker",
+  "Người": "person",
+  "Xe con": "car",
+  "Xe tải": "truck",
+  "Xe nâng": "forklift",
+  "Xe nâng container": "reach_stacker"
+}

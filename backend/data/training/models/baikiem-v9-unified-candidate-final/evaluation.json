@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "runtimeMode": "UNIFIED",
+  "evaluationSplit": "locked-test",
+  "artifactSha256": "3772e978fc4635a6a2d3dffb59286bd89c0ebbc6cc6e27dc77532b5006eaab52",
+  "datasetContentHash": "18421ca1738e9c5f272ee842d69755950324d31307d0c517860b68b322a3f4b1",
+  "thresholdsSha256": "5eee97ee3799fb1468dde249f02c0cf5f8b2d9ecfeb2bced382c0eb898ca59b1",
+  "lockedDatasetContentHash": "da97164b8f9e5b786be0925d2517c96137606430e4077957ec8a191998cdf205",
+  "classes": [
+    "person",
+    "car",
+    "truck",
+    "forklift",
+    "reach_stacker"
+  ],
+  "validation": {
+    "imageSize": 768,
+    "precision": 0.733437,
+    "recall": 0.784167,
+    "f1": 0.757954,
+    "tp": 941,
+    "fp": 342,
+    "fn": 259,
+    "macroMap50To95": 0.493873
+  },
+  "lockedTest": {
+    "usedOnce": true,
+    "reviewComplete": true,
+    "frameCount": 200,
+    "precision": 0.713942,
+    "recall": 0.810368,
+    "f1": 0.759105,
+    "tp": 594,
+    "fp": 238,
+    "fn": 139,
+    "macroMap50To95": 0.544823
+  },
+  "runtimeBenchmark": {
+    "sourceFile": "KiemHoa-Hik (2).mp4",
+    "gpu": "NVIDIA GeForce RTX 3050 Laptop GPU",
+    "imageSize768Fps": 21.181,
+    "imageSize896Fps": 19.715,
+    "targetFps": 8.0,
+    "passed": true
+  },
+  "manualProductionApproval": {
+    "approved": true,
+    "approvedBy": "project-owner",
+    "approvedAt": "2026-08-26T10:17:46.3100696Z",
+    "reason": "Owner accepted current V9 metrics for production video testing",
+    "allowPartialUnified": true,
+    "artifactSha256": "3772e978fc4635a6a2d3dffb59286bd89c0ebbc6cc6e27dc77532b5006eaab52",
+    "datasetContentHash": "18421ca1738e9c5f272ee842d69755950324d31307d0c517860b68b322a3f4b1"
+  },
+  "baseRegression": {
+    "passed": true,
+    "scope": "targeted pre-activation runtime regression",
+    "pythonTestsPassed": 90,
+    "nodeChecks": [
+      "model activation gate",
+      "detection taxonomy",
+      "label capabilities",
+      "TypeScript typecheck"
+    ],
+    "unified896EndToEndFps": 15.233,
+    "verifiedAt": "2026-08-26T10:17:46.3100696Z"
+  },
+  "validationGate": {
+    "passed": false,
+    "failures": [
+      "macro precision, recall and F1 are below 0.90",
+      "one or more supported classes are below the 0.85 precision/recall floor",
+      "validation macro mAP50-95 is below 0.55",
+      "only 5 of the 10 canonical V9 classes have reviewed training data"
+    ]
+  },
+  "activationGate": {
+    "passed": false,
+    "reason": "LOCKED_ACCEPTANCE_FAILED"
+  },
+  "qualityGate": {
+    "passed": false,
+    "failures": [
+      "validation acceptance failed",
+      "locked macro precision and recall are below 0.90",
+      "locked macro mAP50-95 is below 0.55",
+      "per-camera and temporal acceptance are incomplete"
+    ]
+  }
+}

@@ -58,3 +58,14 @@ Thumbs.db
 *.swp
 
 improve.md
+
+# Production V9 runtime bundle required by GitHub clones
+!backend/data/training/
+backend/data/training/*
+!backend/data/training/models/
+backend/data/training/models/*
+!backend/data/training/models/baikiem-v9-unified-candidate-final/
+!backend/data/training/models/baikiem-v9-unified-candidate-final/best.pt
+!backend/data/training/models/baikiem-v9-unified-candidate-final/labels.json
+!backend/data/training/models/baikiem-v9-unified-candidate-final/evaluation.json
+!backend/data/training/models/baikiem-v9-unified-candidate-final/training-receipt.json
