@@ -12,6 +12,7 @@ Coordinates:
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import os
 import time
@@ -22,9 +23,13 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 import cv2
 
 from db.repositories import (
+    close_area_activity_session,
     close_zone_violation,
+    create_area_activity_session,
     create_zone_violation,
+    delete_area_activity_sessions,
     delete_zone_violations,
+    touch_area_activity_collection,
 )
 from detection.area_event_queue import AreaEventQueue, RetryableAreaTransitionError
 from detection.event_clip_service import EventClipGenerator, EventClipService
@@ -33,6 +38,7 @@ from stream.emitter import StreamEmitter
 from stream.reader import StreamReader
 from stream.rolling_archive import RollingArchive
 from zone.zone_checker import ViolationTransition, ZoneChecker
+from zone.activity_tracker import ActivityTracker, ActivityTransition
 from zone.zone_sync import ZoneSnapshot, ZoneSynchronizer
 
 logger = logging.getLogger("sentriai.area.pipeline")
@@ -51,6 +57,38 @@ class RepositoryAreaPersistence:
         return await delete_zone_violations(camera_id)
 
 
+class RepositoryActivityPersistence:
+    """Activity metadata adapter kept independent from violation persistence."""
+
+    async def create(self, **payload: Any) -> Any:
+        return await create_area_activity_session(**payload)
+
+    async def close(self, **payload: Any) -> Any:
+        return await close_area_activity_session(**payload)
+
+    async def delete_all(self, camera_id: str) -> int:
+        return await delete_area_activity_sessions(camera_id)
+
+    async def touch(self, camera_id: str, observed_at: datetime) -> Any:
+        return await touch_area_activity_collection(camera_id, observed_at)
+
+
+class NoWriteActivityPersistence:
+    """Test/benchmark sink used when callers already inject non-production persistence."""
+
+    async def create(self, **payload: Any) -> Dict[str, Any]:
+        return {"id": payload["session_id"]}
+
+    async def close(self, **payload: Any) -> Dict[str, Any]:
+        return payload
+
+    async def delete_all(self, _camera_id: str) -> int:
+        return 0
+
+    async def touch(self, _camera_id: str, _observed_at: datetime) -> None:
+        return None
+
+
 class AreaPipeline:
     def __init__(
         self,
@@ -67,6 +105,8 @@ class AreaPipeline:
         reader: Optional[Any] = None,
         circular_buffer: Optional[Any] = None,
         persistence: Optional[Any] = None,
+        activity_tracker: Optional[ActivityTracker] = None,
+        activity_persistence: Optional[Any] = None,
         record_violation_clips: bool = True,
         rolling_archive: Optional[RollingArchive] = None,
         clip_service: Optional[EventClipService] = None,
@@ -109,6 +149,16 @@ class AreaPipeline:
             missing_grace_seconds=12.0,
         )
         self.persistence = persistence or RepositoryAreaPersistence()
+        self.activity_tracker = activity_tracker or ActivityTracker(
+            camera_id=camera_id,
+            confirmation_seconds=1.0,
+            grace_frames=3,
+            missing_grace_seconds=12.0,
+        )
+        self.activity_persistence = (
+            activity_persistence
+            or (NoWriteActivityPersistence() if persistence is not None else RepositoryActivityPersistence())
+        )
         self.record_violation_clips = False
 
         source_context = self._get_source_context()
@@ -145,6 +195,13 @@ class AreaPipeline:
             self._process_transition_once,
             self._handle_exhausted_transition,
         )
+        self._activity_queue = AreaEventQueue(
+            self._process_activity_transition_once,
+            self._handle_exhausted_activity_transition,
+        )
+        self._activity_persisted_ids: Dict[str, str] = {}
+        self._activity_heartbeat_task: Optional[asyncio.Task[Any]] = None
+        self._last_activity_heartbeat = 0.0
         self._applied_detection_snapshot: Optional[ZoneSnapshot] = None
         self._applied_detection_control: Optional[tuple[object, ...]] = None
 
@@ -280,11 +337,13 @@ class AreaPipeline:
         if not success or frame is None:
             return {"success": False, "detections": [], "transitions": []}
 
+        activity_transitions: List[ActivityTransition] = []
         if self.reader.did_loop:
             # The first frame after a seek/rewind belongs to a new tracking
             # timeline. Never let ByteTrack IDs or temporal confirmation leak
             # across that discontinuity.
             self.detector.reset_tracking()
+            activity_transitions.extend(self.activity_tracker.end_all(datetime.now(timezone.utc)))
             if self.buffer is not None:
                 self.buffer.clear()
 
@@ -310,6 +369,19 @@ class AreaPipeline:
             timestamp=now_dt,
             frame_size=(int(frame.shape[1]), int(frame.shape[0])),
         )
+        new_activity_transitions = self.activity_tracker.check_detections(
+            annotated_detections,
+            now_dt,
+        )
+        violation_starts = {
+            (item.track_id, item.zone_id): item.violation_id
+            for item in transitions
+            if item.action == "STARTED"
+        }
+        for item in new_activity_transitions:
+            if item.action == "STARTED" and item.policy_result == "VIOLATION":
+                item.violation_id = violation_starts.get((item.track_id, item.zone_id))
+        activity_transitions.extend(new_activity_transitions)
 
         # 5. Encode JPEG frame to base64
         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
@@ -319,6 +391,7 @@ class AreaPipeline:
                 "success": False,
                 "detections": annotated_detections,
                 "transitions": transitions,
+                "activity_transitions": activity_transitions,
             }
 
         b64_str = f"data:image/jpeg;base64,{base64.b64encode(buf.tobytes()).decode('ascii')}"
@@ -346,6 +419,7 @@ class AreaPipeline:
             "detections": annotated_detections,
             "zones": feed_zones,
             "transitions": transitions,
+            "activity_transitions": activity_transitions,
             "fps": self.fps_measured or self.target_fps,
             "source_reset": self.reader.did_loop,
         }
@@ -381,6 +455,8 @@ class AreaPipeline:
         async with self._control_lock:
             for transition in self.zone_checker.end_all(datetime.now(timezone.utc)):
                 self._event_queue.enqueue(transition, self._runtime_generation)
+            for transition in self.activity_tracker.end_all(datetime.now(timezone.utc)):
+                self._activity_queue.enqueue(transition, self._runtime_generation)
 
             state = self.reader.request_seek(position_seconds)
             if state.get("seekable"):
@@ -397,16 +473,142 @@ class AreaPipeline:
         async with self._control_lock:
             self._runtime_generation += 1
             await self._event_queue.reset_generation(self._runtime_generation)
+            await self._activity_queue.reset_generation(self._runtime_generation)
             await self.clip_service.reset()
 
             deleted_records = await self.persistence.delete_all(self.camera_id)
+            await self.activity_persistence.delete_all(self.camera_id)
             cleared_active, cleared_pending = self.zone_checker.clear_runtime_state()
+            cleared_activity_active, cleared_activity_pending = self.activity_tracker.clear_runtime_state()
+            self._activity_persisted_ids.clear()
 
             return {
                 "deleted_records": int(deleted_records),
                 "cleared_active": cleared_active,
                 "cleared_pending": cleared_pending,
             }
+
+    async def _touch_activity_coverage(self) -> None:
+        try:
+            await self.activity_persistence.touch(
+                self.camera_id,
+                datetime.now(timezone.utc),
+            )
+        except Exception as exc:
+            logger.warning("[%s] Activity collection heartbeat failed: %s", self.camera_id, exc)
+
+    def _activity_source_metadata(self, transition: ActivityTransition) -> Dict[str, Any]:
+        context = self._get_source_context()
+        source_kind = str(context.get("source_kind") or "UNAVAILABLE")
+        source_ref = context.get("source_ref")
+        position = context.get("source_position_seconds")
+        source_timestamp = context.get("source_timestamp")
+        fingerprint: Optional[str] = None
+
+        if source_kind == "LOCAL_FILE":
+            current_position = float(position or 0.0)
+            confirmation_delay = max(
+                0.0,
+                (datetime.now(timezone.utc) - transition.entered_at).total_seconds(),
+            )
+            position = max(0.0, current_position - confirmation_delay)
+            source_identity = str(source_ref or self.camera_id)
+            if isinstance(source_ref, str):
+                try:
+                    stat = os.stat(source_ref)
+                    source_identity = f"{os.path.abspath(source_ref)}:{stat.st_size}:{stat.st_mtime_ns}"
+                except OSError:
+                    source_identity = os.path.abspath(source_ref)
+            width, height = self.resolution
+            payload = {
+                "version": 1,
+                "camera": self.camera_id,
+                "source": source_identity,
+                "zone": transition.zone_id,
+                "class": transition.canonical_class,
+                "timeBucket": round(float(position) * 2.0) / 2.0,
+                "entryPixel": [
+                    round(transition.entry_point[0] * width),
+                    round(transition.entry_point[1] * height),
+                ],
+            }
+            fingerprint = hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            source_timestamp = None
+        elif source_kind == "LIVE":
+            position = None
+            source_timestamp = transition.entered_at
+        else:
+            source_kind = "UNAVAILABLE"
+            position = None
+            source_timestamp = None
+
+        return {
+            "source_kind": source_kind,
+            "source_ref": source_ref,
+            "source_position_seconds": position,
+            "source_timestamp": source_timestamp,
+            "event_fingerprint": fingerprint,
+        }
+
+    async def _process_activity_transition_once(
+        self,
+        transition: ActivityTransition,
+        generation: int,
+    ) -> None:
+        if generation != self._runtime_generation:
+            return
+        try:
+            if transition.action == "STARTED":
+                source = self._activity_source_metadata(transition)
+                created = await self.activity_persistence.create(
+                    session_id=transition.session_id,
+                    camera_id=self.camera_id,
+                    zone_id=transition.zone_id,
+                    zone_name=transition.zone_name,
+                    object_label=transition.object_label,
+                    canonical_class=transition.canonical_class,
+                    policy_result=transition.policy_result,
+                    entered_at=transition.entered_at,
+                    last_seen_at=transition.last_seen_at,
+                    track_id=transition.track_id,
+                    entry_point={"x": transition.entry_point[0], "y": transition.entry_point[1]},
+                    violation_id=transition.violation_id,
+                    **source,
+                )
+                if created is None:
+                    raise RuntimeError("Area activity session was not persisted")
+                self._activity_persisted_ids[transition.session_id] = str(created["id"])
+            elif transition.action == "ENDED":
+                persisted_id = self._activity_persisted_ids.pop(
+                    transition.session_id,
+                    transition.session_id,
+                )
+                await self.activity_persistence.close(
+                    session_id=persisted_id,
+                    exited_at=transition.exited_at or transition.last_seen_at,
+                    duration_seconds=transition.duration_seconds or 0,
+                )
+        except Exception as exc:
+            raise RetryableAreaTransitionError(
+                f"Failed to persist activity {transition.session_id}: {exc}"
+            ) from exc
+
+    async def _handle_exhausted_activity_transition(
+        self,
+        transition: ActivityTransition,
+        generation: int,
+        error: BaseException,
+    ) -> None:
+        logger.error(
+            "[%s] Activity persistence exhausted for %s %s at generation %s: %s",
+            self.camera_id,
+            transition.action,
+            transition.session_id,
+            generation,
+            error,
+        )
 
     async def _process_transition_once(
         self,
@@ -636,6 +838,20 @@ class AreaPipeline:
                     self._runtime_generation,
                     RuntimeError("Area event queue rejected transition"),
                 )
+        for transition in result.get("activity_transitions", []):
+            if not self._activity_queue.enqueue(transition, self._runtime_generation):
+                await self._handle_exhausted_activity_transition(
+                    transition,
+                    self._runtime_generation,
+                    RuntimeError("Activity event queue rejected transition"),
+                )
+        now = time.monotonic()
+        if now - self._last_activity_heartbeat >= 60.0:
+            self._last_activity_heartbeat = now
+            if self._activity_heartbeat_task is None or self._activity_heartbeat_task.done():
+                self._activity_heartbeat_task = asyncio.create_task(
+                    self._touch_activity_coverage()
+                )
 
     def start(self) -> None:
         """Start the area pipeline background tasks."""
@@ -647,6 +863,7 @@ class AreaPipeline:
             return
         self._running = True
         self._event_queue.start()
+        self._activity_queue.start()
         self.clip_service.start()
         if self.rolling_archive is not None:
             self.rolling_archive.start()
@@ -668,7 +885,17 @@ class AreaPipeline:
             self._task = None
 
         await self.zone_sync.stop()
+        for transition in self.activity_tracker.end_all(datetime.now(timezone.utc)):
+            self._activity_queue.enqueue(transition, self._runtime_generation)
+        await self._activity_queue.join()
         await self._event_queue.stop()
+        await self._activity_queue.stop()
+        if self._activity_heartbeat_task is not None:
+            try:
+                await self._activity_heartbeat_task
+            except Exception as exc:
+                logger.warning("[%s] Activity heartbeat failed during shutdown: %s", self.camera_id, exc)
+            self._activity_heartbeat_task = None
         await self.clip_service.stop()
         if self.rolling_archive is not None:
             await self.rolling_archive.stop()
@@ -691,4 +918,5 @@ class AreaPipeline:
             "buffered_frames": self.buffer.get_frame_count() if self.buffer is not None else 0,
             "rolling_archive": self.rolling_archive.status() if self.rolling_archive is not None else None,
             "active_violations": len(self.zone_checker.active_violations),
+            "active_activity_sessions": len(self.activity_tracker.active_sessions),
         }
