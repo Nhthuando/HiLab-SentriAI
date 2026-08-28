@@ -15,7 +15,29 @@ const pythonExe = join(
   isWindows ? 'Scripts' : 'bin',
   isWindows ? 'python.exe' : 'python',
 );
-const npmExe = isWindows ? 'npm.cmd' : 'npm';
+const npmExecPath = process.env.npm_execpath;
+
+function npmDefinition(name, args, cwd) {
+  if (npmExecPath && existsSync(npmExecPath)) {
+    return {
+      name,
+      command: process.execPath,
+      args: [npmExecPath, ...args],
+      cwd,
+    };
+  }
+
+  if (isWindows) {
+    return {
+      name,
+      command: process.env.ComSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', `npm.cmd ${args.join(' ')}`],
+      cwd,
+    };
+  }
+
+  return { name, command: 'npm', args, cwd };
+}
 
 const prerequisites = [
   [join(repoRoot, 'backend', '.env'), 'Thiếu backend/.env. Hãy sao chép từ backend/.env.example và điền cấu hình.'],
@@ -33,8 +55,8 @@ for (const [path, message] of prerequisites) {
 
 const definitions = [
   { name: 'worker', command: pythonExe, args: ['main.py'], cwd: workerDir },
-  { name: 'api', command: npmExe, args: ['run', 'dev'], cwd: apiDir },
-  { name: 'web', command: npmExe, args: ['run', 'dev', '--', '--strictPort'], cwd: webDir },
+  npmDefinition('api', ['run', 'dev'], apiDir),
+  npmDefinition('web', ['run', 'dev', '--', '--strictPort'], webDir),
 ];
 
 const children = [];
