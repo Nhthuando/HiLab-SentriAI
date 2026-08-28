@@ -32,6 +32,15 @@ export interface ClipReference {
 
 export type DeferredClipStatus = 'NOT_REQUESTED' | 'QUEUED' | 'GENERATING' | 'READY' | 'FAILED' | 'EXPIRED';
 
+export interface ActivityCoverage {
+  status: 'NOT_STARTED' | 'PARTIAL' | 'COMPLETE' | 'STALE' | 'UNAVAILABLE';
+  percent: number;
+  sourceKind: 'LOCAL_FILE' | 'LIVE' | 'UNAVAILABLE';
+  sourceDurationSeconds: number | null;
+  coveredIntervals: Array<[number, number]>;
+  lastObservedAtLocal: string | null;
+}
+
 export interface ActivityEvidence {
   type: 'area_activity';
   eventId: string;
@@ -42,7 +51,29 @@ export interface ActivityEvidence {
   clipStatus: DeferredClipStatus;
   canRequestClip: boolean;
   clipId: string | null;
+  coverage?: ActivityCoverage;
   message?: string;
+}
+
+function collectionCoverage(value: any): ActivityCoverage | undefined {
+  if (!value) return undefined;
+  const intervals = Array.isArray(value.coveredIntervals)
+    ? value.coveredIntervals.filter((item: unknown): item is [number, number] => (
+      Array.isArray(item) && item.length === 2 && item.every((part) => typeof part === 'number' && Number.isFinite(part))
+    ))
+    : [];
+  const rawStatus = String(value.coverageStatus ?? 'NOT_STARTED').toUpperCase();
+  const allowed = new Set(['NOT_STARTED', 'PARTIAL', 'COMPLETE', 'STALE', 'UNAVAILABLE']);
+  const status = (allowed.has(rawStatus) ? rawStatus : 'UNAVAILABLE') as ActivityCoverage['status'];
+  return {
+    status,
+    percent: Math.max(0, Math.min(100, Number(value.coveragePercent ?? 0))),
+    sourceKind: (['LOCAL_FILE', 'LIVE'].includes(String(value.sourceKind)) ? value.sourceKind : 'UNAVAILABLE') as ActivityCoverage['sourceKind'],
+    sourceDurationSeconds: value.sourceDurationSeconds === null || value.sourceDurationSeconds === undefined
+      ? null : Number(value.sourceDurationSeconds),
+    coveredIntervals: intervals,
+    lastObservedAtLocal: value.lastObservedAt instanceof Date ? value.lastObservedAt.toISOString() : null,
+  };
 }
 
 export function getClipsDirectory(): string {
@@ -164,7 +195,10 @@ export async function resolveActivityEvidence(
   eventId: string,
   client: PrismaClient = prisma,
 ): Promise<ActivityEvidence | undefined> {
-  const activity = await client.areaActivitySession.findUnique({ where: { id: eventId } });
+  const [activity, collection] = await Promise.all([
+    client.areaActivitySession.findUnique({ where: { id: eventId } }),
+    client.areaActivityCollectionState.findUnique({ where: { cameraId: 'BAI-KIEM' } }),
+  ]);
   if (!activity) return undefined;
   const violation = activity.violationId
     ? await client.zoneViolation.findUnique({ where: { id: activity.violationId } })
@@ -174,6 +208,7 @@ export async function resolveActivityEvidence(
   const clipPath = violation?.clipPath ?? activity.clipPath;
   const fileReady = rawStatus === 'READY' && Boolean(resolveStoredClipPath(clipPath));
   const status: DeferredClipStatus = rawStatus === 'READY' && !fileReady ? 'FAILED' : rawStatus;
+  const coverage = collectionCoverage(collection);
   const clock = eventClock({
     eventId: activity.id,
     eventType: 'activity',
@@ -194,6 +229,8 @@ export async function resolveActivityEvidence(
     clipStatus: status,
     canRequestClip: Boolean(violation || activity.sourceKind !== 'UNAVAILABLE'),
     clipId: fileReady ? clipId : null,
+    ...(coverage ? { coverage } : {}),
+    ...(collectionCoverage(collection) ? { coverage: collectionCoverage(collection) } : {}),
     ...(status === 'FAILED' && rawStatus === 'READY'
       ? { message: 'File video đã tạo không còn tồn tại. Bạn có thể thử tạo lại.' }
       : activity.clipError ? { message: activity.clipError } : {}),

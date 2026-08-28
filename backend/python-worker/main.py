@@ -9,6 +9,8 @@ import math
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict
 
 import cv2
@@ -20,7 +22,9 @@ import uvicorn
 import dotenv
 
 # Load environment configuration
-for env_path in ["backend/.env", ".env", "../.env", "../../backend/.env"]:
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ENV_PATH = REPO_ROOT / "backend" / ".env"
+for env_path in [BACKEND_ENV_PATH, Path("backend/.env"), Path(".env"), Path("../.env")]:
     if os.path.exists(env_path):
         dotenv.load_dotenv(env_path)
         break
@@ -29,6 +33,12 @@ else:
 
 from db import check_db_health, close_db_pool, close_stale_open_violations, init_db_pool
 from detection import AreaPipeline, GatePipeline
+from stream.source_config import (
+    ConfiguredSource,
+    SourceConfigError,
+    SourceConfigWatcher,
+    load_source_snapshot,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +48,62 @@ logger = logging.getLogger("sentriai.worker")
 
 # Global pipeline dictionary
 pipelines: Dict[str, Any] = {}
+source_reload_status: Dict[str, Dict[str, Any]] = {}
+source_watcher: SourceConfigWatcher | None = None
+source_watcher_task: asyncio.Task[None] | None = None
+
+
+def _reload_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def apply_source_change(source: ConfiguredSource) -> bool:
+    """Apply one validated source change without exposing its configured value."""
+    pipeline = pipelines.get(source.camera_id)
+    if pipeline is None or not hasattr(pipeline, "replace_source"):
+        source_reload_status[source.camera_id] = {
+            "status": "REJECTED",
+            "changedAt": _reload_timestamp(),
+            "sourceKind": source.source_kind,
+        }
+        logger.error("[%s] Source switch rejected because the pipeline is unavailable.", source.camera_id)
+        return False
+
+    try:
+        applied = bool(await pipeline.replace_source(source.resolved_value))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        source_reload_status[source.camera_id] = {
+            "status": "REJECTED",
+            "changedAt": _reload_timestamp(),
+            "sourceKind": source.source_kind,
+        }
+        logger.error(
+            "[%s] Source switch failed (%s); keeping current source.",
+            source.camera_id,
+            type(exc).__name__,
+        )
+        return False
+    source_reload_status[source.camera_id] = {
+        "status": "APPLIED" if applied else "REJECTED",
+        "changedAt": _reload_timestamp(),
+        "sourceKind": source.source_kind,
+    }
+    if applied:
+        os.environ[source.env_key] = source.resolved_value
+        logger.info("[%s] Source switched successfully.", source.camera_id)
+    else:
+        logger.error("[%s] New source could not be opened; keeping current source.", source.camera_id)
+    return applied
+
+
+async def record_source_error(error: SourceConfigError) -> None:
+    source_reload_status[error.camera_id] = {
+        "status": "REJECTED",
+        "changedAt": _reload_timestamp(),
+        "sourceKind": "UNAVAILABLE",
+    }
 
 
 class SeekRequest(BaseModel):
@@ -50,8 +116,10 @@ class CameraConfigUpdate(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global source_watcher, source_watcher_task
     # --- Startup ---
     logger.info("Initializing SentriAI Python AI Worker...")
+    source_reload_status.clear()
 
     # 1. Initialize Database connection pool (Neon PostgreSQL)
     try:
@@ -65,8 +133,27 @@ async def lifespan(app: FastAPI):
         logger.warning("Could not connect to Database on startup (%s). Will retry on demand.", exc)
 
     # 2. Initialize Camera Pipelines (GATE-01 with LPR and BAI-KIEM with Area Violation)
-    gate_source = os.getenv("GATE_CAMERA_URL") or os.getenv("VIDEO_GATE_PATH") or "./data/samples/gate_sample.mp4"
-    area_source = os.getenv("AREA_CAMERA_URL") or os.getenv("VIDEO_AREA_PATH") or "./data/samples/area_sample.mp4"
+    source_snapshot = load_source_snapshot(BACKEND_ENV_PATH, repo_root=REPO_ROOT)
+    gate_config = source_snapshot.get("GATE_CAMERA_URL")
+    area_config = source_snapshot.get("AREA_CAMERA_URL")
+    for result in (gate_config, area_config):
+        if isinstance(result, SourceConfigError):
+            logger.warning(
+                "[%s] Initial %s is invalid: %s; using fallback source.",
+                result.camera_id,
+                result.env_key,
+                result.reason,
+            )
+    gate_source = (
+        gate_config.resolved_value
+        if isinstance(gate_config, ConfiguredSource)
+        else os.getenv("VIDEO_GATE_PATH") or str(REPO_ROOT / "backend" / "data" / "samples" / "gate_sample.mp4")
+    )
+    area_source = (
+        area_config.resolved_value
+        if isinstance(area_config, ConfiguredSource)
+        else os.getenv("VIDEO_AREA_PATH") or str(REPO_ROOT / "backend" / "data" / "samples" / "area_sample.mp4")
+    )
 
     gate_target_fps = float(os.getenv("GATE_TARGET_FPS", "15.0"))
     area_target_fps = float(os.getenv("AREA_TARGET_FPS", "25.0"))
@@ -89,18 +176,36 @@ async def lifespan(app: FastAPI):
     pipelines["GATE-01"] = gate_pipeline
     pipelines["BAI-KIEM"] = area_pipeline
 
+    # BAI-KIEM analytics must cover the source even when nobody is viewing
+    # the rendered feed. Viewer activation below controls emission only.
+    area_pipeline.start()
+
+    source_watcher = SourceConfigWatcher(BACKEND_ENV_PATH, REPO_ROOT)
+    source_watcher_task = asyncio.create_task(
+        source_watcher.run(apply_source_change, record_source_error),
+        name="camera-source-config-watcher",
+    )
+
     logger.info("Camera pipelines initialized and paused until a feed subscriber connects.")
 
-    yield
+    try:
+        yield
+    finally:
+        # --- Shutdown ---
+        logger.info("Shutting down SentriAI Python Worker...")
+        if source_watcher is not None:
+            source_watcher.stop()
+        if source_watcher_task is not None:
+            await asyncio.gather(source_watcher_task, return_exceptions=True)
+        source_watcher = None
+        source_watcher_task = None
 
-    # --- Shutdown ---
-    logger.info("Shutting down SentriAI Python Worker...")
-    for cam_id, pipeline in pipelines.items():
-        await pipeline.stop()
-    pipelines.clear()
+        for cam_id, pipeline in pipelines.items():
+            await pipeline.stop()
+        pipelines.clear()
 
-    await close_db_pool()
-    logger.info("Python Worker shutdown complete.")
+        await close_db_pool()
+        logger.info("Python Worker shutdown complete.")
 
 
 app = FastAPI(
@@ -133,6 +238,11 @@ async def health():
             "resolution": list(getattr(p, "resolution", (0, 0))),
             "detector": detector.runtime_info() if hasattr(detector, "runtime_info") else None,
             "lpr": lpr_reader.runtime_info() if hasattr(lpr_reader, "runtime_info") else None,
+            "runtime": p.get_stats() if hasattr(p, "get_stats") else None,
+            "sourceReload": source_reload_status.get(
+                cam_id,
+                {"status": "UNCHANGED", "changedAt": None, "sourceKind": None},
+            ),
         }
     return {
         "status": "ok",
@@ -156,7 +266,9 @@ async def set_camera_activation(camera_id: str, payload: Dict[str, bool] = Body(
         raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found")
 
     is_active = bool(payload.get("active", True))
-    if is_active:
+    if cid == "BAI-KIEM" and hasattr(pipeline, "set_viewer_active"):
+        pipeline.set_viewer_active(is_active)
+    elif is_active:
         pipeline.start()
     else:
         pipeline.pause()

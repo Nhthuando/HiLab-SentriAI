@@ -56,6 +56,21 @@ class StreamReader:
         self._resolve_source()
         self._open_stream()
 
+    @property
+    def is_usable_source(self) -> bool:
+        """Return whether an explicitly configured source opened successfully."""
+        return bool(
+            self.is_connected
+            and not self.is_synthetic
+            and not self.is_image_fallback
+            and (self.is_local_file or isinstance(self.source, str))
+        )
+
+    def mark_source_reset(self) -> None:
+        """Mark the next decoded frame as the start of a new source timeline."""
+        self._source_reset_pending = True
+        self._last_local_frame_at = None
+
     def _resolve_source(self) -> None:
         """Resolve valid video source or fallback to available sample assets."""
         if self.source and (
@@ -434,6 +449,22 @@ class StreamReader:
             secs = total_sec % 60
             return f"{mins:02d}:{secs:02d}"
         return time.strftime("%H:%M:%S")
+
+    def skip_local_frames(self, count: int) -> int:
+        """Advance a local source for background indexing without decoding frames."""
+        if not self.is_local_file or self.cap is None or not self.cap.isOpened():
+            return 0
+        skipped = 0
+        for _ in range(max(0, int(count))):
+            if not self.cap.grab():
+                break
+            skipped += 1
+            if self.source_fps > 0:
+                self._current_pos_seconds = min(
+                    self._duration_seconds,
+                    self._current_pos_seconds + (1.0 / self.source_fps),
+                )
+        return skipped
 
     def get_playback_status(self) -> dict:
         state = self.get_playback_state()

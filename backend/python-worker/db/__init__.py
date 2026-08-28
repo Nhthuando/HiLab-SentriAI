@@ -33,6 +33,7 @@ from db.repositories import (
     get_open_violations,
     get_zone_violation,
     get_area_activity_session,
+    get_area_activity_collection_state,
     get_recent_gate_events,
     get_recent_zone_violations,
     get_vehicle_status_by_plate,
@@ -44,6 +45,7 @@ from db.repositories import (
     mark_area_activity_clip_generating,
     mark_area_activity_clip_ready,
     touch_area_activity_collection,
+    update_area_activity_collection,
     update_violation_clip_path,
 )
 
@@ -86,7 +88,9 @@ __all__ = [
     "close_area_activity_session",
     "delete_area_activity_sessions",
     "touch_area_activity_collection",
+    "update_area_activity_collection",
     "get_area_activity_session",
+    "get_area_activity_collection_state",
     "claim_area_activity_clip",
     "mark_area_activity_clip_generating",
     "mark_area_activity_clip_ready",

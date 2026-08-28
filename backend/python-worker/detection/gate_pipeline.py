@@ -161,6 +161,7 @@ class GatePipeline:
         self._running = False
         self._active = False
         self._task: Optional[asyncio.Task] = None
+        self._control_lock = asyncio.Lock()
         self.frame_count = 0
         self.fps_measured = 0.0
         self._last_fps_calc = time.time()
@@ -1696,6 +1697,39 @@ class GatePipeline:
             self.fps_measured = self.target_fps
         return state
 
+    async def replace_source(self, source: str) -> bool:
+        """Atomically replace the reader while retaining warm AI resources."""
+        candidate = await asyncio.to_thread(
+            StreamReader,
+            source=source,
+            camera_id=self.camera_id,
+            target_fps=self.target_fps,
+            resolution=self.resolution,
+        )
+        if not candidate.is_usable_source:
+            candidate.release()
+            return False
+
+        try:
+            async with self._control_lock:
+                self.buffer.clear()
+                self.reset_tracking_state()
+                self._fps_counter = 0
+                self._last_fps_calc = time.time()
+                self.fps_measured = self.target_fps
+                previous = self.reader
+                candidate.mark_source_reset()
+                self.reader = candidate
+        except Exception:
+            candidate.release()
+            raise
+
+        try:
+            previous.release()
+        except Exception as exc:
+            logger.warning("[%s] Previous source cleanup failed: %s", self.camera_id, exc)
+        return True
+
     async def _loop(self) -> None:
         """Continuous video stream emission loop."""
         logger.info("[%s] Gate Universal LPR Pipeline loop started at %.1f FPS.", self.camera_id, self.target_fps)
@@ -1708,7 +1742,8 @@ class GatePipeline:
 
             start_t = time.time()
             try:
-                result = await self.process_gate_frame()
+                async with self._control_lock:
+                    result = await self.process_gate_frame()
 
                 if result.get("success"):
                     # Emit live frame + live plate detections to /ws/publish/feed/GATE-01

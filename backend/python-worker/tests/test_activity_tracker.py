@@ -5,6 +5,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 
 WORKER_DIR = Path(__file__).resolve().parent.parent
 if str(WORKER_DIR) not in sys.path:
@@ -24,6 +25,7 @@ def detection(track_id=7, status="ALLOWED", zones=None, canonical="forklift", x=
         "label": "Xe nâng",
         "normalized_bbox": [x, 0.2, x + 0.2, 0.7],
         "canInitiate": True,
+        "canContinue": True,
         "zoneMatches": matches,
     }
 
@@ -73,6 +75,34 @@ class TestActivityTracker(unittest.TestCase):
         weak["canInitiate"] = False
         self.assertEqual(tracker.check_detections([weak], NOW), [])
         self.assertEqual(tracker.active_sessions, {})
+
+    def test_continuation_frame_confirms_existing_pending_session(self):
+        tracker = ActivityTracker(confirmation_seconds=1)
+        self.assertEqual(tracker.check_detections([detection()], NOW), [])
+
+        continuation = detection()
+        continuation["canInitiate"] = False
+        continuation["canContinue"] = True
+        started = tracker.check_detections(
+            [continuation],
+            NOW + timedelta(seconds=1),
+        )
+
+        self.assertEqual([item.action for item in started], ["STARTED"])
+
+    def test_frozen_zone_match_is_accepted(self):
+        tracker = ActivityTracker(confirmation_seconds=0)
+        frozen = detection(zones=[MappingProxyType({
+            "zoneId": "zone-1",
+            "zoneName": "A",
+            "status": "ALLOWED",
+        })])
+
+        started = tracker.check_detections([frozen], NOW)
+
+        self.assertEqual([(item.zone_id, item.policy_result) for item in started], [
+            ("zone-1", "ALLOWED"),
+        ])
 
 
 if __name__ == "__main__":

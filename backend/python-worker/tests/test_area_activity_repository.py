@@ -14,6 +14,7 @@ from db.repositories import (
     close_area_activity_session,
     create_area_activity_session,
     touch_area_activity_collection,
+    update_area_activity_collection,
 )
 
 
@@ -52,8 +53,15 @@ class TestAreaActivityRepository(unittest.IsolatedAsyncioTestCase):
             conn_or_pool=executor,
         )
         self.assertEqual(str(result["id"]), "11111111-1111-4111-8111-111111111111")
+        self.assertIn("WITH replay_match AS", executor.query)
+        self.assertIn("ABS(existing.source_position_seconds - $14::real) <= 1.0", executor.query)
+        self.assertIn("jsonb_typeof(existing.entry_point) = 'object'", executor.query)
+        self.assertIn(") <= 0.015", executor.query)
         self.assertIn("ON CONFLICT (event_fingerprint)", executor.query)
+        self.assertIn("DO NOTHING", executor.query)
         self.assertIn("WHERE event_fingerprint IS NOT NULL", executor.query)
+        self.assertIn("FALSE AS was_inserted", executor.query)
+        self.assertEqual(executor.args[10], {"x": 0.42, "y": 0.73})
 
     async def test_close_uses_last_seen_and_non_negative_duration(self):
         executor = RecordingExecutor()
@@ -77,6 +85,28 @@ class TestAreaActivityRepository(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ON CONFLICT (camera_id) DO UPDATE", executor.query)
         self.assertNotIn("started_at =", executor.query)
         self.assertIn("INTERVAL '60 seconds'", executor.query)
+
+    async def test_structured_coverage_upsert_persists_intervals_and_status(self):
+        executor = RecordingExecutor()
+        observed = datetime(2026, 8, 28, tzinfo=timezone.utc)
+        await update_area_activity_collection(
+            camera_id="BAI-KIEM",
+            source_kind="LOCAL_FILE",
+            source_fingerprint="source-a",
+            source_ref="KiemHoa-LM06_fastseek.mp4",
+            source_duration_seconds=859.647,
+            covered_intervals=[[0.0, 120.0], [300.0, 350.0]],
+            coverage_percent=19.78,
+            coverage_status="PARTIAL",
+            observed_at=observed,
+            completed_at=None,
+            conn_or_pool=executor,
+        )
+        self.assertIn("covered_intervals", executor.query)
+        self.assertIn("source_fingerprint", executor.query)
+        self.assertIn("coverage_status", executor.query)
+        self.assertEqual(executor.args[5], [[0.0, 120.0], [300.0, 350.0]])
+        self.assertEqual(executor.args[7], "PARTIAL")
 
 
 if __name__ == "__main__":

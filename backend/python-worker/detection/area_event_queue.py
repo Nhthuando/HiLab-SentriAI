@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from zone.zone_checker import ViolationTransition
 
@@ -61,6 +61,30 @@ class AreaEventQueue:
 
     def qsize(self) -> int:
         return self._queue.qsize()
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Expose bounded operational state without leaking queued payloads."""
+        runner = self._runner
+        if runner is None:
+            runner_state = "NOT_STARTED"
+            runner_error = None
+        elif runner.cancelled():
+            runner_state = "CANCELLED"
+            runner_error = None
+        elif not runner.done():
+            runner_state = "RUNNING"
+            runner_error = None
+        else:
+            error = runner.exception()
+            runner_state = "FAILED" if error is not None else "DONE"
+            runner_error = str(error) if error is not None else None
+        return {
+            "running": self._running,
+            "runner_state": runner_state,
+            "runner_error": runner_error,
+            "queue_size": self.qsize(),
+            "generation": self._generation,
+        }
 
     def start(self) -> None:
         if self._runner is not None and not self._runner.done():

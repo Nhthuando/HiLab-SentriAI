@@ -27,6 +27,7 @@ from db.repositories import (
     mark_violation_clip_ready,
 )
 from stream.rolling_archive import RollingArchive
+from stream.source_config import configured_source_roots
 
 logger = logging.getLogger("sentriai.detection.event_clip")
 
@@ -102,16 +103,17 @@ class EventClipGenerator:
         self._active_processes: set[subprocess.Popen[bytes]] = set()
         backend_root = Path(__file__).resolve().parents[2]
 
+        repo_root = backend_root.parent
         configured_roots: list[Path] = []
         if allowed_source_roots is not None:
-            configured_roots.extend(Path(value) for value in allowed_source_roots)
+            for value in allowed_source_roots:
+                candidate = Path(value).expanduser()
+                if not candidate.is_absolute():
+                    candidate = repo_root / candidate
+                configured_roots.append(candidate.resolve())
         else:
             configured = os.getenv("CLIP_SOURCE_ROOTS", "")
-            configured_roots.extend(Path(value) for value in configured.split(os.pathsep) if value.strip())
-            for source_key in ("VIDEO_AREA_PATH", "AREA_CAMERA_URL"):
-                video_path = os.getenv(source_key)
-                if video_path and not video_path.lower().startswith(("rtsp://", "http://", "https://")):
-                    configured_roots.append(Path(video_path).expanduser().resolve().parent)
+            configured_roots.extend(configured_source_roots(configured, repo_root))
         configured_roots.append(backend_root / "data")
         self.allowed_source_roots = tuple(root.expanduser().resolve() for root in configured_roots)
 

@@ -69,6 +69,9 @@ async function testFunctionCallingLoop(): Promise<void> {
 }
 
 async function testAreaActivitySummaryAndDeferredEvidence(): Promise<void> {
+  let activityFindArgs: any;
+  let coverageStatus: 'PARTIAL' | 'COMPLETE' = 'PARTIAL';
+  const completedAt = new Date(Date.now() - 60_000);
   const rows = [
     {
       id: '33333333-3333-4333-8333-333333333333', cameraId: 'BAI-KIEM', zoneId: null,
@@ -95,14 +98,30 @@ async function testAreaActivitySummaryAndDeferredEvidence(): Promise<void> {
   ];
   const client = {
     areaActivitySession: {
-      findMany: async () => rows,
+      findMany: async (args: any) => {
+        activityFindArgs = args;
+        return rows;
+      },
       findUnique: async ({ where }: any) => rows.find((row) => row.id === where.id) ?? null,
     },
     areaActivityCollectionState: {
-      findUnique: async () => ({ cameraId: 'BAI-KIEM', startedAt: new Date(Date.now() - 3_600_000), lastObservedAt: new Date() }),
+      findUnique: async () => ({
+        cameraId: 'BAI-KIEM', startedAt: new Date(Date.now() - 3_600_000), lastObservedAt: new Date(),
+        sourceKind: 'LOCAL_FILE', sourceRef: 'sample.mp4', sourceDurationSeconds: 1000,
+        coveredIntervals: [[0, 500]], coveragePercent: 50, coverageStatus,
+        completedAt: coverageStatus === 'COMPLETE' ? completedAt : null,
+      }),
     },
   } as unknown as PrismaClient;
-  const execution = await executeQaTool('get_area_activity_summary', { objectLabel: 'Xe nâng' }, client);
+  const execution = await executeQaTool(
+    'get_area_activity_summary',
+    { objectLabel: 'Xe nâng', canonicalClass: 'forklift' },
+    client,
+  );
+  assert.deepEqual(activityFindArgs.where.canonicalClass, {
+    in: ['forklift', 'reach_stacker'],
+    mode: 'insensitive',
+  });
   assert.deepEqual((execution.result.summary as any), {
     entrySessions: 2,
     completedExits: 2,
@@ -119,6 +138,62 @@ async function testAreaActivitySummaryAndDeferredEvidence(): Promise<void> {
   assert.equal(execution.evidence?.eventId, rows[0].id);
   assert.equal(execution.evidence?.clipStatus, 'NOT_REQUESTED');
   assert.equal(execution.evidence?.canRequestClip, true);
+  assert.equal((execution.result.coverage as any).status, 'PARTIAL');
+  assert.equal((execution.result.coverage as any).percent, 50);
+  assert.equal(execution.evidence?.coverage?.status, 'PARTIAL');
+
+  coverageStatus = 'COMPLETE';
+  await executeQaTool('get_area_activity_summary', { canonicalClass: 'forklift' }, client);
+  assert.deepEqual(activityFindArgs.where.createdAt, { lte: completedAt });
+}
+
+async function testDeterministicActivityRouting(): Promise<void> {
+  const evidence = {
+    type: 'area_activity' as const,
+    eventId: '55555555-5555-4555-8555-555555555555',
+    title: 'Xe tải · Zone mới 1',
+    cam: 'BAI-KIEM',
+    from: '00:03:30',
+    to: '00:03:40',
+    clipStatus: 'NOT_REQUESTED' as const,
+    canRequestClip: true,
+    clipId: null,
+  };
+  let routedArgs: Record<string, unknown> | undefined;
+  const transport: GeminiTransport = {
+    async generate(contents) {
+      assert.equal(contents.length, 1);
+      assert.equal(contents[0].parts?.length, 2);
+      assert.match(contents[0].parts?.[1]?.text ?? '', /get_area_activity_summary/);
+      return { text: 'Hôm nay có 1 lượt xe tải hợp lệ hoạt động trong Zone mới 1.' };
+    },
+  };
+  const service = new QaGeminiService(
+    transport,
+    async (name, args) => {
+      assert.equal(name, 'get_area_activity_summary');
+      routedArgs = args;
+      return {
+        name,
+        result: {
+          summary: { entrySessions: 1, allowedSessions: 1, violationSessions: 0, completedExits: 1, openSessions: 0 },
+          coverage: { status: 'PARTIAL', percent: 25 },
+          recentSessions: [],
+        },
+        clips: [],
+        evidence,
+      };
+    },
+    100,
+  );
+
+  const answer = await service.answer('Hôm nay xe tải hoạt động thế nào?');
+
+  assert.deepEqual(routedArgs, { canonicalClass: 'truck' });
+  assert.deepEqual(answer.sources, ['get_area_activity_summary']);
+  assert.equal(answer.evidence?.eventId, evidence.eventId);
+  assert.match(answer.text, /25\.0% video/);
+  assert.match(answer.text, /chưa phải tổng/);
 }
 
 async function testTimeoutMapping(): Promise<void> {
@@ -143,6 +218,7 @@ async function main(): Promise<void> {
   await testToolUsesBoundedPrismaQuery();
   await testFunctionCallingLoop();
   await testAreaActivitySummaryAndDeferredEvidence();
+  await testDeterministicActivityRouting();
   await testTimeoutMapping();
   console.log('VS-QA-CHAT focused tests passed (timezone, Prisma tools, function loop, timeout).');
 }

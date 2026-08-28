@@ -666,6 +666,30 @@ async def create_area_activity_session(
     now = datetime.now(timezone.utc)
     row = await executor.fetchrow(
         """
+        WITH replay_match AS (
+            SELECT existing.*
+            FROM area_activity_sessions AS existing
+            WHERE $12::varchar = 'LOCAL_FILE'
+              AND $14::real IS NOT NULL
+              AND existing.event_fingerprint IS NOT NULL
+              AND existing.camera_id = $2::varchar
+              AND existing.zone_id = $3::uuid
+              AND existing.canonical_class = $6::varchar
+              AND existing.source_ref IS NOT DISTINCT FROM $13::varchar
+              AND existing.source_position_seconds IS NOT NULL
+              AND ABS(existing.source_position_seconds - $14::real) <= 1.0
+              AND jsonb_typeof(existing.entry_point) = 'object'
+              AND ABS(
+                    ((existing.entry_point ->> 'x')::double precision)
+                    - ((($11::jsonb) ->> 'x')::double precision)
+                  ) <= 0.015
+              AND ABS(
+                    ((existing.entry_point ->> 'y')::double precision)
+                    - ((($11::jsonb) ->> 'y')::double precision)
+                  ) <= 0.015
+            ORDER BY ABS(existing.source_position_seconds - $14::real), existing.created_at
+            LIMIT 1
+        ), inserted AS (
         INSERT INTO area_activity_sessions (
             id, camera_id, zone_id, zone_name, object_label, canonical_class,
             policy_result, session_status, entered_at, last_seen_at, track_id,
@@ -673,15 +697,26 @@ async def create_area_activity_session(
             source_timestamp, event_fingerprint, violation_id, clip_status,
             created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9, $10,
-                $11::jsonb, $12, $13, $14, $15, $16, $17,
-                'NOT_REQUESTED', $18, $18)
-        ON CONFLICT (event_fingerprint) WHERE event_fingerprint IS NOT NULL
-        DO UPDATE SET
-            last_seen_at = GREATEST(area_activity_sessions.last_seen_at, EXCLUDED.last_seen_at),
-            updated_at = EXCLUDED.updated_at,
-            violation_id = COALESCE(area_activity_sessions.violation_id, EXCLUDED.violation_id)
+        SELECT $1::uuid, $2::varchar, $3::uuid, $4::varchar, $5::varchar,
+               $6::varchar, $7::varchar, 'OPEN', $8::timestamptz,
+               $9::timestamptz, $10::int, $11::jsonb, $12::varchar,
+               $13::varchar, $14::real, $15::timestamptz, $16::varchar,
+               $17::uuid, 'NOT_REQUESTED', $18::timestamptz, $18::timestamptz
+        WHERE NOT EXISTS (SELECT 1 FROM replay_match)
+        ON CONFLICT (event_fingerprint) WHERE event_fingerprint IS NOT NULL DO NOTHING
         RETURNING *
+        )
+        SELECT inserted.*, TRUE AS was_inserted FROM inserted
+        UNION ALL
+        SELECT replay_match.*, FALSE AS was_inserted FROM replay_match
+        UNION ALL
+        SELECT existing.*, FALSE AS was_inserted
+        FROM area_activity_sessions AS existing
+        WHERE $16::varchar IS NOT NULL
+          AND existing.event_fingerprint = $16::varchar
+          AND NOT EXISTS (SELECT 1 FROM inserted)
+          AND NOT EXISTS (SELECT 1 FROM replay_match)
+        LIMIT 1
         """,
         sid,
         camera_id,
@@ -693,7 +728,7 @@ async def create_area_activity_session(
         entered_at,
         last_seen_at,
         track_id,
-        json.dumps(entry_point, separators=(",", ":")),
+        entry_point,
         source_kind,
         source_ref,
         source_position_seconds,
@@ -739,6 +774,10 @@ async def delete_area_activity_sessions(
         "DELETE FROM area_activity_sessions WHERE camera_id = $1",
         camera_id,
     )
+    await executor.execute(
+        "DELETE FROM area_activity_collection_state WHERE camera_id = $1",
+        camera_id,
+    )
     try:
         return int(result.rsplit(" ", 1)[-1])
     except (AttributeError, ValueError):
@@ -769,6 +808,70 @@ async def touch_area_activity_collection(
         observed,
     )
     return _record_to_dict(row)
+
+
+async def update_area_activity_collection(
+    camera_id: str,
+    source_kind: str,
+    source_fingerprint: Optional[str],
+    source_ref: Optional[str],
+    source_duration_seconds: Optional[float],
+    covered_intervals: List[List[float]],
+    coverage_percent: float,
+    coverage_status: str,
+    observed_at: Optional[datetime] = None,
+    completed_at: Optional[datetime] = None,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    """Persist one monotonic coverage snapshot for the active Area source."""
+    executor = _get_executor(conn_or_pool)
+    observed = observed_at or datetime.now(timezone.utc)
+    row = await executor.fetchrow(
+        """
+        INSERT INTO area_activity_collection_state (
+            camera_id, started_at, last_observed_at, source_kind,
+            source_fingerprint, source_duration_seconds, covered_intervals,
+            coverage_percent, coverage_status, source_ref, completed_at, updated_at
+        ) VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8, $9, $10, $2)
+        ON CONFLICT (camera_id) DO UPDATE
+        SET last_observed_at = EXCLUDED.last_observed_at,
+            source_kind = EXCLUDED.source_kind,
+            source_fingerprint = EXCLUDED.source_fingerprint,
+            source_duration_seconds = EXCLUDED.source_duration_seconds,
+            covered_intervals = EXCLUDED.covered_intervals,
+            coverage_percent = EXCLUDED.coverage_percent,
+            coverage_status = EXCLUDED.coverage_status,
+            source_ref = EXCLUDED.source_ref,
+            completed_at = COALESCE(
+                area_activity_collection_state.completed_at,
+                EXCLUDED.completed_at
+            ),
+            updated_at = EXCLUDED.updated_at
+        RETURNING *
+        """,
+        camera_id,
+        observed,
+        source_kind,
+        source_fingerprint,
+        source_duration_seconds,
+        covered_intervals,
+        max(0.0, min(100.0, float(coverage_percent))),
+        coverage_status,
+        source_ref,
+        completed_at,
+    )
+    return _record_to_dict(row)
+
+
+async def get_area_activity_collection_state(
+    camera_id: str,
+    conn_or_pool: Optional[DbExecutor] = None,
+) -> Optional[Dict[str, Any]]:
+    executor = _get_executor(conn_or_pool)
+    return _record_to_dict(await executor.fetchrow(
+        "SELECT * FROM area_activity_collection_state WHERE camera_id = $1",
+        camera_id,
+    ))
 
 
 async def get_area_activity_session(

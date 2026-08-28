@@ -25,6 +25,13 @@ const ActivityEvidenceCard: React.FC<{ initial: ActivityEvidence }> = ({ initial
   const { evidence, request, requestError, isBusy } = useDeferredEvidenceClip(initial);
   const canRetry = evidence.canRequestClip && ['NOT_REQUESTED', 'FAILED', 'EXPIRED'].includes(evidence.clipStatus);
   const clipId = evidence.clipStatus === 'READY' ? evidence.clipId : null;
+  const coverageLabel = evidence.coverage?.status === 'COMPLETE'
+    ? 'Đã xử lý toàn bộ video nguồn'
+    : evidence.coverage?.status === 'PARTIAL'
+      ? `Dữ liệu tạm tính · đã xử lý ${evidence.coverage.percent.toFixed(1)}% video`
+      : evidence.coverage
+        ? 'Chưa có coverage đầy đủ để kết luận tổng'
+        : null;
 
   return (
     <div className="glass-panel" style={{ marginTop: '10px', borderRadius: '14px', overflow: 'hidden', maxWidth: '480px', border: '1px solid var(--line2)' }}>
@@ -42,6 +49,11 @@ const ActivityEvidenceCard: React.FC<{ initial: ActivityEvidence }> = ({ initial
         <div style={{ padding: '18px', background: 'linear-gradient(135deg, color-mix(in srgb, var(--ok) 9%, var(--card)), var(--card))' }}>
           <div style={{ fontSize: '12px', color: 'var(--ink2)', marginBottom: '6px' }}>{evidence.cam} · {evidence.from}–{evidence.to}</div>
           <div style={{ fontWeight: 650, color: 'var(--ink)', marginBottom: '12px' }}>{evidence.title}</div>
+          {coverageLabel && (
+            <div role="status" style={{ marginBottom: '12px', fontSize: '11.5px', color: evidence.coverage?.status === 'COMPLETE' ? 'var(--ok)' : 'var(--warn)' }}>
+              {coverageLabel}
+            </div>
+          )}
           {canRetry ? (
             <button
               type="button"

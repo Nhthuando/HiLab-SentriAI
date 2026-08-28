@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "cameraId": "BAI-KIEM",
+  "sourceFile": "KiemHoa-LM06_fastseek.mp4",
+  "sourceDurationSeconds": 859.647,
+  "timeZone": "Asia/Bangkok",
+  "coverageStatus": "COMPLETE",
+  "coveragePercent": 100,
+  "countingUnit": "zone_entry_activity_session",
+  "expectedTruckSessions": 7,
+  "uniquePhysicalVehicleCount": null,
+  "countingNote": "One tracked truck entering one zone is one activity session. Re-entry is another session; this manifest does not claim unique physical-vehicle identity.",
+  "sessions": [
+    {
+      "activityId": "4a47981b-50a3-483e-9534-ec779d0a2d71",
+      "sourcePositionSeconds": 194.7607,
+      "durationSeconds": 15,
+      "policyResult": "ALLOWED",
+      "reviewFrameSeconds": 199.8
+    },
+    {
+      "activityId": "5aa4d3c7-71a2-4b22-a63d-7c9b344c401d",
+      "sourcePositionSeconds": 215.4618,
+      "durationSeconds": 70,
+      "policyResult": "ALLOWED",
+      "reviewFrameSeconds": 220.5
+    },
+    {
+      "activityId": "45284708-0686-43b2-bfd7-c95f659966b3",
+      "sourcePositionSeconds": 552.1302,
+      "durationSeconds": 11,
+      "policyResult": "ALLOWED",
+      "reviewFrameSeconds": 557.1
+    },
+    {
+      "activityId": "edd46290-9c36-450f-8598-5c0e53a9910f",
+      "sourcePositionSeconds": 571.7313,
+      "durationSeconds": 44,
+      "policyResult": "ALLOWED",
+      "reviewFrameSeconds": 576.7
+    },
+    {
+      "activityId": "9d5f9251-724c-400e-b74d-bb07614396b3",
+      "sourcePositionSeconds": 651.1856,
+      "durationSeconds": 41,
+      "policyResult": "ALLOWED",
+      "reviewFrameSeconds": 656.2
+    },
+    {
+      "activityId": "03bb4cc0-882e-4f9a-aa56-1e4d84028c27",
+      "sourcePositionSeconds": 714.139,
+      "durationSeconds": 62,
+      "policyResult": "ALLOWED",
+      "reviewFrameSeconds": 719.1
+    },
+    {
+      "activityId": "9c9663e5-6bf3-4438-930f-2444dee192d7",
+      "sourcePositionSeconds": 833.5456,
+      "durationSeconds": 26,
+      "policyResult": "ALLOWED",
+      "reviewFrameSeconds": 838.5
+    }
+  ]
+}

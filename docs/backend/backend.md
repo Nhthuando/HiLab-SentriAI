@@ -2,6 +2,20 @@
 
 > Maintained by backend workers for integration handoff to frontend and team orchestrators.
 
+## VS-QA-CHAT — backend verified
+
+- **Branch**: `feature/vs-qa-chat`
+- **OpenAPI**: `backend/node-api/openapi/qa.yaml`
+- **Connection**: frontend uses `VITE_API_URL` (default `http://localhost:3001/api/v1`); JSON endpoints use the shared `{ success, data|error, timestamp }` envelope; no authentication in the single-user MVP.
+- **Q&A flow**: `POST /qa/query` accepts `{ query }` (1–1000 characters). Gemini `gemini-3.5-flash-lite` may call only the six declared Prisma-backed tools for saved Gate/Area data. The overall model interaction times out after 15 seconds with `GEMINI_TIMEOUT`/504; unavailable service returns `GEMINI_UNAVAILABLE`/503.
+- **History**: `GET /chat/history?limit=N` returns persistent messages chronologically; without `limit` it returns all messages. `DELETE /chat/history` returns 204 and clears the local single-user history.
+- **Clips**: `GET /clips/{eventId}/stream` and `/download` resolve a GateEvent or ZoneViolation UUID server-side. Client-supplied filesystem paths are never accepted. Missing/stale clip files return `CLIP_NOT_AVAILABLE`/404.
+- **BAI-KIEM activity analytics**: each detectable registered label can persist one session for one tracked object entering then leaving one zone. Summaries expose class/status/count/duration/timestamps/evidence; Vietnamese “xe nâng” intentionally groups `forklift` and `reach_stacker`.
+- **Replay contract**: local-file fingerprints use source identity, position and entry geometry. Replaying the same segment returns the existing session and never changes its count, duration, timestamps or `updatedAt`.
+- **Lazy activity clips**: activity evidence starts as `NOT_REQUESTED`. `POST /area-activities/{activityId}/clip` is the only generation trigger; clients poll the activity until `READY`, then use its stream/download URLs. Detection events do not eagerly create video files.
+- **Environment**: `NEON_DATABASE_URL` and `GEMINI_API_KEY` are required server-only variables; neither value is exposed to the frontend or logs.
+- **Verification status**: `backend_verified` on 2026-08-27. In addition to the original Q&A gate, 70/70 focused Python tests and focused Node activity/clip/QA tests passed. Real BAI-KIEM video produced verified reach-stacker/truck sessions; exact replay changed zero rows; clips were created only after explicit requests and returned 206; Gemini returned correct vehicle activity statistics. Six failed/interrupted test chat rows were removed by exact ID while 15 prior and six correct rows were preserved.
+
 ## 0. FDN-TRAINING-PERSISTENCE — verified training-data foundation
 
 - **Status**: `backend_verified` on 2026-08-20 against the user-confirmed Neon development/test database.

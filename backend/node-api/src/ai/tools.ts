@@ -71,7 +71,7 @@ export const QA_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       type: Type.OBJECT,
       properties: {
         objectLabel: { type: Type.STRING, description: 'Tên tiếng Việt, ví dụ Xe nâng hoặc Người.' },
-        canonicalClass: { type: Type.STRING, description: 'Canonical detector class nếu biết, ví dụ forklift.' },
+        canonicalClass: { type: Type.STRING, description: 'Canonical detector class. Dùng forklift cho nhóm xe nâng, gồm cả forklift và reach_stacker.' },
         zoneName: { type: Type.STRING, description: 'Tên hoặc một phần tên zone.' },
         policyResult: { type: Type.STRING, enum: ['ALLOWED', 'VIOLATION'], description: 'Lọc lượt hợp lệ hoặc vi phạm.' },
       },
@@ -141,6 +141,11 @@ function activityWhere(
   const canonicalClass = textArg(args, 'canonicalClass');
   const zoneName = textArg(args, 'zoneName');
   const policyResult = textArg(args, 'policyResult');
+  const canonicalClassFilter = canonicalClass?.toLocaleLowerCase('en-US') === 'forklift'
+    ? { in: ['forklift', 'reach_stacker'], mode: 'insensitive' as const }
+    : canonicalClass
+      ? { equals: canonicalClass, mode: 'insensitive' as const }
+      : undefined;
   if (policyResult && policyResult !== 'ALLOWED' && policyResult !== 'VIOLATION') {
     throw new Error('Invalid tool argument: policyResult');
   }
@@ -148,7 +153,7 @@ function activityWhere(
     cameraId: 'BAI-KIEM',
     ...(range ? { enteredAt: { gte: range.start, lt: range.end } } : {}),
     ...(objectLabel ? { objectLabel: { contains: objectLabel, mode: 'insensitive' } } : {}),
-    ...(canonicalClass ? { canonicalClass: { equals: canonicalClass, mode: 'insensitive' } } : {}),
+    ...(canonicalClassFilter ? { canonicalClass: canonicalClassFilter } : {}),
     ...(zoneName ? { zoneName: { contains: zoneName, mode: 'insensitive' } } : {}),
     ...(policyResult ? { policyResult } : {}),
   };
@@ -249,9 +254,18 @@ export async function executeQaTool(
   if (name === 'get_area_activity_summary' || name === 'get_area_activity_sessions' || name === 'get_current_area_activity') {
     const now = new Date();
     const range = name === 'get_current_area_activity' ? undefined : todayRange(now);
+    const coverage = await client.areaActivityCollectionState.findUnique({
+      where: { cameraId: 'BAI-KIEM' },
+    });
     const where: Prisma.AreaActivitySessionWhereInput = {
       ...activityWhere(args, range),
       ...(name === 'get_current_area_activity' ? { sessionStatus: 'OPEN' } : {}),
+      ...(coverage?.sourceKind === 'LOCAL_FILE' && coverage.sourceRef ? { sourceRef: coverage.sourceRef } : {}),
+      ...(coverage?.sourceKind === 'LOCAL_FILE'
+        && coverage.coverageStatus === 'COMPLETE'
+        && coverage.completedAt
+        ? { createdAt: { lte: coverage.completedAt } }
+        : {}),
     };
     const take: number = name === 'get_area_activity_summary' ? 5000 : MAX_TOOL_ROWS;
     const rows = await client.areaActivitySession.findMany({
@@ -259,15 +273,21 @@ export async function executeQaTool(
       orderBy: [{ enteredAt: 'desc' }, { id: 'desc' }],
       take,
     });
-    const coverage = await client.areaActivityCollectionState.findUnique({
-      where: { cameraId: 'BAI-KIEM' },
-    });
     const details = rows.map((row) => activityDetail(row, now));
     const evidence = rows.length ? await resolveActivityEvidence(rows[0].id, client) : undefined;
+    const rawCoverageStatus = String(coverage?.coverageStatus ?? 'NOT_STARTED').toUpperCase();
+    const liveStale = coverage?.sourceKind === 'LIVE'
+      && now.getTime() - coverage.lastObservedAt.getTime() > 2 * 60 * 1000;
     const coverageResult = coverage ? {
       collectionStartedAtLocal: formatLocalDateTime(coverage.startedAt),
       lastObservedAtLocal: formatLocalDateTime(coverage.lastObservedAt),
-      isStale: now.getTime() - coverage.lastObservedAt.getTime() > 2 * 60 * 1000,
+      status: liveStale ? 'STALE' : rawCoverageStatus,
+      percent: Number(coverage.coveragePercent ?? 0),
+      sourceKind: coverage.sourceKind ?? 'UNAVAILABLE',
+      sourceDurationSeconds: coverage.sourceDurationSeconds ?? null,
+      coveredIntervals: Array.isArray(coverage.coveredIntervals) ? coverage.coveredIntervals : [],
+      complete: rawCoverageStatus === 'COMPLETE',
+      isStale: liveStale,
     } : null;
 
     if (name === 'get_area_activity_summary') {

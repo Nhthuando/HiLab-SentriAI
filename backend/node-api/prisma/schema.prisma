@@ -159,10 +159,18 @@ model AreaActivitySession {
 }
 
 model AreaActivityCollectionState {
-  cameraId      String   @id @db.VarChar(50) @map("camera_id")
-  startedAt     DateTime @db.Timestamptz() @map("started_at")
-  lastObservedAt DateTime @db.Timestamptz() @map("last_observed_at")
-  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamptz() @map("updated_at")
+  cameraId              String    @id @db.VarChar(50) @map("camera_id")
+  startedAt             DateTime  @db.Timestamptz() @map("started_at")
+  lastObservedAt        DateTime  @db.Timestamptz() @map("last_observed_at")
+  sourceKind            String    @default("UNAVAILABLE") @db.VarChar(20) @map("source_kind")
+  sourceFingerprint     String?   @db.VarChar(64) @map("source_fingerprint")
+  sourceRef             String?   @db.VarChar(1000) @map("source_ref")
+  sourceDurationSeconds Float?    @db.Real @map("source_duration_seconds")
+  coveredIntervals      Json      @default("[]") @map("covered_intervals")
+  coveragePercent       Float     @default(0) @db.Real @map("coverage_percent")
+  coverageStatus        String    @default("NOT_STARTED") @db.VarChar(20) @map("coverage_status")
+  completedAt           DateTime? @db.Timestamptz() @map("completed_at")
+  updatedAt             DateTime  @default(now()) @updatedAt @db.Timestamptz() @map("updated_at")
 
   @@map("area_activity_collection_state")
 }

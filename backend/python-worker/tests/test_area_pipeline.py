@@ -28,6 +28,7 @@ from detection.area_pipeline import AreaPipeline
 from detection.policy import DetectionPolicy
 from detection.tracked_detector import TrackedYoloDetector
 from stream.reader import StreamReader
+from zone.activity_tracker import ActivityTransition
 from zone.zone_checker import ActiveViolation, PendingViolation, ViolationTransition, ZoneChecker, evaluate_zone_rule, get_detection_bottom_center, parse_polygon, resolve_candidate_labels
 from zone.zone_sync import ZoneSnapshot
 
@@ -1155,6 +1156,67 @@ class TestAreaPipelineControl(unittest.TestCase):
         pipeline.buffer.clear.assert_called_once_with()
         detector.track.assert_called_once()
 
+    def test_completed_local_source_closes_first_pass_then_suppresses_replay_rows(self):
+        detector = MagicMock()
+        detector.track.return_value = []
+        snapshot = ZoneSnapshot(coco_classes=frozenset({"truck"}))
+        reader = MagicMock()
+        reader.did_loop = True
+        reader.read_frame.return_value = (True, np.zeros((48, 64, 3), dtype=np.uint8))
+        reader.get_source_context.return_value = {
+            "source_kind": "LOCAL_FILE",
+            "source_ref": "sample.mp4",
+            "source_position_seconds": 0.0,
+            "source_timestamp": None,
+        }
+        reader.get_playback_state.return_value = {"durationSeconds": 10.0}
+        sync = MagicMock()
+        sync.get_snapshot.return_value = snapshot
+        pipeline = AreaPipeline(
+            camera_id="BAI-KIEM",
+            source=None,
+            target_fps=10,
+            resolution=(64, 48),
+            detector=detector,
+            zone_sync=sync,
+            reader=reader,
+            persistence=MagicMock(),
+        )
+        fingerprint = pipeline._coverage_source()[1]
+        completed = datetime.now(timezone.utc)
+        pipeline.activity_coverage.restore(
+            "LOCAL_FILE",
+            fingerprint,
+            10.0,
+            [[0.0, 10.0]],
+            completed,
+            completed,
+        )
+        ended = ActivityTransition(
+            action="ENDED", session_id="first-pass", camera_id="BAI-KIEM",
+            track_id=1, zone_id="zone-1", zone_name="Zone", object_label="Xe táº£i",
+            canonical_class="truck", policy_result="ALLOWED", entered_at=completed,
+            last_seen_at=completed, entry_point=(0.5, 0.5), exited_at=completed,
+            duration_seconds=1,
+        )
+        replay_started = ActivityTransition(
+            action="STARTED", session_id="replay", camera_id="BAI-KIEM",
+            track_id=2, zone_id="zone-1", zone_name="Zone", object_label="Xe táº£i",
+            canonical_class="truck", policy_result="ALLOWED", entered_at=completed,
+            last_seen_at=completed, entry_point=(0.5, 0.5),
+        )
+        pipeline.activity_tracker = MagicMock()
+        pipeline.activity_tracker.end_all.return_value = [ended]
+        pipeline.activity_tracker.check_detections.return_value = [replay_started]
+        pipeline.zone_checker = MagicMock()
+        pipeline.zone_checker.check_detections.return_value = ([], [])
+
+        response = pipeline.process_single_frame()
+
+        self.assertTrue(pipeline._activity_replay_read_only)
+        self.assertEqual(response["activity_transitions"], [ended])
+        self.assertIsNone(replay_started.source_metadata)
+
     def test_publish_result_uses_injected_no_write_persistence_and_emitter(self):
         class PersistenceSink:
             def __init__(self):
@@ -1195,6 +1257,7 @@ class TestAreaPipelineControl(unittest.TestCase):
             camera_id="BAI-KIEM", detector=detector, zone_sync=MagicMock(),
             persistence=persistence, emitter=emitter, record_violation_clips=False,
         )
+        pipeline.set_viewer_active(True)
         entered_at = datetime(2026, 8, 22, tzinfo=timezone.utc)
         transition = ViolationTransition(
             action="STARTED", violation_id="violation-1", camera_id="BAI-KIEM", track_id=7,
@@ -1221,6 +1284,65 @@ class TestAreaPipelineControl(unittest.TestCase):
         self.assertEqual(persistence.created[0]["source_kind"], "UNAVAILABLE")
         self.assertFalse(hasattr(pipeline, "_clip_tasks"))
         self.assertEqual(emitter.events[0]["clipStatus"], "NOT_REQUESTED")
+
+    def test_viewer_disconnect_skips_frame_but_keeps_activity_analytics(self):
+        class ActivitySink:
+            def __init__(self):
+                self.created = []
+
+            async def create(self, **payload):
+                self.created.append(payload)
+                return {"id": payload["session_id"], "was_inserted": True}
+
+            async def close(self, **payload):
+                return payload
+
+            async def delete_all(self, _camera_id):
+                return 0
+
+            async def update_coverage(self, **_payload):
+                return None
+
+        emitter = MagicMock()
+        emitter.emit_frame = AsyncMock(return_value=True)
+        activity = ActivitySink()
+        pipeline = AreaPipeline(
+            camera_id="BAI-KIEM",
+            detector=MagicMock(),
+            zone_sync=MagicMock(),
+            persistence=MagicMock(),
+            activity_persistence=activity,
+            emitter=emitter,
+        )
+        pipeline.set_viewer_active(False)
+        entered = datetime(2026, 8, 28, tzinfo=timezone.utc)
+        transition = ActivityTransition(
+            action="STARTED", session_id="55555555-5555-4555-8555-555555555555",
+            camera_id="BAI-KIEM", track_id=5, zone_id="zone-1", zone_name="Zone 1",
+            object_label="Xe tải", canonical_class="truck", policy_result="ALLOWED",
+            entered_at=entered, last_seen_at=entered, entry_point=(0.5, 0.8),
+            source_metadata={
+                "source_kind": "LOCAL_FILE", "source_ref": "sample.mp4",
+                "source_position_seconds": 10.0, "source_timestamp": None,
+                "event_fingerprint": "c" * 64,
+            },
+        )
+        result = {
+            "success": True, "image_base64": "data:image/jpeg;base64,YWJj", "detections": [],
+            "fps": 10.0, "zones": [], "source_reset": False, "transitions": [],
+            "activity_transitions": [transition],
+        }
+
+        async def scenario():
+            pipeline._activity_queue.start()
+            await pipeline.publish_result(result)
+            await pipeline._activity_queue.join()
+            await pipeline._activity_queue.stop()
+
+        asyncio.run(scenario())
+        emitter.emit_frame.assert_not_awaited()
+        self.assertEqual(len(activity.created), 1)
+        self.assertEqual(activity.created[0]["canonical_class"], "truck")
 
     def test_started_violation_persists_local_source_context_without_eager_clip(self):
         class PersistenceSink:
@@ -1268,6 +1390,168 @@ class TestAreaPipelineControl(unittest.TestCase):
         self.assertGreater(created["source_position_seconds"], 40.0)
         self.assertLess(created["source_position_seconds"], 42.5)
         self.assertFalse(hasattr(pipeline, "_clip_tasks"))
+
+    def test_local_activity_fingerprint_is_stable_for_small_replay_jitter(self):
+        reader = MagicMock()
+        reader.source = r"D:\video_test\sample.mp4"
+        pipeline = AreaPipeline(
+            camera_id="BAI-KIEM",
+            detector=MagicMock(),
+            zone_sync=MagicMock(),
+            reader=reader,
+            persistence=MagicMock(),
+            emitter=MagicMock(),
+        )
+
+        def fingerprint(position: float, entry_point: tuple[float, float]) -> str:
+            reader.get_source_context.return_value = {
+                "source_kind": "LOCAL_FILE",
+                "source_ref": reader.source,
+                "source_position_seconds": position,
+                "source_timestamp": None,
+            }
+            transition = ActivityTransition(
+                action="STARTED",
+                session_id="session",
+                camera_id="BAI-KIEM",
+                track_id=7,
+                zone_id="zone-1",
+                zone_name="Benchmark",
+                object_label="Xe nâng",
+                canonical_class="forklift",
+                policy_result="ALLOWED",
+                entered_at=datetime.now(timezone.utc),
+                last_seen_at=datetime.now(timezone.utc),
+                entry_point=entry_point,
+            )
+            return pipeline._activity_source_metadata(transition)["event_fingerprint"]
+
+        first = fingerprint(42.1, (320 / 640, 384 / 480))
+        replay = fingerprint(42.3, (326 / 640, 390 / 480))
+        different_moment = fingerprint(44.1, (320 / 640, 384 / 480))
+
+        self.assertEqual(first, replay)
+        self.assertNotEqual(first, different_moment)
+
+    def test_activity_persistence_uses_source_metadata_frozen_at_detection_time(self):
+        class ActivityPersistenceSink:
+            def __init__(self):
+                self.created = []
+
+            async def create(self, **payload):
+                self.created.append(payload)
+                return {"id": payload["session_id"]}
+
+            async def close(self, **payload):
+                return payload
+
+        reader = MagicMock()
+        reader.get_source_context.return_value = {
+            "source_kind": "LOCAL_FILE",
+            "source_ref": "advanced.mp4",
+            "source_position_seconds": 99.0,
+            "source_timestamp": None,
+        }
+        activity_persistence = ActivityPersistenceSink()
+        pipeline = AreaPipeline(
+            camera_id="BAI-KIEM",
+            detector=MagicMock(),
+            zone_sync=MagicMock(),
+            reader=reader,
+            persistence=MagicMock(),
+            activity_persistence=activity_persistence,
+            emitter=MagicMock(),
+        )
+        transition = ActivityTransition(
+            action="STARTED",
+            session_id="session-frozen",
+            camera_id="BAI-KIEM",
+            track_id=7,
+            zone_id="zone-1",
+            zone_name="Benchmark",
+            object_label="Xe nâng",
+            canonical_class="forklift",
+            policy_result="ALLOWED",
+            entered_at=datetime.now(timezone.utc),
+            last_seen_at=datetime.now(timezone.utc),
+            entry_point=(0.5, 0.8),
+            source_metadata={
+                "source_kind": "LOCAL_FILE",
+                "source_ref": "sample.mp4",
+                "source_position_seconds": 42.0,
+                "source_timestamp": None,
+                "event_fingerprint": "f" * 64,
+            },
+        )
+
+        asyncio.run(pipeline._process_activity_transition_once(transition, 0))
+
+        self.assertEqual(activity_persistence.created[0]["source_ref"], "sample.mp4")
+        self.assertEqual(activity_persistence.created[0]["source_position_seconds"], 42.0)
+        self.assertEqual(activity_persistence.created[0]["event_fingerprint"], "f" * 64)
+
+    def test_local_replay_does_not_recalculate_existing_activity(self):
+        class ReplayPersistenceSink:
+            def __init__(self):
+                self.closed = []
+
+            async def create(self, **_payload):
+                return {"id": "existing-activity", "was_inserted": False}
+
+            async def close(self, **payload):
+                self.closed.append(payload)
+                return payload
+
+        activity_persistence = ReplayPersistenceSink()
+        pipeline = AreaPipeline(
+            camera_id="BAI-KIEM",
+            detector=MagicMock(),
+            zone_sync=MagicMock(),
+            reader=MagicMock(),
+            persistence=MagicMock(),
+            activity_persistence=activity_persistence,
+            emitter=MagicMock(),
+        )
+        entered_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        started = ActivityTransition(
+            action="STARTED",
+            session_id="replayed-session",
+            camera_id="BAI-KIEM",
+            track_id=1,
+            zone_id="zone-1",
+            zone_name="Benchmark",
+            object_label="Xe nâng container",
+            canonical_class="reach_stacker",
+            policy_result="ALLOWED",
+            entered_at=entered_at,
+            last_seen_at=entered_at,
+            entry_point=(0.5, 0.8),
+            source_metadata={
+                "source_kind": "LOCAL_FILE",
+                "source_ref": "sample.mp4",
+                "source_position_seconds": 42.0,
+                "source_timestamp": None,
+                "event_fingerprint": "a" * 64,
+            },
+        )
+        ended = ActivityTransition(
+            **{
+                **vars(started),
+                "action": "ENDED",
+                "last_seen_at": entered_at + timedelta(seconds=30),
+                "exited_at": entered_at + timedelta(seconds=30),
+                "duration_seconds": 30,
+            }
+        )
+
+        async def scenario():
+            await pipeline._process_activity_transition_once(started, 0)
+            await pipeline._process_activity_transition_once(ended, 0)
+
+        asyncio.run(scenario())
+
+        self.assertEqual(activity_persistence.closed, [])
+        self.assertNotIn("replayed-session", pipeline._activity_replay_session_ids)
 
     def test_live_source_context_never_persists_rtsp_credentials(self):
         reader = StreamReader.__new__(StreamReader)
@@ -1321,6 +1605,7 @@ class TestAreaPipelineControl(unittest.TestCase):
             emitter=emitter,
             record_violation_clips=False,
         )
+        pipeline.set_viewer_active(True)
         entered_at = datetime(2026, 8, 25, tzinfo=timezone.utc)
         item = ViolationTransition(
             action="STARTED", violation_id="slow-start", camera_id="BAI-KIEM", track_id=7,

@@ -5,7 +5,7 @@ import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 
 Box = Tuple[float, float, float, float]
@@ -50,6 +50,7 @@ class ActivityTransition:
     exited_at: Optional[datetime] = None
     duration_seconds: Optional[int] = None
     violation_id: Optional[str] = None
+    source_metadata: Optional[Dict[str, Any]] = None
 
 
 class ActivityTracker:
@@ -152,7 +153,7 @@ class ActivityTracker:
     ) -> List[ActivityTransition]:
         now = timestamp or datetime.now(timezone.utc)
         observed_track_ids: Set[int] = set()
-        inside: Dict[Key, Tuple[Dict[str, Any], Dict[str, Any], Box, str]] = {}
+        inside: Dict[Key, Tuple[Dict[str, Any], Mapping[str, Any], Box, str]] = {}
 
         for detection in detections:
             raw_track_id = detection.get("trackId")
@@ -167,7 +168,7 @@ class ActivityTracker:
                 continue
             canonical = canonical.strip().casefold()
             for match in detection.get("zoneMatches") or []:
-                if not isinstance(match, dict):
+                if not isinstance(match, Mapping):
                     continue
                 zone_id = match.get("zoneId")
                 status = match.get("status")
@@ -197,10 +198,10 @@ class ActivityTracker:
                 self.active_sessions[key] = active
                 continue
 
-            if detection.get("canInitiate") is not True:
-                continue
             pending = self.pending_sessions.get(key)
             if pending is None:
+                if detection.get("canInitiate") is not True:
+                    continue
                 label = detection.get("label") or canonical
                 pending = PendingActivity(
                     camera_id=self.camera_id,
@@ -217,6 +218,16 @@ class ActivityTracker:
                 )
                 self.pending_sessions[key] = pending
             else:
+                # A strong observation opens pending state. Subsequent frames
+                # commonly carry only continuation confidence; they must still
+                # advance confirmation for the same track/class. If neither
+                # gate is present, discard the pending candidate immediately.
+                if not (
+                    detection.get("canContinue") is True
+                    or detection.get("canInitiate") is True
+                ):
+                    del self.pending_sessions[key]
+                    continue
                 pending.last_seen_at = now
                 pending.normalized_bbox = bbox
 

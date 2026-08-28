@@ -1,0 +1,4 @@
+interface:
+  display_name: "SentriAI Operations"
+  short_description: "Answer SentriAI operations questions reliably"
+  default_prompt: "Use $sentriai-operations to answer this SentriAI operations question from verified saved data."

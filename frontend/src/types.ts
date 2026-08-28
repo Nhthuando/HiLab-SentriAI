@@ -191,6 +191,14 @@ export interface ActivityEvidence {
   clipStatus: AreaClipStatus;
   canRequestClip: boolean;
   clipId: string | null;
+  coverage?: {
+    status: 'NOT_STARTED' | 'PARTIAL' | 'COMPLETE' | 'STALE' | 'UNAVAILABLE';
+    percent: number;
+    sourceKind: 'LOCAL_FILE' | 'LIVE' | 'UNAVAILABLE';
+    sourceDurationSeconds: number | null;
+    coveredIntervals: Array<[number, number]>;
+    lastObservedAtLocal: string | null;
+  };
   message?: string;
 }
 

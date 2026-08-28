@@ -16,7 +16,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -29,7 +29,9 @@ from db.repositories import (
     create_zone_violation,
     delete_area_activity_sessions,
     delete_zone_violations,
+    get_area_activity_collection_state,
     touch_area_activity_collection,
+    update_area_activity_collection,
 )
 from detection.area_event_queue import AreaEventQueue, RetryableAreaTransitionError
 from detection.event_clip_service import ActivityClipStore, EventClipGenerator, EventClipService
@@ -39,9 +41,11 @@ from stream.reader import StreamReader
 from stream.rolling_archive import RollingArchive
 from zone.zone_checker import ViolationTransition, ZoneChecker
 from zone.activity_tracker import ActivityTracker, ActivityTransition
+from zone.coverage_tracker import ActivityCoverageTracker
 from zone.zone_sync import ZoneSnapshot, ZoneSynchronizer
 
 logger = logging.getLogger("sentriai.area.pipeline")
+APP_TIME_ZONE = timezone(timedelta(hours=7))
 
 
 class RepositoryAreaPersistence:
@@ -72,6 +76,12 @@ class RepositoryActivityPersistence:
     async def touch(self, camera_id: str, observed_at: datetime) -> Any:
         return await touch_area_activity_collection(camera_id, observed_at)
 
+    async def update_coverage(self, **payload: Any) -> Any:
+        return await update_area_activity_collection(**payload)
+
+    async def get_coverage(self, camera_id: str) -> Any:
+        return await get_area_activity_collection_state(camera_id)
+
 
 class NoWriteActivityPersistence:
     """Test/benchmark sink used when callers already inject non-production persistence."""
@@ -86,6 +96,12 @@ class NoWriteActivityPersistence:
         return 0
 
     async def touch(self, _camera_id: str, _observed_at: datetime) -> None:
+        return None
+
+    async def update_coverage(self, **_payload: Any) -> None:
+        return None
+
+    async def get_coverage(self, _camera_id: str) -> None:
         return None
 
 
@@ -116,8 +132,10 @@ class AreaPipeline:
         self.target_fps = target_fps
         self.resolution = resolution
         self.jpeg_quality = jpeg_quality
+        self.background_frame_stride = max(1, int(os.getenv("AREA_BACKGROUND_FRAME_STRIDE", "1")))
 
         backend_dir = Path(__file__).resolve().parents[2]
+        self._backend_dir = backend_dir
 
         # Resolve clips directory relative to backend/, independent of process CWD.
         if clips_dir:
@@ -166,16 +184,8 @@ class AreaPipeline:
         live_source = getattr(self.reader, "source", None)
         if rolling_archive is not None:
             self.rolling_archive = rolling_archive
-        elif source_context.get("source_kind") == "LIVE" and isinstance(live_source, str):
-            self.rolling_archive = RollingArchive(
-                camera_id=self.camera_id,
-                source_url=live_source,
-                archive_dir=backend_dir / "data" / "area_archive" / self.camera_id,
-                retention_seconds=int(os.getenv("AREA_ARCHIVE_RETENTION_SECONDS", "7200")),
-                segment_seconds=int(os.getenv("AREA_ARCHIVE_SEGMENT_SECONDS", "2")),
-            )
         else:
-            self.rolling_archive = None
+            self.rolling_archive = self._build_rolling_archive(source_context, live_source)
         self.clip_service = clip_service or EventClipService(
             camera_id=self.camera_id,
             generator=EventClipGenerator(self.clips_dir),
@@ -192,6 +202,7 @@ class AreaPipeline:
 
         self._running = False
         self._active = False
+        self._viewer_active = False
         self._task: Optional[asyncio.Task] = None
         self.frame_count = 0
         self.fps_measured = 0.0
@@ -208,8 +219,15 @@ class AreaPipeline:
             self._handle_exhausted_activity_transition,
         )
         self._activity_persisted_ids: Dict[str, str] = {}
+        self._activity_replay_session_ids: set[str] = set()
+        self._activity_replay_read_only = False
+        self._last_activity_persistence_error: Optional[str] = None
         self._activity_heartbeat_task: Optional[asyncio.Task[Any]] = None
         self._last_activity_heartbeat = 0.0
+        self.activity_coverage = ActivityCoverageTracker(
+            max_contiguous_gap_seconds=max(1.0, 2.5 / max(1.0, self.target_fps)),
+        )
+        self._reset_activity_coverage_source()
         self._applied_detection_snapshot: Optional[ZoneSnapshot] = None
         self._applied_detection_control: Optional[tuple[object, ...]] = None
 
@@ -228,6 +246,90 @@ class AreaPipeline:
             "source_position_seconds": None,
             "source_timestamp": None,
         }
+
+    def _build_rolling_archive(
+        self,
+        source_context: Mapping[str, Any],
+        source: object,
+    ) -> Optional[RollingArchive]:
+        """Build a live archive for the current reader without starting it."""
+        if source_context.get("source_kind") != "LIVE" or not isinstance(source, str):
+            return None
+        return RollingArchive(
+            camera_id=self.camera_id,
+            source_url=source,
+            archive_dir=self._backend_dir / "data" / "area_archive" / self.camera_id,
+            retention_seconds=int(os.getenv("AREA_ARCHIVE_RETENTION_SECONDS", "7200")),
+            segment_seconds=int(os.getenv("AREA_ARCHIVE_SEGMENT_SECONDS", "2")),
+        )
+
+    def _coverage_source(self) -> Tuple[str, Optional[str], Optional[str], Optional[float]]:
+        context = self._get_source_context()
+        source_kind = str(context.get("source_kind") or "UNAVAILABLE")
+        source_ref = context.get("source_ref") if isinstance(context.get("source_ref"), str) else None
+        duration: Optional[float] = None
+        state_getter = getattr(self.reader, "get_playback_state", None)
+        if callable(state_getter):
+            try:
+                state = state_getter()
+                raw_duration = state.get("durationSeconds") if isinstance(state, Mapping) else None
+                duration = float(raw_duration) if raw_duration and float(raw_duration) > 0 else None
+            except (TypeError, ValueError):
+                duration = None
+        identity = source_ref or self.camera_id
+        if source_kind == "LOCAL_FILE" and source_ref:
+            try:
+                stat = os.stat(source_ref)
+                identity = f"{os.path.abspath(source_ref)}:{stat.st_size}:{stat.st_mtime_ns}"
+            except OSError:
+                identity = os.path.abspath(source_ref)
+        fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest() if identity else None
+        return source_kind, fingerprint, source_ref, duration
+
+    def _reset_activity_coverage_source(self) -> None:
+        kind, fingerprint, _source_ref, duration = self._coverage_source()
+        self.activity_coverage.reset_source(kind, fingerprint, duration)
+        self.activity_coverage.break_continuity()
+
+    def _observe_activity_coverage(self) -> None:
+        kind, fingerprint, _source_ref, duration = self._coverage_source()
+        self.activity_coverage.reset_source(kind, fingerprint, duration)
+        context = self._get_source_context()
+        position = context.get("source_position_seconds")
+        observed = context.get("source_timestamp")
+        self.activity_coverage.observe(
+            position_seconds=float(position) if position is not None else None,
+            observed_at=observed if isinstance(observed, datetime) else None,
+        )
+
+    async def _restore_activity_coverage(self) -> None:
+        """Restore coverage only when persistence belongs to the current source."""
+        self._activity_replay_read_only = False
+        self._reset_activity_coverage_source()
+        loader = getattr(self.activity_persistence, "get_coverage", None)
+        try:
+            saved = await loader(self.camera_id) if callable(loader) else None
+        except Exception as exc:
+            logger.warning("[%s] Coverage resume unavailable: %s", self.camera_id, exc)
+            return
+        if not isinstance(saved, Mapping):
+            return
+
+        kind, fingerprint, _source_ref, duration = self._coverage_source()
+        if saved.get("source_fingerprint") != fingerprint:
+            return
+        self.activity_coverage.restore(
+            source_kind=kind,
+            source_fingerprint=fingerprint,
+            source_duration_seconds=duration,
+            covered_intervals=list(saved.get("covered_intervals") or []),
+            last_observed_at=saved.get("last_observed_at"),
+            completed_at=saved.get("completed_at"),
+        )
+        self._activity_replay_read_only = (
+            kind == "LOCAL_FILE"
+            and self.activity_coverage.snapshot().coverage_status == "COMPLETE"
+        )
 
     def _resolve_active_model(self, active_model: Optional[Mapping[str, Any]]) -> Optional[Dict[str, object]]:
         """Return a verified, absolute ACTIVE artifact or fail closed.
@@ -325,6 +427,7 @@ class AreaPipeline:
             snapshot = self.zone_sync.get_snapshot()
             self._apply_detection_control(snapshot)
             self._applied_detection_snapshot = snapshot
+            await self._restore_activity_coverage()
             await asyncio.to_thread(self.detector.warmup, self.resolution)
             logger.info("[%s] Area detector preloaded and warmed before feed activation.", self.camera_id)
             return True
@@ -351,7 +454,17 @@ class AreaPipeline:
             # timeline. Never let ByteTrack IDs or temporal confirmation leak
             # across that discontinuity.
             self.detector.reset_tracking()
-            activity_transitions.extend(self.activity_tracker.end_all(datetime.now(timezone.utc)))
+            ended_previous_timeline = self.activity_tracker.end_all(datetime.now(timezone.utc))
+            if not self._activity_replay_read_only:
+                activity_transitions.extend(ended_previous_timeline)
+            source_kind, _fingerprint, _source_ref, _duration = self._coverage_source()
+            if (
+                source_kind == "LOCAL_FILE"
+                and self.activity_coverage.snapshot().coverage_status == "COMPLETE"
+            ):
+                # A completed finite source may keep looping for playback, but
+                # later loops must never create new persisted activity rows.
+                self._activity_replay_read_only = True
             if self.buffer is not None:
                 self.buffer.clear()
 
@@ -379,17 +492,24 @@ class AreaPipeline:
         )
         new_activity_transitions = self.activity_tracker.check_detections(
             annotated_detections,
-            now_dt,
+            self._activity_observed_at(),
         )
         violation_starts = {
             (item.track_id, item.zone_id): item.violation_id
             for item in transitions
             if item.action == "STARTED"
         }
-        for item in new_activity_transitions:
-            if item.action == "STARTED" and item.policy_result == "VIOLATION":
-                item.violation_id = violation_starts.get((item.track_id, item.zone_id))
-        activity_transitions.extend(new_activity_transitions)
+        if not self._activity_replay_read_only:
+            for item in new_activity_transitions:
+                if item.action == "STARTED" and item.policy_result == "VIOLATION":
+                    item.violation_id = violation_starts.get((item.track_id, item.zone_id))
+                if item.action == "STARTED":
+                    # Freeze the source position while processing this frame. The
+                    # persistence queue may retry later; reading the player again
+                    # there would shift the replay fingerprint and double-count a
+                    # local demo video.
+                    item.source_metadata = self._activity_source_metadata(item)
+            activity_transitions.extend(new_activity_transitions)
 
         # 5. Encode JPEG frame to base64
         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
@@ -468,6 +588,7 @@ class AreaPipeline:
 
             state = self.reader.request_seek(position_seconds)
             if state.get("seekable"):
+                self._reset_activity_coverage_source()
                 self.detector.reset_tracking()
                 if self.buffer is not None:
                     self.buffer.clear()
@@ -475,6 +596,92 @@ class AreaPipeline:
                 self._last_fps_calc = time.time()
                 self.fps_measured = self.target_fps
             return state
+
+    async def replace_source(self, source: str) -> bool:
+        """Replace the Area reader without reloading the detector or services."""
+        candidate = await asyncio.to_thread(
+            StreamReader,
+            source=source,
+            camera_id=self.camera_id,
+            target_fps=self.target_fps,
+            resolution=self.resolution,
+        )
+        if not candidate.is_usable_source:
+            candidate.release()
+            return False
+
+        candidate_context = candidate.get_source_context()
+        next_archive = self._build_rolling_archive(candidate_context, candidate.source)
+        previous_reader: Optional[Any] = None
+        previous_archive: Optional[RollingArchive] = None
+        previous_clip_archive: Optional[RollingArchive] = getattr(self.clip_service, "archive", None)
+        swapped = False
+
+        try:
+            async with self._control_lock:
+                now = datetime.now(timezone.utc)
+                for transition in self.zone_checker.end_all(now):
+                    self._event_queue.enqueue(transition, self._runtime_generation)
+                for transition in self.activity_tracker.end_all(now):
+                    self._activity_queue.enqueue(transition, self._runtime_generation)
+                await self._event_queue.join()
+                await self._activity_queue.join()
+
+                self._runtime_generation += 1
+                await self._event_queue.reset_generation(self._runtime_generation)
+                await self._activity_queue.reset_generation(self._runtime_generation)
+                await self.clip_service.reset()
+                await self.activity_clip_service.reset()
+
+                previous_archive = self.rolling_archive
+                if previous_archive is not None:
+                    await previous_archive.stop()
+
+                previous_reader = self.reader
+                candidate.mark_source_reset()
+                self.reader = candidate
+                self.rolling_archive = next_archive
+                clip_archive = next_archive or previous_clip_archive
+                self.clip_service.archive = clip_archive
+                self.activity_clip_service.archive = clip_archive
+                swapped = True
+
+                self.zone_checker.clear_runtime_state()
+                self.activity_tracker.clear_runtime_state()
+                self._activity_persisted_ids.clear()
+                self._activity_replay_session_ids.clear()
+                self.detector.reset_tracking()
+                if self.buffer is not None:
+                    self.buffer.clear()
+                self._fps_counter = 0
+                self._last_fps_calc = time.time()
+                self._last_activity_heartbeat = 0.0
+                self.fps_measured = self.target_fps
+                await self._restore_activity_coverage()
+
+                if next_archive is not None:
+                    next_archive.start()
+
+            try:
+                previous_reader.release()
+            except Exception as exc:
+                logger.warning("[%s] Previous source cleanup failed: %s", self.camera_id, exc)
+            return True
+        except Exception:
+            if next_archive is not None:
+                await next_archive.stop()
+            if swapped and previous_reader is not None:
+                async with self._control_lock:
+                    self.reader = previous_reader
+                    self.rolling_archive = previous_archive
+                    self.clip_service.archive = previous_clip_archive
+                    self.activity_clip_service.archive = previous_clip_archive
+                    if previous_archive is not None:
+                        previous_archive.start()
+            elif previous_archive is not None and not previous_archive.is_running:
+                previous_archive.start()
+            candidate.release()
+            raise
 
     async def delete_all_events(self) -> Dict[str, int]:
         """Atomically retire live Area state before deleting its DB history."""
@@ -490,6 +697,9 @@ class AreaPipeline:
             cleared_active, cleared_pending = self.zone_checker.clear_runtime_state()
             cleared_activity_active, cleared_activity_pending = self.activity_tracker.clear_runtime_state()
             self._activity_persisted_ids.clear()
+            self._activity_replay_session_ids.clear()
+            self.activity_coverage.clear_progress()
+            self._activity_replay_read_only = False
 
             return {
                 "deleted_records": int(deleted_records),
@@ -499,12 +709,43 @@ class AreaPipeline:
 
     async def _touch_activity_coverage(self) -> None:
         try:
-            await self.activity_persistence.touch(
-                self.camera_id,
-                datetime.now(timezone.utc),
-            )
+            snapshot = self.activity_coverage.snapshot()
+            _kind, _fingerprint, source_ref, _duration = self._coverage_source()
+            updater = getattr(self.activity_persistence, "update_coverage", None)
+            if callable(updater):
+                await updater(
+                    camera_id=self.camera_id,
+                    source_kind=snapshot.source_kind,
+                    source_fingerprint=snapshot.source_fingerprint,
+                    source_ref=source_ref,
+                    source_duration_seconds=snapshot.source_duration_seconds,
+                    covered_intervals=[[left, right] for left, right in snapshot.covered_intervals],
+                    coverage_percent=snapshot.coverage_percent,
+                    coverage_status=snapshot.coverage_status,
+                    observed_at=snapshot.last_observed_at or datetime.now(timezone.utc),
+                    completed_at=snapshot.completed_at,
+                )
+            else:
+                await self.activity_persistence.touch(
+                    self.camera_id,
+                    datetime.now(timezone.utc),
+                )
         except Exception as exc:
             logger.warning("[%s] Activity collection heartbeat failed: %s", self.camera_id, exc)
+
+    def _activity_observed_at(self, context: Optional[Mapping[str, Any]] = None) -> datetime:
+        """Use source time for local analytics so scan speed cannot change sessions."""
+        source = dict(context) if context is not None else self._get_source_context()
+        if source.get("source_kind") == "LOCAL_FILE":
+            try:
+                position = max(0.0, float(source.get("source_position_seconds") or 0.0))
+                local_now = datetime.now(APP_TIME_ZONE)
+                local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+                return local_midnight.astimezone(timezone.utc) + timedelta(seconds=position)
+            except (TypeError, ValueError):
+                pass
+        timestamp = source.get("source_timestamp")
+        return timestamp if isinstance(timestamp, datetime) else datetime.now(timezone.utc)
 
     def _activity_source_metadata(self, transition: ActivityTransition) -> Dict[str, Any]:
         context = self._get_source_context()
@@ -518,7 +759,7 @@ class AreaPipeline:
             current_position = float(position or 0.0)
             confirmation_delay = max(
                 0.0,
-                (datetime.now(timezone.utc) - transition.entered_at).total_seconds(),
+                (self._activity_observed_at(context) - transition.entered_at).total_seconds(),
             )
             position = max(0.0, current_position - confirmation_delay)
             source_identity = str(source_ref or self.camera_id)
@@ -530,15 +771,18 @@ class AreaPipeline:
                     source_identity = os.path.abspath(source_ref)
             width, height = self.resolution
             payload = {
-                "version": 1,
+                "version": 2,
                 "camera": self.camera_id,
                 "source": source_identity,
                 "zone": transition.zone_id,
                 "class": transition.canonical_class,
-                "timeBucket": round(float(position) * 2.0) / 2.0,
-                "entryPixel": [
-                    round(transition.entry_point[0] * width),
-                    round(transition.entry_point[1] * height),
+                # A one-second time bucket and 32px entry grid absorb normal
+                # frame/tracker jitter across replays while still separating
+                # distinct entries by time and location.
+                "timeBucket": round(float(position)),
+                "entryGrid": [
+                    round(transition.entry_point[0] * width / 32.0),
+                    round(transition.entry_point[1] * height / 32.0),
                 ],
             }
             fingerprint = hashlib.sha256(
@@ -570,7 +814,10 @@ class AreaPipeline:
             return
         try:
             if transition.action == "STARTED":
-                source = self._activity_source_metadata(transition)
+                source = dict(
+                    transition.source_metadata
+                    or self._activity_source_metadata(transition)
+                )
                 created = await self.activity_persistence.create(
                     session_id=transition.session_id,
                     camera_id=self.camera_id,
@@ -588,8 +835,18 @@ class AreaPipeline:
                 )
                 if created is None:
                     raise RuntimeError("Area activity session was not persisted")
-                self._activity_persisted_ids[transition.session_id] = str(created["id"])
+                self._last_activity_persistence_error = None
+                if created.get("was_inserted", True):
+                    self._activity_persisted_ids[transition.session_id] = str(created["id"])
+                else:
+                    # The same local-video moment was already counted. Keep
+                    # the historical row fully immutable during this replay,
+                    # including its exit timestamp and observed duration.
+                    self._activity_replay_session_ids.add(transition.session_id)
             elif transition.action == "ENDED":
+                if transition.session_id in self._activity_replay_session_ids:
+                    self._activity_replay_session_ids.discard(transition.session_id)
+                    return
                 persisted_id = self._activity_persisted_ids.pop(
                     transition.session_id,
                     transition.session_id,
@@ -599,6 +856,7 @@ class AreaPipeline:
                     exited_at=transition.exited_at or transition.last_seen_at,
                     duration_seconds=transition.duration_seconds or 0,
                 )
+                self._last_activity_persistence_error = None
         except Exception as exc:
             raise RetryableAreaTransitionError(
                 f"Failed to persist activity {transition.session_id}: {exc}"
@@ -610,6 +868,7 @@ class AreaPipeline:
         generation: int,
         error: BaseException,
     ) -> None:
+        self._last_activity_persistence_error = str(error)
         logger.error(
             "[%s] Activity persistence exhausted for %s %s at generation %s: %s",
             self.camera_id,
@@ -814,6 +1073,10 @@ class AreaPipeline:
                     result = await asyncio.to_thread(self.process_single_frame)
 
                 await self.publish_result(result)
+                if not self._viewer_active and self.background_frame_stride > 1:
+                    skipper = getattr(self.reader, "skip_local_frames", None)
+                    if callable(skipper):
+                        skipper(self.background_frame_stride - 1)
 
             except Exception as exc:
                 logger.error("[%s] Error in Area pipeline loop: %s", self.camera_id, exc)
@@ -828,14 +1091,16 @@ class AreaPipeline:
         """Run the production feed/event output path for one processed frame."""
         if not result.get("success"):
             return
-        await self.emitter.emit_frame(
-            camera_id=self.camera_id,
-            image_base64=str(result["image_base64"]),
-            detections=result["detections"],
-            fps=float(result["fps"]),
-            zones=result["zones"],
-            source_reset=bool(result.get("source_reset", False)),
-        )
+        self._observe_activity_coverage()
+        if self._viewer_active:
+            await self.emitter.emit_frame(
+                camera_id=self.camera_id,
+                image_base64=str(result["image_base64"]),
+                detections=result["detections"],
+                fps=float(result["fps"]),
+                zones=result["zones"],
+                source_reset=bool(result.get("source_reset", False)),
+            )
         for transition in result.get("transitions", []):
             queued = self._event_queue.enqueue(
                 transition,
@@ -855,7 +1120,7 @@ class AreaPipeline:
                     RuntimeError("Activity event queue rejected transition"),
                 )
         now = time.monotonic()
-        if now - self._last_activity_heartbeat >= 60.0:
+        if now - self._last_activity_heartbeat >= 10.0:
             self._last_activity_heartbeat = now
             if self._activity_heartbeat_task is None or self._activity_heartbeat_task.done():
                 self._activity_heartbeat_task = asyncio.create_task(
@@ -879,6 +1144,10 @@ class AreaPipeline:
             self.rolling_archive.start()
         self.zone_sync.start()
         self._task = asyncio.create_task(self._loop())
+
+    def set_viewer_active(self, active: bool) -> None:
+        """Control rendered frame emission without pausing activity analytics."""
+        self._viewer_active = bool(active)
 
     def pause(self) -> None:
         """Suspend frame processing while retaining the warm model and camera resources."""
@@ -924,10 +1193,16 @@ class AreaPipeline:
             "camera_id": self.camera_id,
             "running": self._running,
             "active": self._active,
+            "viewer_active": self._viewer_active,
+            "activity_coverage": self.activity_coverage.snapshot().coverage_status,
             "frame_count": self.frame_count,
             "fps": self.fps_measured,
             "buffered_frames": self.buffer.get_frame_count() if self.buffer is not None else 0,
             "rolling_archive": self.rolling_archive.status() if self.rolling_archive is not None else None,
             "active_violations": len(self.zone_checker.active_violations),
             "active_activity_sessions": len(self.activity_tracker.active_sessions),
+            "pending_activity_sessions": len(self.activity_tracker.pending_sessions),
+            "activity_replay_read_only": self._activity_replay_read_only,
+            "activity_queue": self._activity_queue.get_stats(),
+            "last_activity_persistence_error": self._last_activity_persistence_error,
         }

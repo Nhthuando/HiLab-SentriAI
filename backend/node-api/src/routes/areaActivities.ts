@@ -45,21 +45,38 @@ router.get('/', async (req: Request, res: Response) => {
     return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid date range');
   }
 
-  const where: Prisma.AreaActivitySessionWhereInput = {
-    cameraId: 'BAI-KIEM',
-    ...(zoneId ? { zoneId } : {}),
-    ...(single(req.query.object_label) ? { objectLabel: { contains: single(req.query.object_label)!, mode: 'insensitive' } } : {}),
-    ...(single(req.query.canonical_class) ? { canonicalClass: { equals: single(req.query.canonical_class)!, mode: 'insensitive' } } : {}),
-    ...(policyResult ? { policyResult } : {}),
-    ...(sessionStatus ? { sessionStatus } : {}),
-    ...(start || end ? { enteredAt: { ...(start ? { gte: start } : {}), ...(end ? { lt: end } : {}) } } : {}),
-  };
   try {
+    const coverage = await prisma.areaActivityCollectionState.findUnique({ where: { cameraId: 'BAI-KIEM' } });
+    const where: Prisma.AreaActivitySessionWhereInput = {
+      cameraId: 'BAI-KIEM',
+      ...(zoneId ? { zoneId } : {}),
+      ...(single(req.query.object_label) ? { objectLabel: { contains: single(req.query.object_label)!, mode: 'insensitive' } } : {}),
+      ...(single(req.query.canonical_class) ? { canonicalClass: { equals: single(req.query.canonical_class)!, mode: 'insensitive' } } : {}),
+      ...(policyResult ? { policyResult } : {}),
+      ...(sessionStatus ? { sessionStatus } : {}),
+      ...(start || end ? { enteredAt: { ...(start ? { gte: start } : {}), ...(end ? { lt: end } : {}) } } : {}),
+      ...(coverage?.sourceKind === 'LOCAL_FILE'
+        && coverage.coverageStatus === 'COMPLETE'
+        && coverage.completedAt
+        ? { createdAt: { lte: coverage.completedAt } }
+        : {}),
+    };
     const [total, items] = await Promise.all([
       prisma.areaActivitySession.count({ where }),
       prisma.areaActivitySession.findMany({ where, orderBy: [{ enteredAt: 'desc' }, { id: 'desc' }], take: limit, skip: offset }),
     ]);
-    return sendSuccess(res, { items, total, limit, offset });
+    return sendSuccess(res, {
+      items, total, limit, offset,
+      coverage: coverage ? {
+        status: coverage.coverageStatus,
+        percent: coverage.coveragePercent,
+        sourceKind: coverage.sourceKind,
+        sourceDurationSeconds: coverage.sourceDurationSeconds,
+        coveredIntervals: coverage.coveredIntervals,
+        lastObservedAt: coverage.lastObservedAt,
+        completedAt: coverage.completedAt,
+      } : null,
+    });
   } catch (error) {
     console.error('[areaActivities] Failed to list activity:', error);
     return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Failed to retrieve Area activity');
