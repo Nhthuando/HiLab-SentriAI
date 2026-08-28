@@ -187,7 +187,7 @@ git commit -m "fix: align node v9 fallback approval schema"
 - Consumes: committed V9 metadata, artifact, and approved non-secret environment settings.
 - Produces: evidence that Python and Node accept the same canonical approval without modifying artifact or database state.
 
-- [ ] **Step 1: Run the worker's real configured-model diagnostic**
+- [x] **Step 1: Run the worker's real configured-model diagnostic**
 
 Run:
 
@@ -198,7 +198,7 @@ Set-Location backend/python-worker
 
 Expected: both printed version keys equal `baikiem-v9-unified-candidate-final`.
 
-- [ ] **Step 2: Verify the committed checkpoint hash and repository diff**
+- [x] **Step 2: Verify the committed checkpoint hash and repository diff**
 
 Run:
 
@@ -210,6 +210,6 @@ git status --short
 
 Expected: SHA-256 is `3772E978FC4635A6A2D3DFFB59286BD89C0EBBC6CC6E27DC77532B5006EAAB52`, `git diff --check` is clean, and only intended plan/code/test changes are present before their commits.
 
-- [ ] **Step 3: Report rollout instructions**
+- [x] **Step 3: Report rollout instructions**
 
 The second machine pulls the implementation commits, retains the same non-secret `CUSTOM_AUGMENT_*` values, fully stops the old Python worker and Node API, and restarts them. Startup evidence must contain `Loaded ACTIVE custom model baikiem-v9-unified-candidate-final` and `Area detection control applied: mode=UNIFIED`.
