@@ -32,170 +32,188 @@ HiLab-SentriAI/
 └── docs/                     Tài liệu sản phẩm và kỹ thuật
 ```
 
-## Yêu cầu
+## Yêu cầu môi trường
 
-Trước khi chạy dự án, cần chuẩn bị:
+Trước khi cài đặt, máy tính cần chuẩn bị:
 
-- Node.js và npm.
-- Python 3.11 trở lên.
-- Một cơ sở dữ liệu PostgreSQL trên Neon.
-- Gemini API key.
-- Camera RTSP hoặc video cục bộ để làm nguồn kiểm thử.
-- GPU NVIDIA là tùy chọn, nhưng nên có nếu cần xử lý video nhanh.
+- **Node.js**: Phiên bản 18.x trở lên và npm.
+- **Python**: Phiên bản 3.11 hoặc 3.12 (khuyến nghị Python 3.12).
+- **Cơ sở dữ liệu**: Chuỗi kết nối PostgreSQL (Neon cloud) do nhóm cung cấp hoặc tự tạo.
+- **Gemini API Key**: Key Google AI Studio để sử dụng tính năng hỏi đáp AI.
+- **Video kiểm thử**: Các file video mp4 mẫu (được gửi kèm riêng) hoặc luồng RTSP thực tế.
+- **Kết nối Internet**: Cần thiết ở lần chạy đầu tiên để tải các thư viện và AI model cơ sở (`yolo11n.pt`, `fast-alpr`).
 
-## Cài đặt
+---
 
-Các lệnh bên dưới được chạy từ thư mục gốc của dự án.
+## Hướng dẫn cài đặt chi tiết (Dành cho thành viên mới clone về)
 
-### 1. Tạo file môi trường
+Thực hiện lần lượt theo các bước bên dưới từ thư mục gốc của dự án:
 
-Từ thư mục gốc của dự án:
-
-```powershell
-Copy-Item backend/.env.example backend/.env
-Copy-Item frontend/.env.example frontend/.env
-```
-
-Nếu dùng macOS hoặc Linux:
+### Bước 1: Clone mã nguồn về máy
 
 ```bash
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
+git clone https://github.com/Nhthuando/HiLab-SentriAI.git
+cd HiLab-SentriAI
 ```
 
-Mở `backend/.env` và điền tối thiểu các giá trị sau:
-
-```dotenv
-NEON_DATABASE_URL=postgresql://...
-GEMINI_API_KEY=...
-GATE_CAMERA_URL=...
-AREA_CAMERA_URL=...
-CLIP_SOURCE_ROOTS=backend/data/samples
-```
-
-`GATE_CAMERA_URL` và `AREA_CAMERA_URL` có thể là URL RTSP hoặc đường dẫn tới video cục bộ. Đường dẫn tương đối được tính từ thư mục gốc của dự án. Video cục bộ phải nằm trong `CLIP_SOURCE_ROOTS`; dùng dấu `;` để ngăn cách nhiều thư mục trên Windows và dấu `:` trên macOS/Linux.
-
-Không đưa file `.env` hay API key lên GitHub.
-
-### 2. Cài Backend API
+### Bước 2: Cài đặt Backend API (Node.js)
 
 ```bash
 cd backend/node-api
 npm install
-npx prisma migrate deploy
+npx prisma generate
 ```
 
-### 3. Cài Python Worker
+> [!NOTE]
+> Nếu bạn kết nối vào Database mới hoàn toàn, chạy thêm lệnh: `npx prisma migrate deploy` để đồng bộ bảng.
+
+### Bước 3: Cài đặt Frontend (React + Vite)
 
 ```bash
-cd backend/python-worker
+cd ../../frontend
+npm install
+```
+
+### Bước 4: Cài đặt Python AI Worker
+
+```bash
+cd ../backend/python-worker
+```
+
+Tạo môi trường ảo Python (**Bắt buộc đặt tên là `.venv`** để script chạy tự động nhận diện được):
+
+```bash
 python -m venv .venv
 ```
 
-Kích hoạt môi trường ảo trên Windows:
+Kích hoạt môi trường ảo:
+- Trên **Windows (PowerShell)**:
+  ```powershell
+  .venv\Scripts\Activate.ps1
+  ```
+  *(Nếu gặp lỗi script execution policy trên PowerShell, mở bằng quyền Admin và gõ: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`)*
+- Trên **macOS / Linux**:
+  ```bash
+  source .venv/bin/activate
+  ```
 
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-Hoặc trên macOS/Linux:
-
-```bash
-source .venv/bin/activate
-```
-
-Sau đó cài thư viện:
-
+Cài đặt các gói phụ thuộc:
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Cài Frontend
+### Bước 5: Cấu hình biến môi trường (`backend/.env`)
 
-```bash
-cd frontend
-npm install
-```
-
-## Chạy dự án
-
-Từ thư mục gốc, chạy cả ba dịch vụ bằng một lệnh:
-
-```bash
-npm run dev
-```
-
-Log trong terminal được gắn nhãn `[worker]`, `[api]` và `[web]`. Nhấn `Ctrl+C` một lần để dừng cả ba dịch vụ. Hãy dừng các dịch vụ đang chạy riêng trước khi dùng lệnh này để tránh trùng cổng.
-
-Nếu muốn chạy riêng từng dịch vụ, dùng các lệnh bên dưới.
-
-**Python Worker trên Windows**
-
-```powershell
-cd backend/python-worker
-.\.venv\Scripts\python.exe main.py
-```
-
-**Python Worker trên macOS/Linux**
-
-```bash
-cd backend/python-worker
-.venv/bin/python main.py
-```
-
-**Backend API**
-
-```bash
-cd backend/node-api
-npm run dev
-```
-
-**Frontend**
-
-```bash
-cd frontend
-npm run dev
-```
-
-Sau khi khởi động thành công:
-
-- Giao diện: `http://localhost:5173`
-- Backend API: `http://localhost:3001`
-- Python Worker: `http://localhost:8001`
-
-## Đổi nguồn camera hoặc video
-
-Khi Python Worker đang chạy, sửa một trong hai giá trị trong `backend/.env` rồi lưu file:
+1. Tạo file `backend/.env` (bằng cách sao chép file `.env` được gửi hoặc tạo từ `backend/.env.example`).
+2. Mở file `backend/.env` và **chỉnh sửa các thông số đường dẫn video cho đúng với máy của bạn**:
 
 ```dotenv
-GATE_CAMERA_URL=backend/data/samples/gate_sample.mp4
-AREA_CAMERA_URL=backend/data/samples/area_sample.mp4
+# ─── CSDL & Gemini API ───────────────────────────────────────────
+NEON_DATABASE_URL="postgresql://..."
+GEMINI_API_KEY="..."
+
+# ─── NGUỒN VIDEO KIỂM THỬ (QUAN TRỌNG: Cần trỏ đúng vị trí file trên máy bạn) ──
+# Ví dụ: Nếu bạn để video tại C:\SentriAI_Videos
+GATE_CAMERA_URL=C:\SentriAI_Videos\GATE\Gate-In2.mp4
+AREA_CAMERA_URL=C:\SentriAI_Videos\KiemHoa\KiemHoa-Hik (1).mp4
+CLIP_SOURCE_ROOTS=C:\SentriAI_Videos
+
+# (Hoặc nếu để video trong thư mục backend/data/samples của dự án)
+# GATE_CAMERA_URL=backend/data/samples/gate_sample.mp4
+# AREA_CAMERA_URL=backend/data/samples/area_sample.mp4
+# CLIP_SOURCE_ROOTS=backend/data/samples
 ```
 
-Worker phát hiện thay đổi trong khoảng hai giây; thời gian mở nguồn mới phụ thuộc vào file hoặc kết nối RTSP. Không cần `Ctrl+C`, không reload model AI và không khởi động lại Node API hoặc Frontend. Chỉ pipeline có URL thay đổi được reset.
+> [!IMPORTANT]
+> **LƯU Ý VỀ VIDEO TEST:**
+> Các file video dung lượng lớn không đưa lên GitHub. Nếu đường dẫn video trong `.env` không tồn tại trên máy bạn, hệ thống sẽ tự fallback về **ảnh chụp tĩnh** (không có chuyển động, không nhận diện xe mới và không phát sinh clip). Hãy chắc chắn bạn đã tải video mẫu và sửa đường dẫn trong `.env` trỏ đúng vào đó.
 
-Nếu file hoặc URL mới không hợp lệ, nguồn đang chạy được giữ nguyên và terminal sẽ hiển thị lỗi. Khi thay đổi `CLIP_SOURCE_ROOTS`, cần khởi động lại Python Worker vì allowlist này được cố định trong suốt một phiên chạy.
+---
 
-### Tự kiểm tra hot-reload
+## Khởi động hệ thống
 
-1. Chạy `npm run dev` và chờ ba dịch vụ sẵn sàng.
-2. Đổi riêng `AREA_CAMERA_URL`, lưu `.env` và kiểm tra BAI-KIEM chuyển video còn GATE-01 giữ nguyên.
-3. Đổi riêng `GATE_CAMERA_URL` và kiểm tra theo chiều ngược lại.
-4. Thử một đường dẫn không tồn tại và xác nhận video cũ vẫn chạy.
-5. Nhấn `Ctrl+C` một lần và xác nhận cả ba dịch vụ đã dừng.
+Từ **thư mục gốc** của dự án (`HiLab-SentriAI`), bạn chỉ cần chạy một lệnh duy nhất:
 
-## Cách hệ thống ghi nhận hoạt động
+```bash
+npm run dev
+```
 
-Mỗi lượt hoạt động được tạo khi một đối tượng đi vào khu vực giám sát và kết thúc khi đối tượng rời khỏi khu vực. AI hỏi đáp thống kê từ các lượt đã được hệ thống lưu, không đếm lại video mỗi khi người dùng đặt câu hỏi.
+Script sẽ tự động khởi động đồng thời cả 3 dịch vụ:
+- `[worker]` **Python AI Worker**: Chạy trên cổng `8001`
+- `[api]` **Backend Node API**: Chạy trên cổng `3001`
+- `[web]` **Frontend Web App**: Chạy trên `http://localhost:5173`
 
-Clip không được tạo sẵn cho mọi lượt hoạt động. Khi người dùng chọn **Xem video**, hệ thống mới lấy đoạn video liên quan và tạo clip để phát lại.
+👉 Mở trình duyệt và truy cập: **`http://localhost:5173`**
+
+Nhấn `Ctrl + C` trong terminal để dừng toàn bộ dịch vụ một cách an toàn.
+
+---
+
+### Tùy chọn: Chạy riêng từng dịch vụ (Nếu muốn debug riêng)
+
+Nếu bạn không muốn chạy bằng lệnh `npm run dev` tổng hợp, mở 3 cửa sổ terminal riêng biệt:
+
+1. **Terminal 1 - Python Worker**:
+   ```powershell
+   cd backend/python-worker
+   .\.venv\Scripts\python.exe main.py
+   ```
+   *(Trên macOS/Linux: `source .venv/bin/activate && python main.py`)*
+
+2. **Terminal 2 - Backend API**:
+   ```bash
+   cd backend/node-api
+   npm run dev
+   ```
+
+3. **Terminal 3 - Frontend**:
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+
+---
+
+## Đổi nguồn camera / video (Hot-reload không cần restart)
+
+Khi hệ thống đang chạy, bạn có thể đổi video kiểm thử bằng cách sửa file `backend/.env` và bấm **Save**:
+
+```dotenv
+GATE_CAMERA_URL=C:\SentriAI_Videos\GATE\another_gate_video.mp4
+AREA_CAMERA_URL=C:\SentriAI_Videos\KiemHoa\another_area_video.mp4
+```
+
+Python Worker sẽ tự nhận diện sau 2 giây và chuyển video mà không cần dừng server hay tải lại AI model.
+
+---
+
+## Xử lý các lỗi thường gặp (Troubleshooting)
+
+1. **Lỗi `[dev] Thiếu Python trong backend/python-worker/.venv...`:**
+   - Nguyên nhân: Môi trường ảo Python chưa được tạo hoặc tạo với tên khác `.venv`.
+   - Khắc phục: Đảm bảo thư mục môi trường ảo nằm đúng tại `backend/python-worker/.venv`.
+
+2. **Video trên web không chạy, chỉ hiện ảnh tĩnh:**
+   - Nguyên nhân: Đường dẫn `GATE_CAMERA_URL` hoặc `AREA_CAMERA_URL` trong `backend/.env` bị sai, file video không tồn tại trên máy bạn.
+   - Khắc phục: Kiểm tra lại đường dẫn tuyệt đối hoặc tương đối tới file video thực tế trên máy tính của bạn.
+
+3. **Bấm "Xem video" ở bảng sự kiện báo lỗi không tạo được clip:**
+   - Nguyên nhân: Thư mục chứa video gốc chưa được khai báo trong `CLIP_SOURCE_ROOTS`.
+   - Khắc phục: Thêm thư mục chứa video vào `CLIP_SOURCE_ROOTS` trong `backend/.env` rồi khởi động lại worker.
+
+4. **Lỗi thiếu Prisma Client trong Node API:**
+   - Khắc phục: Vào thư mục `backend/node-api` và chạy lệnh `npx prisma generate`.
+
+5. **Lỗi xung đột cổng (Port already in use 3001 / 8001 / 5173):**
+   - Khắc phục: Đảm bảo đã tắt các tiến trình cũ trước khi chạy `npm run dev`.
+
+---
 
 ## Kiểm tra mã nguồn
 
-Chạy từng nhóm lệnh từ thư mục gốc của dự án.
+Chạy từng nhóm lệnh từ thư mục gốc của dự án nếu cần kiểm thử chất lượng code:
 
-**Backend API và AI hỏi đáp**
-
+**Backend API và AI hỏi đáp:**
 ```bash
 cd backend/node-api
 npm run typecheck
@@ -204,15 +222,16 @@ npm run test:qa
 npm run test:domain-skill
 ```
 
-**Frontend**
-
+**Frontend:**
 ```bash
 cd frontend
 npm run lint
 npm run build
 ```
 
-## Tài liệu thêm
+---
+
+## Tài liệu tham khảo thêm
 
 - [Mô tả sản phẩm](docs/product/product.md)
 - [Kiến trúc hệ thống](docs/architecture/architecture.md)
@@ -220,9 +239,3 @@ npm run build
 - [Tài liệu frontend](docs/frontend/frontend.md)
 - [Kế hoạch triển khai](docs/plan/plan.md)
 - [Bộ quy tắc nghiệp vụ cho AI](backend/node-api/src/ai/domain/sentriai-operations/SKILL.md)
-
-## Lưu ý
-
-- Các file video, clip, model AI và dữ liệu sinh ra khi chạy có thể rất lớn nên không nên đưa lên GitHub.
-- Kết quả nhận diện phụ thuộc vào model, chất lượng camera, góc quay và cấu hình khu vực.
-- Mỗi máy tự cấu hình đường dẫn video trong `backend/.env`; không sửa `.env.example` theo đường dẫn cá nhân.
