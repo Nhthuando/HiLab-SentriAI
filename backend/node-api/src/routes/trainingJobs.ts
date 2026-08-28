@@ -236,10 +236,10 @@ trainingJobsRouter.post('/:id/start', async (req: Request, res: Response, next: 
 trainingJobsRouter.post('/:id/retry', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const job = await prisma.trainingJob.findUnique({ where: { id: req.params.id } });
-    if (!job) throw new NotFoundError('KhĂ´ng tĂ¬m tháº¥y láº§n cáº£i thiá»‡n nháº­n diá»‡n');
-    if (job.status !== 'FAILED') throw new BadRequestError('Chá»‰ cĂ³ thá»ƒ cháº¡y láº¡i má»™t láº§n cáº£i thiá»‡n bá»‹ lá»—i');
+    if (!job) throw new NotFoundError('Không tìm thấy lần cải thiện nhận diện');
+    if (job.status !== 'FAILED') throw new BadRequestError('Chỉ có thể chạy lại một lần cải thiện bị lỗi');
     const active = await prisma.trainingJob.count({ where: { status: { in: ['RUNNING', 'EVALUATING'] } } });
-    if (active) throw new BadRequestError('ÄĂ£ cĂ³ má»™t láº§n cáº£i thiá»‡n nháº­n diá»‡n Ä‘ang cháº¡y');
+    if (active) throw new BadRequestError('Đã có một lần cải thiện nhận diện đang chạy');
     await prisma.trainingJob.update({
       where: { id: job.id },
       data: { status: 'QUEUED', pauseReason: null, failureReason: null, completedAt: null },

@@ -1194,14 +1194,14 @@ class TestAreaPipelineControl(unittest.TestCase):
         )
         ended = ActivityTransition(
             action="ENDED", session_id="first-pass", camera_id="BAI-KIEM",
-            track_id=1, zone_id="zone-1", zone_name="Zone", object_label="Xe táº£i",
+            track_id=1, zone_id="zone-1", zone_name="Zone", object_label="Xe tải",
             canonical_class="truck", policy_result="ALLOWED", entered_at=completed,
             last_seen_at=completed, entry_point=(0.5, 0.5), exited_at=completed,
             duration_seconds=1,
         )
         replay_started = ActivityTransition(
             action="STARTED", session_id="replay", camera_id="BAI-KIEM",
-            track_id=2, zone_id="zone-1", zone_name="Zone", object_label="Xe táº£i",
+            track_id=2, zone_id="zone-1", zone_name="Zone", object_label="Xe tải",
             canonical_class="truck", policy_result="ALLOWED", entered_at=completed,
             last_seen_at=completed, entry_point=(0.5, 0.5),
         )

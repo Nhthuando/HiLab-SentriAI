@@ -31,7 +31,7 @@ class DetectionTaxonomyTests(unittest.TestCase):
             "labelMap": {"truck": "truck", "reach_stacker": "reach_stacker"},
         }
         truck = resolve_label_capability(
-            {"vietnameseName": "Xe táº£i", "baseClass": "truck"},
+            {"vietnameseName": "Xe tải", "baseClass": "truck"},
             active_model,
         )
         missing_car = resolve_label_capability(

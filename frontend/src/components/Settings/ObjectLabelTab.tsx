@@ -38,6 +38,17 @@ const BASE_CLASS_OPTIONS = [
 const BASE_CLASS_VALUES = new Set<string>(BASE_CLASS_OPTIONS.map((option) => option.value));
 const CANONICAL_CLASS_PATTERN = /^[a-z][a-z0-9_]{1,49}$/;
 
+function cleanMojibake(text?: string | null): string {
+  if (!text) return '';
+  return text
+    .replace(/Nháº[­\s]?n\s*di[áệ][»‡\s]?n\s*b[áở][»Ÿ\s]?i/gi, 'Nhận diện bởi')
+    .replace(/Model unified Ä‘ang hoáº¡t Ä‘á»™ng khĂ´ng há»— trá»£/gi, 'Model unified đang hoạt động không hỗ trợ')
+    .replace(/Ä‘ang hoáº¡t Ä‘á»™ng/gi, 'đang hoạt động')
+    .replace(/khĂ´ng há»— trá»£/gi, 'không hỗ trợ')
+    .replace(/Xe táº£i/gi, 'Xe tải')
+    .replace(/NgÆ°á» i/gi, 'Người');
+}
+
 export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
   objLabels,
   annSources,
@@ -1374,10 +1385,10 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
               const isStatic = o.kind === 'tinh' || o.baseClass === 'shipping_container';
               const labelTint = o.tint || getLabelColor(o.id);
               const capabilityLabel = o.detectionSource === 'COCO'
-                ? 'COCO'
+                ? 'Model COCO'
                 : o.detectionSource === 'CUSTOM'
-                  ? `Custom · ${o.activeModelVersion || 'không rõ phiên bản'}`
-                  : 'Chưa có model nhận diện';
+                  ? `Custom · ${o.activeModelVersion || 'đã huấn luyện'}`
+                  : 'Chưa có model';
 
               return (
                 <div
@@ -1387,19 +1398,25 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     padding: '10px 14px',
-                    borderRadius: '10px',
-                    marginBottom: '4px',
+                    borderRadius: '12px',
+                    marginBottom: '6px',
                     cursor: 'default',
-                    backgroundColor: isSelected ? 'var(--card-hover)' : 'transparent',
-                    border: isSelected ? `1.5px solid ${labelTint}` : '1.5px solid transparent',
-                    boxShadow: isSelected ? `0 2px 10px -2px ${labelTint}44` : 'none',
+                    backgroundColor: isSelected ? 'var(--card-hover)' : 'var(--panel)',
+                    border: isSelected ? `1.5px solid ${labelTint}` : '1px solid var(--line)',
+                    boxShadow: isSelected ? `0 2px 12px -2px ${labelTint}33` : 'none',
                     transition: 'all 0.16s ease'
                   }}
                   onMouseEnter={(e) => {
-                    if (!isSelected) e.currentTarget.style.backgroundColor = 'var(--raise)';
+                    if (!isSelected) {
+                      e.currentTarget.style.backgroundColor = 'var(--raise)';
+                      e.currentTarget.style.borderColor = 'var(--line2)';
+                    }
                   }}
                   onMouseLeave={(e) => {
-                    if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
+                    if (!isSelected) {
+                      e.currentTarget.style.backgroundColor = 'var(--panel)';
+                      e.currentTarget.style.borderColor = 'var(--line)';
+                    }
                   }}
                 >
                   <button
@@ -1412,14 +1429,26 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                         setSavedSuccessMsg(`✓ Đã gán nhãn "${o.name}" cho mẫu được chọn`);
                       }
                     }}
-                    style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1, padding: 0, border: 'none', background: 'transparent', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit' }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      minWidth: 0,
+                      flex: 1,
+                      padding: 0,
+                      border: 'none',
+                      background: 'transparent',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit'
+                    }}
                   >
                     {/* Number key pill */}
                     <span
                       style={{
-                        width: '22px',
-                        height: '22px',
-                        borderRadius: '7px',
+                        width: '24px',
+                        height: '24px',
+                        borderRadius: '8px',
                         backgroundColor: labelTint,
                         color: '#ffffff',
                         fontSize: '11px',
@@ -1428,25 +1457,26 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                         alignItems: 'center',
                         justifyContent: 'center',
                         flex: 'none',
+                        marginTop: '2px',
                         fontFamily: 'var(--font-mono)',
-                        boxShadow: isSelected ? `0 0 10px ${labelTint}66` : 'none'
+                        boxShadow: isSelected ? `0 0 8px ${labelTint}66` : 'none'
                       }}
                     >
                       {idx + 1}
                     </span>
 
                     {/* Label Name & Category Tag */}
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {o.name}
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {cleanMojibake(o.name)}
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
                         <span
                           style={{
-                            fontSize: '9.5px',
+                            fontSize: '10px',
                             fontWeight: 600,
-                            padding: '1px 6px',
-                            borderRadius: '4px',
+                            padding: '1px 7px',
+                            borderRadius: '6px',
                             backgroundColor: isNguoi ? 'var(--purpleq)' : isStatic ? 'var(--raise)' : 'var(--accq)',
                             color: isNguoi ? 'var(--purple)' : isStatic ? 'var(--ink2)' : 'var(--acc)'
                           }}
@@ -1457,27 +1487,30 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                           {o.samples} mẫu
                         </span>
                         <span
-                          title={o.capabilityReason}
+                          title={cleanMojibake(o.capabilityReason)}
                           style={{
-                            fontSize: '9.5px',
+                            fontSize: '10px',
                             fontWeight: 700,
-                            padding: '1px 6px',
+                            padding: '1px 8px',
                             borderRadius: '999px',
                             backgroundColor: o.isDetectable ? 'var(--okq)' : 'var(--p1q)',
                             color: o.isDetectable ? 'var(--ok)' : 'var(--p1)',
+                            border: `1px solid ${o.isDetectable ? 'var(--ok)' : 'var(--p1)'}`,
                           }}
                         >
                           {capabilityLabel}
                         </span>
                       </div>
-                      <div style={{ marginTop: '3px', color: 'var(--ink3)', fontSize: '9.5px', lineHeight: 1.35 }}>
-                        {o.capabilityReason}
-                      </div>
+                      {o.capabilityReason && (
+                        <div style={{ marginTop: '3px', color: 'var(--ink3)', fontSize: '10px', lineHeight: 1.35 }}>
+                          {cleanMojibake(o.capabilityReason)}
+                        </div>
+                      )}
                     </div>
                   </button>
 
                   {/* Actions: Edit & Delete */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 'none' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 'none', marginLeft: '8px' }}>
                     {/* Edit Button */}
                     <button
                       type="button"
@@ -1488,24 +1521,28 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                       }}
                       title="Chỉnh sửa tên, loại hoặc màu nhãn"
                       style={{
-                        padding: '5px 8px',
-                        borderRadius: '6px',
+                        padding: '5px 9px',
+                        borderRadius: '7px',
                         border: '1px solid var(--line2)',
                         backgroundColor: 'var(--card)',
                         color: 'var(--ink2)',
-                        fontSize: '11px',
+                        fontSize: '11.5px',
+                        fontWeight: 600,
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '3px'
+                        gap: '4px',
+                        transition: 'all 0.15s ease'
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.borderColor = 'var(--acc)';
                         e.currentTarget.style.color = 'var(--acc)';
+                        e.currentTarget.style.backgroundColor = 'var(--accq)';
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.borderColor = 'var(--line2)';
                         e.currentTarget.style.color = 'var(--ink2)';
+                        e.currentTarget.style.backgroundColor = 'var(--card)';
                       }}
                     >
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
@@ -1530,16 +1567,18 @@ export const ObjectLabelTab: React.FC<ObjectLabelTabProps> = ({
                       }}
                       title="Xóa nhãn này"
                       style={{
-                        padding: '5px 8px',
-                        borderRadius: '6px',
+                        padding: '5px 9px',
+                        borderRadius: '7px',
                         border: '1px solid var(--p0q)',
                         backgroundColor: 'var(--p0q)',
                         color: 'var(--p0)',
-                        fontSize: '11px',
+                        fontSize: '11.5px',
+                        fontWeight: 600,
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '3px'
+                        gap: '4px',
+                        transition: 'all 0.15s ease'
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.backgroundColor = 'var(--p0)';

@@ -19,14 +19,14 @@ const unifiedModel = {
   labelMap: { truck: 'truck', reach_stacker: 'reach_stacker' },
 };
 assert.deepStrictEqual(
-  resolveLabelCapability({ vietnameseName: 'Xe táº£i', baseClass: 'truck' }, unifiedModel),
+  resolveLabelCapability({ vietnameseName: 'Xe tải', baseClass: 'truck' }, unifiedModel),
   {
     canonicalClass: 'truck',
     detectionSource: 'CUSTOM',
     isDetectable: true,
     activeModelVersion: 'unified-v1',
     reasonCode: 'ACTIVE_UNIFIED_CLASS',
-    reasonText: 'Nháº­n diá»‡n bá»Ÿi model unified unified-v1',
+    reasonText: 'Nhận diện bởi model unified unified-v1',
   },
 );
 const missingUnifiedCar = resolveLabelCapability(

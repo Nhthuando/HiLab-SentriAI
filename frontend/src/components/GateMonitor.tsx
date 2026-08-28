@@ -189,6 +189,7 @@ export const GateMonitor: React.FC<GateMonitorProps> = ({ zones, events: initial
   useWebSocket<{ type: string; data: GateEvent }>({
     path: '/ws/events/gate',
     onMessage: (msg) => {
+      if (isPaused) return;
       const newEv = normalizeGateEvent(msg?.data || msg);
       if (!newEv) return;
       setLiveEvents((prev) => mergeGateEvent(prev, newEv));

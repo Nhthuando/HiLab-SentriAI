@@ -493,12 +493,12 @@ def resolve_label_capability(label: object, active_model: object | None) -> Dete
                 True,
                 parsed_active_model.version_key,
                 "ACTIVE_UNIFIED_CLASS",
-                f"Nháº­n diá»‡n bá»Ÿi model unified {parsed_active_model.version_key}",
+                f"Nhận diện bởi model unified {parsed_active_model.version_key}",
             )
         return _unavailable(
             canonical_class,
             "UNIFIED_CLASS_NOT_IN_ACTIVE_MODEL",
-            f"Model unified Ä‘ang hoáº¡t Ä‘á»™ng khĂ´ng há»— trá»£ class {canonical_class}",
+            f"Model unified đang hoạt động không hỗ trợ class {canonical_class}",
         )
     if canonical_class in coco_classes:
         return DetectionCapability(canonical_class, "COCO", True, None, "COCO_BASE_CLASS", "Nhận diện bởi model COCO")

@@ -511,13 +511,13 @@ export function resolveLabelCapability(label: unknown, activeModel: unknown | nu
         isDetectable: true,
         activeModelVersion: parsedActiveModel.versionKey,
         reasonCode: 'ACTIVE_UNIFIED_CLASS',
-        reasonText: `Nháº­n diá»‡n bá»Ÿi model unified ${parsedActiveModel.versionKey}`,
+        reasonText: `Nhận diện bởi model unified ${parsedActiveModel.versionKey}`,
       };
     }
     return unavailable(
       canonicalClass,
       'UNIFIED_CLASS_NOT_IN_ACTIVE_MODEL',
-      `Model unified Ä‘ang hoáº¡t Ä‘á»™ng khĂ´ng há»— trá»£ class ${canonicalClass}`,
+      `Model unified đang hoạt động không hỗ trợ class ${canonicalClass}`,
     );
   }
   if (Object.prototype.hasOwnProperty.call(DETECTION_TAXONOMY.cocoClasses, canonicalClass)) {

@@ -698,6 +698,8 @@ class GatePipeline:
 
     def _emit_unknown_passage(self, passage: Dict[str, Any], now: float) -> bool:
         """Persist one unread result only from an actual recognized plate crop."""
+        if passage.get("event_plate") or passage.get("filtered"):
+            return False
         crop = passage.get("crop")
         if crop is None or not isinstance(crop, np.ndarray) or crop.size == 0:
             passage["filtered"] = True
@@ -1313,8 +1315,6 @@ class GatePipeline:
         if getattr(self, "_ai_busy", False):
             return
         for track_id, track in list(self.tracker.tracks.items()):
-            if getattr(track, "passage_id", None):
-                continue
             if getattr(track, "event_emitted", False):
                 continue
             if not getattr(track, "best_plate", ""):
@@ -1336,8 +1336,15 @@ class GatePipeline:
             plate = track.best_plate
             track.mark_event_emitted()
             passage = getattr(self, "_lane_passages", {}).get(track_id)
-            if passage and getattr(track, "passage_id", None) == passage.get("id"):
+            if passage is None and getattr(track, "passage_id", None):
+                for p in getattr(self, "_lane_passages", {}).values():
+                    if p.get("id") == track.passage_id:
+                        passage = p
+                        break
+            if passage:
                 passage["event_plate"] = plate
+                passage["crop"] = crop.copy()
+                passage["crop_confidence"] = confidence
 
             asyncio.create_task(
                 self._handle_detected_plate(
@@ -1347,7 +1354,7 @@ class GatePipeline:
                     lane=track.lane,
                     zone_name=track.zone_name,
                     now=now,
-                    event_key=f"{self.camera_id}:{track_id}",
+                    event_key=f"{self.camera_id}:{getattr(track, 'passage_id', None) or track_id}",
                     video_timecode=self._get_video_timecode(),
                 )
             )

@@ -1553,57 +1553,66 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
                     </button>
                   </div>
 
-                  {/* Vehicle Permissions Matrix */}
-                  <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '4px' }}>
-                    {objLabels.map((obj) => {
-                      const isAllowed = !!z.types[obj.name];
-                      const isLegacyReference = !obj.isDetectable && targetLabelKeys.has(obj.name.toLocaleLowerCase());
-                      return (
-                        <button
-                          type="button"
-                          key={obj.id}
-                          disabled={!obj.isDetectable}
-                          aria-disabled={!obj.isDetectable}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (!obj.isDetectable) return;
-                            handleUpdateZoneProp(z.id, {
-                              types: {
-                                ...z.types,
-                                [obj.name]: isAllowed ? 0 : 1
-                              }
-                            });
-                          }}
-                          title={!obj.isDetectable
-                            ? `${obj.name}: ${obj.capabilityReason}`
-                            : `Bấm để ${isAllowed ? 'cấm' : 'cho phép'} ${obj.name}`}
-                          style={{
-                            fontSize: '10.5px',
-                            fontWeight: 600,
-                            padding: '3px 9px',
-                            borderRadius: '16px',
-                            border: `1px solid ${!obj.isDetectable ? 'var(--p1)' : isAllowed ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}`,
-                            backgroundColor: !obj.isDetectable ? 'var(--p1q)' : isAllowed ? 'var(--okq)' : 'var(--p0q)',
-                            color: !obj.isDetectable ? 'var(--p1)' : isAllowed ? 'var(--ok)' : 'var(--p0)',
-                            cursor: obj.isDetectable ? 'pointer' : 'not-allowed',
-                            opacity: obj.isDetectable ? 1 : 0.82,
-                            fontFamily: 'inherit',
-                            transition: 'all 0.15s ease'
-                          }}
-                        >
-                          {!obj.isDetectable
-                            ? `${isLegacyReference ? '⚠ Nhãn cũ' : '⊘ Chưa có model'} · ${obj.name}`
-                            : isAllowed ? `✓ ${obj.name}` : `✕ ${obj.name}`}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {(objLabels.some((label) => !label.isDetectable && targetLabelKeys.has(label.name.toLocaleLowerCase())) || unknownLegacyLabels.length > 0) && (
-                    <div role="note" style={{ marginTop: '7px', color: 'var(--p1)', fontSize: '10px', lineHeight: 1.4 }}>
-                      Zone này có tham chiếu nhãn cũ chưa nhận diện được
-                      {unknownLegacyLabels.length > 0 ? ` hoặc không còn trong registry: ${unknownLegacyLabels.join(', ')}` : ''}.
-                      {' '}Tham chiếu cũ được hiển thị để đối soát và sẽ không được đưa vào payload lưu mới.
+                  {/* Vehicle Permissions Matrix (Only for Area Cameras like BAI-KIEM; GATE only uses zones for ALPR lane boundary) */}
+                  {camSel.startsWith('GATE') ? (
+                    <div style={{ fontSize: '11px', color: 'var(--ink3)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '12px' }}>📷</span>
+                      <span>Vùng quét &amp; nhận diện biển số xe tự động (ALPR)</span>
                     </div>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '4px' }}>
+                        {objLabels.map((obj) => {
+                          const isAllowed = !!z.types[obj.name];
+                          const isLegacyReference = !obj.isDetectable && targetLabelKeys.has(obj.name.toLocaleLowerCase());
+                          return (
+                            <button
+                              type="button"
+                              key={obj.id}
+                              disabled={!obj.isDetectable}
+                              aria-disabled={!obj.isDetectable}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!obj.isDetectable) return;
+                                handleUpdateZoneProp(z.id, {
+                                  types: {
+                                    ...z.types,
+                                    [obj.name]: isAllowed ? 0 : 1
+                                  }
+                                });
+                              }}
+                              title={!obj.isDetectable
+                                ? `${obj.name}: ${obj.capabilityReason}`
+                                : `Bấm để ${isAllowed ? 'cấm' : 'cho phép'} ${obj.name}`}
+                              style={{
+                                fontSize: '10.5px',
+                                fontWeight: 600,
+                                padding: '3px 9px',
+                                borderRadius: '16px',
+                                border: `1px solid ${!obj.isDetectable ? 'var(--p1)' : isAllowed ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}`,
+                                backgroundColor: !obj.isDetectable ? 'var(--p1q)' : isAllowed ? 'var(--okq)' : 'var(--p0q)',
+                                color: !obj.isDetectable ? 'var(--p1)' : isAllowed ? 'var(--ok)' : 'var(--p0)',
+                                cursor: obj.isDetectable ? 'pointer' : 'not-allowed',
+                                opacity: obj.isDetectable ? 1 : 0.82,
+                                fontFamily: 'inherit',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              {!obj.isDetectable
+                                ? `${isLegacyReference ? '⚠ Nhãn cũ' : '⊘ Chưa có model'} · ${obj.name}`
+                                : isAllowed ? `✓ ${obj.name}` : `✕ ${obj.name}`}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {(objLabels.some((label) => !label.isDetectable && targetLabelKeys.has(label.name.toLocaleLowerCase())) || unknownLegacyLabels.length > 0) && (
+                        <div role="note" style={{ marginTop: '7px', color: 'var(--p1)', fontSize: '10px', lineHeight: 1.4 }}>
+                          Zone này có tham chiếu nhãn cũ chưa nhận diện được
+                          {unknownLegacyLabels.length > 0 ? ` hoặc không còn trong registry: ${unknownLegacyLabels.join(', ')}` : ''}.
+                          {' '}Tham chiếu cũ được hiển thị để đối soát và sẽ không được đưa vào payload lưu mới.
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               );
@@ -1621,7 +1630,11 @@ export const ZoneEditorTab: React.FC<ZoneEditorTabProps> = ({
             color: 'var(--ink3)'
           }}
         >
-          Phương tiện mang nhãn <b style={{ color: 'var(--p0)' }}>Xe lạ</b> hoặc sai loại sẽ cảnh báo vi phạm khi vào zone.
+          {camSel.startsWith('GATE') ? (
+            'Vùng đa giác xác định phạm vi quét biển số xe tự động tại làn cổng.'
+          ) : (
+            <>Phương tiện mang nhãn <b style={{ color: 'var(--p0)' }}>Xe lạ</b> hoặc sai loại sẽ cảnh báo vi phạm khi vào zone.</>
+          )}
         </div>
       </div>
     </div>

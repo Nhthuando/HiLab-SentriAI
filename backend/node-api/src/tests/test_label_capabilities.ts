@@ -246,8 +246,8 @@ async function runServiceTests(): Promise<void> {
     process.env.CUSTOM_AUGMENT_MANUAL_CANDIDATE = 'true';
     const configuredV9Context = await new DetectionCapabilityService(
       new FakeDetectionControlRepository(null, [
-        label({ id: 'person', vietnameseName: 'NgÆ°á»i', baseClass: 'person' }),
-        label({ id: 'truck', vietnameseName: 'Xe táº£i', baseClass: 'truck' }),
+        label({ id: 'person', vietnameseName: 'Người', baseClass: 'person' }),
+        label({ id: 'truck', vietnameseName: 'Xe tải', baseClass: 'truck' }),
         label(),
       ]),
     ).loadDetectionContext();
