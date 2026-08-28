@@ -216,11 +216,16 @@ class ZoneSynchronizerCapabilityTests(unittest.TestCase):
             model_dir.mkdir(parents=True)
             artifact = model_dir / "best.pt"
             artifact.write_bytes(b"manual-candidate")
+            artifact_sha256 = hashlib.sha256(b"manual-candidate").hexdigest()
             (model_dir / "labels.json").write_text(
                 json.dumps({"Reach stacker": "reach_stacker"}), encoding="utf-8"
             )
             (model_dir / "evaluation.json").write_text(json.dumps({
-                "manualTestApproved": True,
+                "manualProductionApproval": {
+                    "approved": True,
+                    "allowPartialUnified": True,
+                    "artifactSha256": artifact_sha256,
+                },
                 "runtimeMode": "UNIFIED",
                 "qualityGate": {"passed": False},
                 "baseRegression": {"passed": True},
@@ -229,7 +234,7 @@ class ZoneSynchronizerCapabilityTests(unittest.TestCase):
                 "CUSTOM_AUGMENT_FORCE_DEFAULT": "true",
                 "CUSTOM_AUGMENT_ARTIFACT": "training/models/candidate/best.pt",
                 "CUSTOM_AUGMENT_VERSION_KEY": "custom-candidate",
-                "CUSTOM_AUGMENT_SHA256": hashlib.sha256(b"manual-candidate").hexdigest(),
+                "CUSTOM_AUGMENT_SHA256": artifact_sha256,
             }
 
             self.assertIsNone(_configured_custom_model(base_environment, data_root))
@@ -242,6 +247,57 @@ class ZoneSynchronizerCapabilityTests(unittest.TestCase):
         assert configured is not None
         self.assertEqual(configured["version_key"], "custom-candidate")
         self.assertEqual(configured["evaluation_metrics"]["runtimeMode"], "UNIFIED")
+        self.assertEqual(
+            configured["evaluation_metrics"]["manualProductionApproval"]["artifactSha256"],
+            artifact_sha256,
+        )
+
+    def test_manual_candidate_rejects_legacy_or_unbound_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory)
+            model_dir = data_root / "training" / "models" / "candidate"
+            model_dir.mkdir(parents=True)
+            artifact = model_dir / "best.pt"
+            artifact.write_bytes(b"manual-candidate")
+            artifact_sha256 = hashlib.sha256(b"manual-candidate").hexdigest()
+            (model_dir / "labels.json").write_text(
+                json.dumps({"Reach stacker": "reach_stacker"}), encoding="utf-8"
+            )
+            environment = {
+                "CUSTOM_AUGMENT_FORCE_DEFAULT": "true",
+                "CUSTOM_AUGMENT_MANUAL_CANDIDATE": "true",
+                "CUSTOM_AUGMENT_ARTIFACT": "training/models/candidate/best.pt",
+                "CUSTOM_AUGMENT_VERSION_KEY": "custom-candidate",
+                "CUSTOM_AUGMENT_SHA256": artifact_sha256,
+            }
+            rejected_approvals = (
+                {"manualTestApproved": True},
+                {"manualProductionApproval": {
+                    "approved": False,
+                    "allowPartialUnified": True,
+                    "artifactSha256": artifact_sha256,
+                }},
+                {"manualProductionApproval": {
+                    "approved": True,
+                    "allowPartialUnified": False,
+                    "artifactSha256": artifact_sha256,
+                }},
+                {"manualProductionApproval": {
+                    "approved": True,
+                    "allowPartialUnified": True,
+                    "artifactSha256": "f" * 64,
+                }},
+            )
+
+            for approval_metadata in rejected_approvals:
+                with self.subTest(approval_metadata=approval_metadata):
+                    (model_dir / "evaluation.json").write_text(json.dumps({
+                        **approval_metadata,
+                        "runtimeMode": "UNIFIED",
+                        "qualityGate": {"passed": False},
+                        "baseRegression": {"passed": True},
+                    }), encoding="utf-8")
+                    self.assertIsNone(_configured_custom_model(environment, data_root))
 
 
 if __name__ == "__main__":

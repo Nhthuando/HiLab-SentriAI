@@ -133,6 +133,23 @@ def _normalize_active_model(
     return model_input, snapshot_model, None
 
 
+def _has_configured_manual_approval(
+    evaluation: Mapping[str, Any],
+    expected_sha256: str,
+) -> bool:
+    """Accept only the canonical owner approval bound to this artifact."""
+    approval = evaluation.get("manualProductionApproval")
+    if not isinstance(approval, dict):
+        return False
+    approval_sha256 = approval.get("artifactSha256")
+    return (
+        approval.get("approved") is True
+        and approval.get("allowPartialUnified") is True
+        and isinstance(approval_sha256, str)
+        and approval_sha256.casefold() == expected_sha256
+    )
+
+
 def _configured_custom_model(
     environment: Optional[Mapping[str, str]] = None,
     data_root: Optional[Path] = None,
@@ -187,7 +204,7 @@ def _configured_custom_model(
         values.get("CUSTOM_AUGMENT_MANUAL_CANDIDATE", "false").strip().casefold()
         in {"1", "true", "yes", "on"}
         and isinstance(evaluation, dict)
-        and evaluation.get("manualTestApproved") is True
+        and _has_configured_manual_approval(evaluation, expected_sha256)
     )
     if (
         not isinstance(quality_gate, dict)

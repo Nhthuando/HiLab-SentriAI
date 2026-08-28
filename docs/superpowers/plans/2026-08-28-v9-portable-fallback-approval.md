@@ -36,7 +36,7 @@
 - Consumes: evaluation JSON as `Mapping[str, Any]`, configured artifact SHA-256 as `str`, and `CUSTOM_AUGMENT_MANUAL_CANDIDATE` from the supplied environment mapping.
 - Produces: `_has_configured_manual_approval(evaluation: Mapping[str, Any], expected_sha256: str) -> bool`, used by `_configured_custom_model`.
 
-- [ ] **Step 1: Replace the legacy-positive fixture with canonical approval and add negative cases**
+- [x] **Step 1: Replace the legacy-positive fixture with canonical approval and add negative cases**
 
 ```python
 approval = {
@@ -54,7 +54,7 @@ evaluation = {
 
 Assert that the fallback is rejected without `CUSTOM_AUGMENT_MANUAL_CANDIDATE`, accepted with it, rejected when only `manualTestApproved` is present, and rejected when `manualProductionApproval.artifactSha256` differs from the configured hash.
 
-- [ ] **Step 2: Run the focused Python test and verify the canonical positive case fails**
+- [x] **Step 2: Run the focused Python test and verify the canonical positive case fails**
 
 Run:
 
@@ -64,7 +64,7 @@ backend\python-worker\.venv\Scripts\python.exe -m unittest backend.python-worker
 
 Expected: FAIL because `_configured_custom_model` still checks `manualTestApproved`.
 
-- [ ] **Step 3: Implement the hash-bound canonical approval predicate**
+- [x] **Step 3: Implement the hash-bound canonical approval predicate**
 
 ```python
 def _has_configured_manual_approval(
@@ -85,7 +85,7 @@ def _has_configured_manual_approval(
 
 Use it in `manual_candidate` together with the existing environment opt-in. Do not change the passing-quality path, base-regression check, file checksum check, or returned approval metadata.
 
-- [ ] **Step 4: Run the full Python capability test file**
+- [x] **Step 4: Run the full Python capability test file**
 
 Run:
 
@@ -95,7 +95,7 @@ backend\python-worker\.venv\Scripts\python.exe -m unittest backend.python-worker
 
 Expected: all tests PASS, including canonical approval, legacy rejection, and approval-hash rejection.
 
-- [ ] **Step 5: Commit the Python change**
+- [x] **Step 5: Commit the Python change**
 
 ```powershell
 git add backend/python-worker/zone/zone_sync.py backend/python-worker/tests/test_zone_sync_capabilities.py
@@ -213,4 +213,3 @@ Expected: SHA-256 is `3772E978FC4635A6A2D3DFFB59286BD89C0EBBC6CC6E27DC77532B5006
 - [ ] **Step 3: Report rollout instructions**
 
 The second machine pulls the implementation commits, retains the same non-secret `CUSTOM_AUGMENT_*` values, fully stops the old Python worker and Node API, and restarts them. Startup evidence must contain `Loaded ACTIVE custom model baikiem-v9-unified-candidate-final` and `Area detection control applied: mode=UNIFIED`.
-
