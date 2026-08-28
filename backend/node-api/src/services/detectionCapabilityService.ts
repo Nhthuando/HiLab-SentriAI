@@ -34,6 +34,13 @@ function hasOwnerApprovedPartialUnified(metrics: unknown): boolean {
     && (approval as Record<string, unknown>).allowPartialUnified === true;
 }
 
+export function hasConfiguredManualApproval(metrics: unknown, expectedSha256: string): boolean {
+  if (!hasOwnerApprovedPartialUnified(metrics)) return false;
+  const approval = (metrics as Record<string, unknown>).manualProductionApproval as Record<string, unknown>;
+  return typeof approval.artifactSha256 === 'string'
+    && approval.artifactSha256.toLowerCase() === expectedSha256;
+}
+
 function configuredModelContext(): ConfiguredModelContext | null {
   if (!['1', 'true', 'yes', 'on'].includes((process.env.CUSTOM_AUGMENT_FORCE_DEFAULT ?? '').trim().toLowerCase())) {
     return null;
@@ -60,7 +67,7 @@ function configuredModelContext(): ConfiguredModelContext | null {
     const baseRegression = metrics.baseRegression;
     const manualCandidate = ['1', 'true', 'yes', 'on'].includes(
       (process.env.CUSTOM_AUGMENT_MANUAL_CANDIDATE ?? '').trim().toLowerCase(),
-    ) && metrics.manualTestApproved === true;
+    ) && hasConfiguredManualApproval(metrics, expectedSha256);
     if (
       typeof qualityGate !== 'object' || qualityGate === null
       || ((qualityGate as Record<string, unknown>).passed !== true && !manualCandidate)

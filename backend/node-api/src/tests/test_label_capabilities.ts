@@ -10,7 +10,10 @@ import type {
   DetectionControlRepository,
   ObjectLabelWithSampleCount,
 } from '../repositories/DetectionControlRepository';
-import { DetectionCapabilityService } from '../services/detectionCapabilityService';
+import {
+  DetectionCapabilityService,
+  hasConfiguredManualApproval,
+} from '../services/detectionCapabilityService';
 
 function label(overrides: Partial<ObjectLabelWithSampleCount> = {}): ObjectLabelWithSampleCount {
   return {
@@ -80,6 +83,31 @@ assert.deepStrictEqual(parseActiveModel(validRecord), {
   runtimeMode: 'SUPPLEMENTAL',
 });
 assert.equal(parseActiveModelResult(null).invalidManifest, false, 'no active record is not malformed');
+
+const configuredArtifactSha256 = 'a'.repeat(64);
+assert.equal(hasConfiguredManualApproval({
+  manualProductionApproval: {
+    approved: true,
+    allowPartialUnified: true,
+    artifactSha256: configuredArtifactSha256,
+  },
+}, configuredArtifactSha256), true, 'canonical owner approval must authorize its exact artifact');
+assert.equal(
+  hasConfiguredManualApproval({ manualTestApproved: true }, configuredArtifactSha256),
+  false,
+  'the obsolete manualTestApproved field must not authorize fallback loading',
+);
+for (const [name, approval] of [
+  ['owner rejected', { approved: false, allowPartialUnified: true, artifactSha256: configuredArtifactSha256 }],
+  ['partial unified rejected', { approved: true, allowPartialUnified: false, artifactSha256: configuredArtifactSha256 }],
+  ['approval hash mismatch', { approved: true, allowPartialUnified: true, artifactSha256: 'b'.repeat(64) }],
+] as const) {
+  assert.equal(
+    hasConfiguredManualApproval({ manualProductionApproval: approval }, configuredArtifactSha256),
+    false,
+    `${name} must not authorize fallback loading`,
+  );
+}
 
 async function runServiceTests(): Promise<void> {
   const malformedService = new DetectionCapabilityService(new FakeDetectionControlRepository(
@@ -187,6 +215,55 @@ async function runServiceTests(): Promise<void> {
   assert.equal(approvedPartialUnifiedContext.capabilitiesByName.get(approvedPartialUnifiedContext.labels[0].vietnameseName)?.reasonCode, 'ACTIVE_UNIFIED_CLASS');
   assert.equal(approvedPartialUnifiedContext.capabilitiesByName.get(approvedPartialUnifiedContext.labels[1].vietnameseName)?.reasonCode, 'UNIFIED_CLASS_NOT_IN_ACTIVE_MODEL');
   assert.equal(approvedPartialUnifiedContext.capabilitiesByName.get(approvedPartialUnifiedContext.labels[2].vietnameseName)?.reasonCode, 'ACTIVE_UNIFIED_CLASS');
+
+  const configuredKeys = [
+    'CUSTOM_AUGMENT_FORCE_DEFAULT',
+    'CUSTOM_AUGMENT_MANUAL_CANDIDATE',
+    'CUSTOM_AUGMENT_ARTIFACT',
+    'CUSTOM_AUGMENT_VERSION_KEY',
+    'CUSTOM_AUGMENT_SHA256',
+  ] as const;
+  const previousConfiguredEnvironment = new Map(
+    configuredKeys.map((key) => [key, process.env[key]]),
+  );
+  Object.assign(process.env, {
+    CUSTOM_AUGMENT_FORCE_DEFAULT: 'true',
+    CUSTOM_AUGMENT_MANUAL_CANDIDATE: 'false',
+    CUSTOM_AUGMENT_ARTIFACT: 'training/models/baikiem-v9-unified-candidate-final/best.pt',
+    CUSTOM_AUGMENT_VERSION_KEY: 'baikiem-v9-unified-candidate-final',
+    CUSTOM_AUGMENT_SHA256: '3772e978fc4635a6a2d3dffb59286bd89c0ebbc6cc6e27dc77532b5006eaab52',
+  });
+  try {
+    const disabledConfiguredV9Context = await new DetectionCapabilityService(
+      new FakeDetectionControlRepository(null, [label()]),
+    ).loadDetectionContext();
+    assert.equal(
+      disabledConfiguredV9Context.activeModel,
+      null,
+      'configured V9 must remain disabled without explicit manual-candidate opt-in',
+    );
+
+    process.env.CUSTOM_AUGMENT_MANUAL_CANDIDATE = 'true';
+    const configuredV9Context = await new DetectionCapabilityService(
+      new FakeDetectionControlRepository(null, [
+        label({ id: 'person', vietnameseName: 'NgÆ°á»i', baseClass: 'person' }),
+        label({ id: 'truck', vietnameseName: 'Xe táº£i', baseClass: 'truck' }),
+        label(),
+      ]),
+    ).loadDetectionContext();
+    assert.equal(configuredV9Context.activeModel?.versionKey, 'baikiem-v9-unified-candidate-final');
+    assert.equal(configuredV9Context.activeModel?.runtimeMode, 'UNIFIED');
+    assert.match(
+      configuredV9Context.activeArtifactPath ?? '',
+      /baikiem-v9-unified-candidate-final[\\/]best\.pt$/,
+    );
+  } finally {
+    for (const key of configuredKeys) {
+      const previous = previousConfiguredEnvironment.get(key);
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  }
 
   const legacyReadService = new DetectionCapabilityService(new FakeDetectionControlRepository(
     activeModel({ labelMap: { 'Xe nâng': 'reach stacker' } }),

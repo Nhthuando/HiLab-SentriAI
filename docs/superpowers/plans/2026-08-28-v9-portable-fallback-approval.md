@@ -112,7 +112,7 @@ git commit -m "fix: accept canonical v9 fallback approval in worker"
 - Consumes: parsed evaluation metrics as `unknown` and the configured artifact SHA-256 as `string`.
 - Produces: `hasConfiguredManualApproval(metrics: unknown, expectedSha256: string): boolean`, exported for focused deterministic tests and used by `configuredModelContext`.
 
-- [ ] **Step 1: Add deterministic predicate tests and a service-level V9 fallback assertion**
+- [x] **Step 1: Add deterministic predicate tests and a service-level V9 fallback assertion**
 
 ```typescript
 assert.equal(hasConfiguredManualApproval({
@@ -134,7 +134,7 @@ assert.equal(hasConfiguredManualApproval({
 
 Temporarily set the committed V9 `CUSTOM_AUGMENT_*` values, construct `DetectionCapabilityService` with a repository returning no active model, assert `activeModel.versionKey === 'baikiem-v9-unified-candidate-final'`, and restore every modified environment value in `finally`.
 
-- [ ] **Step 2: Run the Node capability test and verify it fails**
+- [x] **Step 2: Run the Node capability test and verify it fails**
 
 Run:
 
@@ -145,7 +145,7 @@ npx ts-node src/tests/test_label_capabilities.ts
 
 Expected: FAIL because the new predicate is absent or the committed fallback remains rejected by the legacy field check.
 
-- [ ] **Step 3: Implement the Node predicate and wire it into fallback selection**
+- [x] **Step 3: Implement the Node predicate and wire it into fallback selection**
 
 ```typescript
 export function hasConfiguredManualApproval(metrics: unknown, expectedSha256: string): boolean {
@@ -158,7 +158,7 @@ export function hasConfiguredManualApproval(metrics: unknown, expectedSha256: st
 
 Replace `metrics.manualTestApproved === true` with `hasConfiguredManualApproval(metrics, expectedSha256)`. Preserve the existing `hasOwnerApprovedPartialUnified` behavior for database-backed partial unified models.
 
-- [ ] **Step 4: Run Node tests and type checking**
+- [x] **Step 4: Run Node tests and type checking**
 
 Run:
 
@@ -170,7 +170,7 @@ npm run typecheck
 
 Expected: capability tests and TypeScript type checking PASS.
 
-- [ ] **Step 5: Commit the Node change**
+- [x] **Step 5: Commit the Node change**
 
 ```powershell
 git add backend/node-api/src/services/detectionCapabilityService.ts backend/node-api/src/tests/test_label_capabilities.ts
