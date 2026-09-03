@@ -13,6 +13,7 @@ import {
   type AreaClipStatus,
   requestAreaEventClip,
 } from '../services/areaEventClipService';
+import { pdfService } from '../services/pdfService';
 import { sendError, sendSuccess } from '../utils/response';
 
 const areaEventsRouter = Router();
@@ -44,6 +45,7 @@ export interface AreaViolationDto {
   cameraId: string;
   zoneId: string;
   zoneName: string;
+
   objectLabel: string;
   status: 'OPEN' | 'CLOSED' | string;
   enteredAt: string;
@@ -231,6 +233,32 @@ areaEventsRouter.get('/:id/clip', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[areaEventsRouter] Error reading Area clip status:', error);
     return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Failed to read Area event clip status');
+  }
+});
+
+/**
+ * GET /api/v1/events/area/:id/export-pdf
+ * Exports a printable/downloadable incident report PDF with visual evidence
+ */
+areaEventsRouter.get('/:id/export-pdf', async (req: Request, res: Response) => {
+  const violationId = req.params.id;
+  if (!UUID_PATTERN.test(violationId)) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'Event id must be a UUID');
+  }
+  try {
+    const pdfBuffer = await pdfService.generateViolationPdf(violationId);
+    const filename = `bien-ban-vi-pham-${violationId.slice(0, 8)}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    return res.end(pdfBuffer);
+  } catch (err: any) {
+    console.error('[areaEventsRouter] Error generating violation PDF:', err);
+    if (err.message && err.message.includes('not found')) {
+      return sendError(res, 404, 'NOT_FOUND', err.message);
+    }
+    return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Không thể tạo biên bản vi phạm PDF.');
   }
 });
 

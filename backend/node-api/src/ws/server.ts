@@ -9,6 +9,7 @@ import type { Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket, RawData } from 'ws';
 import { channelManager } from './channels';
 import { pythonConnector } from './pythonConnector';
+import { notificationService } from '../services/notificationService';
 import type { ExtendedWebSocket, WsMessage } from './types';
 
 export class SentriWebSocketServer {
@@ -210,8 +211,10 @@ export class SentriWebSocketServer {
           channelManager.broadcastFeed(camId, msg as any);
         } else if (cleanPath === '/ws/publish/events/gate') {
           channelManager.broadcastGateEvent(msg);
+          this.handleGateNotification(msg);
         } else if (cleanPath === '/ws/publish/events/area') {
           channelManager.broadcastAreaEvent(msg);
+          this.handleAreaNotification(msg);
         } else if (cleanPath === '/ws/publish/alerts') {
           channelManager.broadcastAlert(msg);
         } else {
@@ -220,8 +223,10 @@ export class SentriWebSocketServer {
             channelManager.broadcastFeed(String(msg.cameraId), msg as any);
           } else if (msg.type === 'gate_event') {
             channelManager.broadcastGateEvent(msg);
+            this.handleGateNotification(msg);
           } else if (msg.type === 'zone_violation') {
             channelManager.broadcastAreaEvent(msg);
+            this.handleAreaNotification(msg);
           } else if (msg.type === 'alert') {
             channelManager.broadcastAlert(msg);
           } else if (msg.type === 'status' && 'cameraId' in msg) {
@@ -242,6 +247,45 @@ export class SentriWebSocketServer {
     ws.on('error', (err) => {
       console.error(`[WS Server] Publisher error (${ws.clientIp}):`, err);
     });
+  }
+
+  private handleGateNotification(msg: any): void {
+    const gateData = msg?.data || msg;
+    if (
+      gateData &&
+      (gateData.dbStatus === 'STRANGER' || gateData.status === 'la') &&
+      gateData.licensePlate &&
+      gateData.licensePlate !== 'Không xác định' &&
+      gateData.licensePlate !== 'UNKNOWN'
+    ) {
+      notificationService.notifyGateStranger({
+        id: String(gateData.id || `gate-${Date.now()}`),
+        cameraId: String(gateData.cameraId || 'GATE-01'),
+        lane: String(gateData.lane || 'IN_1'),
+        licensePlate: String(gateData.licensePlate || gateData.plate),
+        confidence: Number(gateData.confidence || 0.95),
+        cropPath: gateData.cropPath,
+        eventTimestamp: gateData.eventTimestamp ? new Date(gateData.eventTimestamp) : new Date(),
+      }).catch((err) => console.warn('[WS Server] Gate notification failed:', err));
+    }
+  }
+
+  private handleAreaNotification(msg: any): void {
+    const violationData = msg?.data || msg;
+    if (
+      violationData &&
+      (violationData.action === 'STARTED' || violationData.status === 'OPEN') &&
+      violationData.action !== 'ENDED'
+    ) {
+      notificationService.notifyAreaViolation({
+        id: String(violationData.id || `violation-${Date.now()}`),
+        cameraId: String(violationData.cameraId || 'BAI-KIEM'),
+        zoneName: String(violationData.zoneName || violationData.zone || 'Khu vực bãi kiểm'),
+        objectLabel: String(violationData.objectLabel || violationData.obj || 'Đối tượng vi phạm'),
+        enteredAt: violationData.enteredAt ? new Date(violationData.enteredAt) : new Date(),
+        cropPath: violationData.cropPath,
+      }).catch((err) => console.warn('[WS Server] Area violation notification failed:', err));
+    }
   }
 
   private startHeartbeat(): void {

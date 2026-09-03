@@ -8,6 +8,7 @@
 import WebSocket, { RawData } from 'ws';
 import { channelManager } from './channels';
 import type { WsMessage } from './types';
+import { notificationService } from '../services/notificationService';
 
 export class PythonWorkerConnector {
   private wsUrl: string;
@@ -156,8 +157,31 @@ export class PythonWorkerConnector {
         channelManager.broadcastFeed(String(msg.cameraId), msg as any);
       } else if (msg.type === 'gate_event') {
         channelManager.broadcastGateEvent(msg);
+        const gateData = (msg as any).data || msg;
+        if (gateData && (gateData.dbStatus === 'STRANGER' || gateData.status === 'la') && gateData.licensePlate !== 'Không xác định') {
+          notificationService.notifyGateStranger({
+            id: String(gateData.id || `gate-${Date.now()}`),
+            cameraId: String(gateData.cameraId || 'GATE-01'),
+            lane: String(gateData.lane || 'IN_1'),
+            licensePlate: String(gateData.licensePlate || gateData.plate),
+            confidence: Number(gateData.confidence || 0.95),
+            cropPath: gateData.cropPath,
+            eventTimestamp: gateData.eventTimestamp ? new Date(gateData.eventTimestamp) : new Date(),
+          }).catch((err) => console.warn('[PythonConnector] Gate notification failed:', err));
+        }
       } else if (msg.type === 'zone_violation') {
         channelManager.broadcastAreaEvent(msg);
+        const violationData = (msg as any).data || msg;
+        if (violationData && violationData.status === 'OPEN') {
+          notificationService.notifyAreaViolation({
+            id: String(violationData.id || `violation-${Date.now()}`),
+            cameraId: String(violationData.cameraId || 'BAI-KIEM'),
+            zoneName: String(violationData.zoneName || violationData.zone || 'Khu vực bãi kiểm'),
+            objectLabel: String(violationData.objectLabel || violationData.obj || 'Đối tượng vi phạm'),
+            enteredAt: violationData.enteredAt ? new Date(violationData.enteredAt) : new Date(),
+            cropPath: violationData.cropPath,
+          }).catch((err) => console.warn('[PythonConnector] Area violation notification failed:', err));
+        }
       } else if (msg.type === 'alert') {
         channelManager.broadcastAlert(msg);
       } else if (msg.type === 'status' && 'cameraId' in msg) {

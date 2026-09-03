@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import type { PolygonZone } from '../types';
 import { useAreaMonitor } from '../hooks/useAreaMonitor';
+import { API_BASE_URL } from '../api/client';
 
 interface AreaMonitorProps {
   clock: string;
@@ -1067,6 +1068,33 @@ export const AreaMonitor: React.FC<AreaMonitorProps> = ({ clock }) => {
                           ? 'Đang tạo video…'
                           : '▶ Xem video'}
                       </button>
+                    )}
+
+                    {event.source === 'violation' && (
+                      <a
+                        href={`${API_BASE_URL}/events/area/${encodeURIComponent(event.id)}/export-pdf`}
+                        download
+                        onClick={(e) => e.stopPropagation()}
+                        title="Tải biên bản vi phạm có hình ảnh (PDF)"
+                        style={{
+                          textDecoration: 'none',
+                          border: '1px solid rgba(220, 38, 38, 0.35)',
+                          backgroundColor: 'rgba(220, 38, 38, 0.12)',
+                          color: '#f87171',
+                          padding: '5px 9px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          flexShrink: 0,
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        📄 In biên bản
+                      </a>
                     )}
 
                     <span

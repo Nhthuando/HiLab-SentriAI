@@ -29,6 +29,7 @@ import { qaRouter } from './qa';
 import { chatRouter } from './chat';
 import { clipsRouter } from './clips';
 import { areaActivitiesRouter } from './areaActivities';
+import { notificationsRouter } from './notifications';
 
 const apiRouter = Router();
 
@@ -55,6 +56,7 @@ apiRouter.use('/qa', qaRouter);
 apiRouter.use('/chat', chatRouter);
 apiRouter.use('/clips', clipsRouter);
 apiRouter.use('/area-activities', areaActivitiesRouter);
+apiRouter.use('/notifications', notificationsRouter);
 
 // Mount area events first so the paginated response contract wins over the legacy route.
 apiRouter.use('/events/area', areaEventsRouter);

@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { qaGeminiService, type QaGeminiService } from '../ai/gemini';
 import { prisma } from '../prisma/client';
 import { serializeChatReference } from '../services/clipService';
+import { pdfService } from '../services/pdfService';
 import { ValidationError } from '../utils/errors';
 import { sendSuccess } from '../utils/response';
 
@@ -36,6 +37,28 @@ export function createQaRouter(service: Pick<QaGeminiService, 'answer'> = qaGemi
         executionTimeMs: answer.executionTimeMs,
         createdAt: message.createdAt.toISOString(),
       });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/export-shift-pdf', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { summaryText, shiftName = 'BIÊN BẢN BÀN GIAO CA TRỰC', timeWindow } = req.body;
+      if (!summaryText || typeof summaryText !== 'string') {
+        throw new ValidationError('summaryText is required');
+      }
+
+      const pdfBuffer = await pdfService.generateShiftReportPdf({
+        summaryText,
+        shiftName,
+        timeWindow,
+      });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="bao-cao-giao-ca.pdf"');
+      res.setHeader('Content-Length', pdfBuffer.length);
+      return res.end(pdfBuffer);
     } catch (error) {
       return next(error);
     }

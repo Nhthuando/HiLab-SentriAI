@@ -119,6 +119,18 @@ export const QA_TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ['eventId'],
     },
   },
+  {
+    name: 'get_shift_report_data',
+    description: 'Thống kê tổng hợp số liệu ca trực (lưu lượng xe Cổng và an ninh Bãi Kiểm) theo khung giờ để lập biên bản bàn giao ca.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        startTime: { type: Type.STRING, description: 'Giờ bắt đầu ca (VD: 06:00 hoặc ISO timestamp).' },
+        endTime: { type: Type.STRING, description: 'Giờ kết thúc ca (VD: 14:00 hoặc ISO timestamp).' },
+        date: { type: Type.STRING, description: 'Ngày của ca trực định dạng YYYY-MM-DD (mặc định hôm nay).' },
+      },
+    },
+  },
 ];
 
 function textArg(args: Record<string, unknown>, key: string, required = false): string | undefined {
@@ -191,6 +203,55 @@ export function todayRange(now = new Date()): { start: Date; end: Date } {
     Number(parts.find((part) => part.type === type)?.value);
   const start = new Date(Date.UTC(value('year'), value('month') - 1, value('day')) - 7 * 60 * 60 * 1000);
   return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+}
+
+export function shiftRange(
+  startTimeStr?: string,
+  endTimeStr?: string,
+  dateStr?: string,
+  now = new Date(),
+): { start: Date; end: Date; label: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+
+  let year = value('year');
+  let month = value('month');
+  let day = value('day');
+
+  if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    year = y;
+    month = m;
+    day = d;
+  }
+
+  const parseHourMinute = (timeStr?: string, defaultH = 6, defaultM = 0) => {
+    if (!timeStr) return { h: defaultH, m: defaultM };
+    const match = /^(\d{1,2}):(\d{2})/.exec(timeStr);
+    if (match) {
+      return { h: parseInt(match[1], 10), m: parseInt(match[2], 10) };
+    }
+    return { h: defaultH, m: defaultM };
+  };
+
+  const startHM = parseHourMinute(startTimeStr, 6, 0);
+  const endHM = parseHourMinute(endTimeStr, 14, 0);
+
+  const start = new Date(Date.UTC(year, month - 1, day, startHM.h, startHM.m) - 7 * 60 * 60 * 1000);
+  let end = new Date(Date.UTC(year, month - 1, day, endHM.h, endHM.m) - 7 * 60 * 60 * 1000);
+
+  if (end.getTime() <= start.getTime()) {
+    end = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+  }
+
+  const label = `${String(startHM.h).padStart(2, '0')}:${String(startHM.m).padStart(2, '0')} - ${String(endHM.h).padStart(2, '0')}:${String(endHM.m).padStart(2, '0')} (${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')})`;
+  return { start, end, label };
 }
 
 function formatLocalDateTime(value: Date): string {
@@ -416,6 +477,85 @@ export async function executeQaTool(
     const record = await findEventClipRecord(eventId, eventType, client);
     const clip = record ? buildClipReference(record) : null;
     return { name, result: clip ? { found: true, clip } : { found: false, message: 'Không có clip' }, clips: clip ? [clip] : [] };
+  }
+
+  if (name === 'get_shift_report_data') {
+    const startTime = textArg(args, 'startTime');
+    const endTime = textArg(args, 'endTime');
+    const date = textArg(args, 'date');
+    const range = shiftRange(startTime, endTime, date);
+
+    const [
+      gateTotal,
+      gateKnown,
+      gateStranger,
+      gateStrangerRows,
+      areaSessions,
+      zoneViolations,
+      coverageState,
+    ] = await Promise.all([
+      client.gateEvent.count({ where: { eventTimestamp: { gte: range.start, lt: range.end } } }),
+      client.gateEvent.count({ where: { status: 'KNOWN', eventTimestamp: { gte: range.start, lt: range.end } } }),
+      client.gateEvent.count({ where: { status: 'STRANGER', eventTimestamp: { gte: range.start, lt: range.end } } }),
+      client.gateEvent.findMany({
+        where: { status: 'STRANGER', eventTimestamp: { gte: range.start, lt: range.end } },
+        select: { licensePlate: true, lane: true, eventTimestamp: true },
+        take: 10,
+      }),
+      client.areaActivitySession.findMany({
+        where: { enteredAt: { gte: range.start, lt: range.end } },
+        select: { canonicalClass: true, objectLabel: true, policyResult: true, sessionStatus: true, durationSeconds: true },
+      }),
+      client.zoneViolation.findMany({
+        where: { enteredAt: { gte: range.start, lt: range.end } },
+        include: { zone: { select: { name: true } } },
+      }),
+      client.areaActivityCollectionState.findUnique({ where: { cameraId: 'BAI-KIEM' } }),
+    ]);
+
+    const strangerPlates = Array.from(new Set(gateStrangerRows.map((r) => r.licensePlate)));
+    const openViolations = zoneViolations.filter((v) => v.status === 'OPEN').length;
+    const closedViolations = zoneViolations.filter((v) => v.status === 'CLOSED').length;
+
+    const classCounts: Record<string, number> = {};
+    for (const s of areaSessions) {
+      const cls = s.objectLabel || s.canonicalClass;
+      classCounts[cls] = (classCounts[cls] || 0) + 1;
+    }
+
+    const coverageStatus = coverageState?.coverageStatus || 'NOT_STARTED';
+    const coveragePercent = coverageState?.coveragePercent || 0;
+
+    return {
+      name,
+      result: {
+        timeWindow: range.label,
+        gate: {
+          totalEntries: gateTotal,
+          knownVehicles: gateKnown,
+          strangerVehicles: gateStranger,
+          sampleStrangerPlates: strangerPlates,
+        },
+        area: {
+          totalSessions: areaSessions.length,
+          classBreakdown: classCounts,
+          totalViolations: zoneViolations.length,
+          openViolations,
+          closedViolations,
+          violationDetails: zoneViolations.map((v) => ({
+            zone: v.zone?.name || 'Khu vực bãi kiểm',
+            object: v.objectLabel,
+            status: v.status,
+            durationSeconds: v.durationSeconds,
+          })),
+        },
+        coverage: {
+          status: coverageStatus,
+          percent: coveragePercent,
+        },
+      },
+      clips: [],
+    };
   }
 
   throw new Error(`Unsupported QA tool: ${name}`);

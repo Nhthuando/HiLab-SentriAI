@@ -23,6 +23,7 @@ function normalizeVietnamese(value: string): string {
 
 function routedActivityArgs(query: string): Record<string, unknown> | undefined {
   const normalized = normalizeVietnamese(query);
+  if (/(bao cao|giao ca|bien ban|ca sang|ca chieu|ca truc)/.test(normalized)) return undefined;
   const isActivityQuestion = /(hoat dong|lam viec|ra vao|vao ra|vao khu vuc|trong khu vuc|trong zone|bai kiem)/.test(normalized);
   if (!isActivityQuestion) return undefined;
 

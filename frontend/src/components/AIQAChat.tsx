@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { ActivityEvidence, ChatMessage } from '../types';
-import { resolveMediaUrl } from '../api/client';
+import { resolveMediaUrl, API_BASE_URL } from '../api/client';
 import { useDeferredEvidenceClip } from '../hooks/useDeferredEvidenceClip';
 
 interface AIQAChatProps {
@@ -102,6 +102,8 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({
     'Hôm nay có bao nhiêu xe lạ vào?',
     'Có xe máy hay xe hơi nào vào khu vực cấm không?',
     'Xe nâng hoạt động thế nào hôm nay?',
+    '📋 Báo cáo ca sáng (06:00 - 14:00)',
+    '📋 Báo cáo ca chiều (14:00 - 22:00)',
     'Xe 15R-158.45 vào mấy lần hôm nay?'
   ];
 
@@ -344,6 +346,54 @@ export const AIQAChat: React.FC<AIQAChatProps> = ({
               >
                 {renderAssistantText(m.text)}
               </div>
+
+              {/* PDF Shift Report Export Button if message is a shift handover report */}
+              {/(ca sáng|ca chiều|ca trực|bàn giao ca|giao ca|hoạt động cổng|an ninh khu vực)/i.test(m.text) && (
+                <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`${API_BASE_URL}/qa/export-shift-pdf`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            summaryText: m.text,
+                            shiftName: 'BIÊN BẢN BÀN GIAO CA TRỰC AN NINH',
+                          }),
+                        });
+                        if (!res.ok) throw new Error('Không thể tạo PDF');
+                        const blob = await res.blob();
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `bao-cao-giao-ca-${new Date().toISOString().slice(0, 10)}.pdf`;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        window.URL.revokeObjectURL(url);
+                      } catch {
+                        alert('Tạo file PDF báo cáo ca thất bại. Hãy thử lại.');
+                      }
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      background: 'color-mix(in srgb, var(--acc) 15%, var(--card))',
+                      border: '1px solid var(--acc)',
+                      color: 'var(--acc)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span>📄</span>
+                    <span>Tải PDF Báo Cáo Ca Trực Này</span>
+                  </button>
+                </div>
+              )}
 
               {/* Video Clip Card if available */}
               {m.clip && (

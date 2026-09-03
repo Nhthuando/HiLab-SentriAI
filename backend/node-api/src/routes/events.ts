@@ -17,6 +17,7 @@ import {
 import { BadRequestError } from '../utils/errors';
 import { sendCreated, sendError, sendSuccess } from '../utils/response';
 import { channelManager } from '../ws';
+import { notificationService } from '../services/notificationService';
 
 const eventsRouter = Router();
 
@@ -191,6 +192,18 @@ eventsRouter.post('/gate', async (req: Request, res: Response, next: NextFunctio
       type: 'gate_event',
       data: formatted,
     });
+
+    if (created.status === 'STRANGER' && created.licensePlate !== 'UNKNOWN') {
+      notificationService.notifyGateStranger({
+        id: created.id,
+        cameraId: created.cameraId,
+        lane: created.lane,
+        licensePlate: created.licensePlate,
+        confidence: created.confidence,
+        cropPath: created.cropPath,
+        eventTimestamp: created.eventTimestamp,
+      }).catch((err) => console.warn('[EventsRoute] Gate notification failed:', err));
+    }
 
     return sendCreated(res, formatted);
   } catch (err) {

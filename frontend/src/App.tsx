@@ -25,6 +25,7 @@ import { VehicleLabelTab } from './components/Settings/VehicleLabelTab';
 import { ZoneEditorTab } from './components/Settings/ZoneEditorTab';
 import { ObjectLabelTab } from './components/Settings/ObjectLabelTab';
 import { ThemeSettingsTab } from './components/Settings/ThemeSettingsTab';
+import { NotificationTab } from './components/Settings/NotificationTab';
 import { AIQAChat } from './components/AIQAChat';
 import { FloatingAlert } from './components/FloatingAlert';
 import { useBroadcastChannel, useWebSocket } from './hooks';
@@ -826,6 +827,28 @@ export const App: React.FC = () => {
                 <span>☀️/🌙</span>
                 <span>Giao diện & Chủ đề</span>
               </button>
+              <button
+                onClick={() => setSettingsSubTab('notification')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '12.5px',
+                  fontWeight: 600,
+                  padding: '8px 18px',
+                  borderRadius: '9px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  whiteSpace: 'nowrap',
+                  backgroundColor: settingsSubTab === 'notification' ? 'var(--acc)' : 'transparent',
+                  color: settingsSubTab === 'notification' ? '#ffffff' : 'var(--ink2)',
+                  boxShadow: settingsSubTab === 'notification' ? '0 2px 8px var(--acc-glow)' : 'none'
+                }}
+              >
+                <span>🔔</span>
+                <span>Thông báo & Cảnh báo</span>
+              </button>
             </div>
 
             {/* Sub-tab 1: Gắn nhãn xe */}
@@ -888,6 +911,11 @@ export const App: React.FC = () => {
                 onToggleCompactMode={setCompactMode}
                 onResetDefaults={handleResetDefaults}
               />
+            )}
+
+            {/* Sub-tab 5: Cấu hình thông báo Telegram / Email */}
+            {settingsSubTab === 'notification' && (
+              <NotificationTab />
             )}
           </div>
         )}
