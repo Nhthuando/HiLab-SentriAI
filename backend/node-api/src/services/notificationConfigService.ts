@@ -42,9 +42,55 @@ function getConfigFilePath(): string {
   return path.resolve(dataDir, 'notifications_config.json');
 }
 
+function findEnvFilePath(): string | null {
+  const candidates = [
+    path.resolve(__dirname, '../../../.env'),
+    path.resolve(__dirname, '../../.env'),
+    path.resolve(process.cwd(), '../.env'),
+    path.resolve(process.cwd(), '.env'),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) {
+      return c;
+    }
+  }
+  return candidates[0];
+}
+
+function updateEnvFile(updates: Record<string, string | number | boolean>): void {
+  const envPath = findEnvFilePath();
+  if (!envPath) return;
+
+  try {
+    let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+    for (const [key, val] of Object.entries(updates)) {
+      const stringVal = String(val);
+      const regex = new RegExp(`^${key}=.*$`, 'm');
+      const formattedVal =
+        stringVal.includes(' ') || stringVal.includes('@') || stringVal.includes(':')
+          ? `"${stringVal}"`
+          : stringVal;
+      if (regex.test(content)) {
+        content = content.replace(regex, `${key}=${formattedVal}`);
+      } else {
+        content = content.trimEnd() + `\n${key}=${formattedVal}\n`;
+      }
+      process.env[key] = stringVal;
+    }
+    fs.writeFileSync(envPath, content, 'utf8');
+  } catch (err) {
+    console.warn('[NotificationConfig] Could not write to .env file:', err);
+  }
+}
+
 function getDefaultConfig(): NotificationSettings {
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN || '';
   const telegramChatId = process.env.TELEGRAM_CHAT_ID || '';
+  const telegramEnabled =
+    process.env.TELEGRAM_NOTIFICATIONS_ENABLED !== undefined
+      ? process.env.TELEGRAM_NOTIFICATIONS_ENABLED === 'true'
+      : Boolean(telegramToken && telegramChatId);
+
   const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
   const smtpPort = Number(process.env.SMTP_PORT || 587);
   const smtpUser = process.env.SMTP_USER || '';
@@ -54,15 +100,19 @@ function getDefaultConfig(): NotificationSettings {
   const toEmails = toEmailsRaw
     ? toEmailsRaw.split(',').map((s) => s.trim()).filter(Boolean)
     : [];
+  const emailEnabled =
+    process.env.EMAIL_NOTIFICATIONS_ENABLED !== undefined
+      ? process.env.EMAIL_NOTIFICATIONS_ENABLED === 'true'
+      : Boolean(smtpUser && smtpPass && toEmails.length > 0);
 
   return {
     telegram: {
-      enabled: Boolean(telegramToken && telegramChatId),
+      enabled: telegramEnabled,
       botToken: telegramToken,
       chatId: telegramChatId,
     },
     email: {
-      enabled: Boolean(smtpUser && smtpPass && toEmails.length > 0),
+      enabled: emailEnabled,
       smtpHost,
       smtpPort,
       smtpSecure: smtpPort === 465,
@@ -71,7 +121,7 @@ function getDefaultConfig(): NotificationSettings {
       fromEmail,
       toEmails,
     },
-    cooldownSeconds: 180, // 3 minutes debounce per object/zone
+    cooldownSeconds: Number(process.env.NOTIFICATION_COOLDOWN_SECONDS || 180),
   };
 }
 
@@ -82,16 +132,28 @@ export function getNotificationSettings(): NotificationSettings {
     return cachedSettings;
   }
 
+  const envConfig = getDefaultConfig();
   const filePath = getConfigFilePath();
+
   if (fs.existsSync(filePath)) {
     try {
       const content = fs.readFileSync(filePath, 'utf8');
       const parsed = JSON.parse(content);
       cachedSettings = {
-        ...getDefaultConfig(),
+        ...envConfig,
         ...parsed,
-        telegram: { ...getDefaultConfig().telegram, ...(parsed.telegram || {}) },
-        email: { ...getDefaultConfig().email, ...(parsed.email || {}) },
+        telegram: {
+          enabled: parsed.telegram?.enabled ?? envConfig.telegram.enabled,
+          botToken: parsed.telegram?.botToken || envConfig.telegram.botToken,
+          chatId: parsed.telegram?.chatId || envConfig.telegram.chatId,
+        },
+        email: {
+          ...envConfig.email,
+          ...(parsed.email || {}),
+          smtpUser: parsed.email?.smtpUser || envConfig.email.smtpUser,
+          smtpPass: parsed.email?.smtpPass || envConfig.email.smtpPass,
+        },
+        cooldownSeconds: parsed.cooldownSeconds ?? envConfig.cooldownSeconds,
       };
       return cachedSettings!;
     } catch (err) {
@@ -99,7 +161,7 @@ export function getNotificationSettings(): NotificationSettings {
     }
   }
 
-  cachedSettings = getDefaultConfig();
+  cachedSettings = envConfig;
   return cachedSettings;
 }
 
@@ -119,13 +181,28 @@ export function updateNotificationSettings(updates: Partial<NotificationSettings
     cooldownSeconds: updates.cooldownSeconds ?? current.cooldownSeconds,
   };
 
+  // 1. Sync to backend/.env so secrets are stored exclusively in env
+  updateEnvFile({
+    TELEGRAM_BOT_TOKEN: next.telegram.botToken,
+    TELEGRAM_CHAT_ID: next.telegram.chatId,
+    TELEGRAM_NOTIFICATIONS_ENABLED: String(next.telegram.enabled),
+    SMTP_HOST: next.email.smtpHost,
+    SMTP_PORT: String(next.email.smtpPort),
+    SMTP_USER: next.email.smtpUser,
+    SMTP_PASS: next.email.smtpPass,
+    ALERT_FROM_EMAIL: next.email.fromEmail,
+    ALERT_TO_EMAILS: next.email.toEmails.join(','),
+    NOTIFICATION_COOLDOWN_SECONDS: String(next.cooldownSeconds),
+  });
+
+  // 2. Persist to data directory (which is in .gitignore)
   const filePath = getConfigFilePath();
   try {
     fs.writeFileSync(filePath, JSON.stringify(next, null, 2), 'utf8');
-    cachedSettings = next;
   } catch (err) {
     console.error('[NotificationConfig] Failed to save config to disk:', err);
   }
 
+  cachedSettings = next;
   return next;
 }
